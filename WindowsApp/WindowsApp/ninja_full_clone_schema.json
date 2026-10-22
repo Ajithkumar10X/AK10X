@@ -1,0 +1,620 @@
+{
+  "platform": "NinjaTrader 8",
+  "coreVersion": "8.1.5.2",
+  "extractedAt": "2026-10-22T09:22:43.648Z",
+  "extractedBy": "REA (Reverse Engineer Anything)",
+  "connections": [
+    {
+      "name": "My NinjaTrader",
+      "typeName": "NinjaTrader.Cbi.TradovateOptions",
+      "provider": "Tradovate / NinjaTrader Brokerage",
+      "mode": "Simulation",
+      "connectOnStartup": true,
+      "accountType": "Simulation",
+      "isConnected": true,
+      "status": "Connected",
+      "latencyMs": 14,
+      "feedType": "Tick By Tick Level 2 Volumetric"
+    },
+    {
+      "name": "My Accelpix",
+      "typeName": "NinjaTrader.NinjaScript.Adapters.SampleOpenConnectOptions",
+      "provider": "Accelpix OpenConnect (NSE / MCX)",
+      "mode": "Live",
+      "connectOnStartup": false,
+      "accountType": "Live Market Data",
+      "isConnected": false,
+      "status": "Disconnected",
+      "latencyMs": 0,
+      "feedType": "Indian Markets High-Speed L2"
+    },
+    {
+      "name": "Simulated Data Feed",
+      "typeName": "NinjaTrader.Cbi.SimulatorOptions",
+      "provider": "NinjaTrader Native Simulator",
+      "mode": "Simulation",
+      "connectOnStartup": false,
+      "accountType": "Simulated Generator",
+      "isConnected": false,
+      "status": "Disconnected",
+      "latencyMs": 1,
+      "feedType": "Native Tick Replay"
+    },
+    {
+      "name": "Playback Connection",
+      "typeName": "NinjaTrader.Cbi.PlaybackOptions",
+      "provider": "Historical Market Replay",
+      "mode": "Historical",
+      "connectOnStartup": false,
+      "accountType": "Replay",
+      "isConnected": false,
+      "status": "Disconnected",
+      "latencyMs": 0,
+      "feedType": "Historical Tick Level"
+    },
+    {
+      "name": "Kinetick - End Of Day (Free)",
+      "typeName": "NinjaTrader.Cbi.KinetickOptions",
+      "provider": "Kinetick",
+      "mode": "EOD",
+      "connectOnStartup": false,
+      "accountType": "Free EOD",
+      "isConnected": false,
+      "status": "Disconnected",
+      "latencyMs": 0,
+      "feedType": "End of Day Equities & Futures"
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Sim101",
+      "displayName": "Sim101 (Simulation)",
+      "connectionName": "My NinjaTrader",
+      "cashBalance": 100000,
+      "buyingPower": 400000,
+      "realizedPnL": 1420.5,
+      "unrealizedPnL": 385,
+      "currency": "USD",
+      "isActive": true
+    },
+    {
+      "name": "Tradovate_Sim",
+      "displayName": "My NinjaTrader Live Sim",
+      "connectionName": "My NinjaTrader",
+      "cashBalance": 50000,
+      "buyingPower": 200000,
+      "realizedPnL": 650,
+      "unrealizedPnL": -120,
+      "currency": "USD",
+      "isActive": false
+    },
+    {
+      "name": "Accelpix_Live",
+      "displayName": "Accelpix NSE/MCX Feed",
+      "connectionName": "My Accelpix",
+      "cashBalance": 250000,
+      "buyingPower": 1000000,
+      "realizedPnL": 4250,
+      "unrealizedPnL": 1120,
+      "currency": "INR",
+      "isActive": false
+    }
+  ],
+  "workspaces": [
+    {
+      "name": "MZpack - BANKNIFTY - NIFTY - Default Settings",
+      "fileName": "MZpack - BANKNIFTY - NIFTY - Default Settings.xml",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\workspaces\\MZpack - BANKNIFTY - NIFTY - Default Settings.xml"
+    },
+    {
+      "name": "MZpack - Day Trading - BTCUSD - v1.0",
+      "fileName": "MZpack - Day Trading - BTCUSD - v1.0.xml",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\workspaces\\MZpack - Day Trading - BTCUSD - v1.0.xml"
+    },
+    {
+      "name": "MZpack - Day Trading - ES - v2.0",
+      "fileName": "MZpack - Day Trading - ES - v2.0.xml",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\workspaces\\MZpack - Day Trading - ES - v2.0.xml"
+    },
+    {
+      "name": "MZpack - Scalping Bookmap Style - ES - v1.1",
+      "fileName": "MZpack - Scalping Bookmap Style - ES - v1.1.xml",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\workspaces\\MZpack - Scalping Bookmap Style - ES - v1.1.xml"
+    },
+    {
+      "name": "MZpack - TPO - CME Index Futures RTH - ETH",
+      "fileName": "MZpack - TPO - CME Index Futures RTH - ETH.xml",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\workspaces\\MZpack - TPO - CME Index Futures RTH - ETH.xml"
+    },
+    {
+      "name": "MZpack - TPO w VolumeProfile - Minute Accuracy",
+      "fileName": "MZpack - TPO w VolumeProfile - Minute Accuracy.xml",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\workspaces\\MZpack - TPO w VolumeProfile - Minute Accuracy.xml"
+    },
+    {
+      "name": "USER SEP 17",
+      "fileName": "USER SEP 17.xml",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\workspaces\\USER SEP 17.xml"
+    },
+    {
+      "name": "_Workspaces",
+      "fileName": "_Workspaces.xml",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\workspaces\\_Workspaces.xml"
+    }
+  ],
+  "chartTemplates": [
+    {
+      "name": "1 GC OF JULY 31  BIDASK-DELTA ",
+      "fileName": "1 GC OF JULY 31  BIDASK-DELTA .xml",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\templates\\Chart\\1 GC OF JULY 31  BIDASK-DELTA .xml"
+    },
+    {
+      "name": "MZpack - Cluster Chart with Tape reconstruction",
+      "fileName": "MZpack - Cluster Chart with Tape reconstruction.xml",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\templates\\Chart\\MZpack - Cluster Chart with Tape reconstruction.xml"
+    },
+    {
+      "name": "MZpack 3 - Cluster chart (ES 8-12 Range)",
+      "fileName": "MZpack 3 - Cluster chart (ES 8-12 Range).xml",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\templates\\Chart\\MZpack 3 - Cluster chart (ES 8-12 Range).xml"
+    },
+    {
+      "name": "MZpack 3 - Footprint w Reconstructed tape",
+      "fileName": "MZpack 3 - Footprint w Reconstructed tape.xml",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\templates\\Chart\\MZpack 3 - Footprint w Reconstructed tape.xml"
+    },
+    {
+      "name": "MZpack 3 - Footprint, Realtime DOM (8-12 Range)",
+      "fileName": "MZpack 3 - Footprint, Realtime DOM (8-12 Range).xml",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\templates\\Chart\\MZpack 3 - Footprint, Realtime DOM (8-12 Range).xml"
+    },
+    {
+      "name": "MZpack 3 - MarketDepth, BigTrade (ES 10 Tick)",
+      "fileName": "MZpack 3 - MarketDepth, BigTrade (ES 10 Tick).xml",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\templates\\Chart\\MZpack 3 - MarketDepth, BigTrade (ES 10 Tick).xml"
+    },
+    {
+      "name": "MZpack 3 - Volume Profile RTH w Overnight",
+      "fileName": "MZpack 3 - Volume Profile RTH w Overnight.xml",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\templates\\Chart\\MZpack 3 - Volume Profile RTH w Overnight.xml"
+    },
+    {
+      "name": "MZpack 3 - VolumeProfile, BigTrade, Delta (FOREX 1 Minute)",
+      "fileName": "MZpack 3 - VolumeProfile, BigTrade, Delta (FOREX 1 Minute).xml",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\templates\\Chart\\MZpack 3 - VolumeProfile, BigTrade, Delta (FOREX 1 Minute).xml"
+    },
+    {
+      "name": "MZpack 3 - VolumeProfile, BigTrade, Delta, MarketDepth (1 Minute)",
+      "fileName": "MZpack 3 - VolumeProfile, BigTrade, Delta, MarketDepth (1 Minute).xml",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\templates\\Chart\\MZpack 3 - VolumeProfile, BigTrade, Delta, MarketDepth (1 Minute).xml"
+    },
+    {
+      "name": "MZpack 3 - VolumeProfiles - Sessions, Weekly, Monthly (30 Minute)",
+      "fileName": "MZpack 3 - VolumeProfiles - Sessions, Weekly, Monthly (30 Minute).xml",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\templates\\Chart\\MZpack 3 - VolumeProfiles - Sessions, Weekly, Monthly (30 Minute).xml"
+    },
+    {
+      "name": "MZpack 3 - VolumeProfiles - Sessions, Weekly, Monthly (FOREX 30 Minute)",
+      "fileName": "MZpack 3 - VolumeProfiles - Sessions, Weekly, Monthly (FOREX 30 Minute).xml",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\templates\\Chart\\MZpack 3 - VolumeProfiles - Sessions, Weekly, Monthly (FOREX 30 Minute).xml"
+    },
+    {
+      "name": "MZpack Bookmap Style w DOM Pressure and Migration Delta - ES 50 Tick ETH",
+      "fileName": "MZpack Bookmap Style w DOM Pressure and Migration Delta - ES 50 Tick ETH.xml",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\templates\\Chart\\MZpack Bookmap Style w DOM Pressure and Migration Delta - ES 50 Tick ETH.xml"
+    },
+    {
+      "name": "NIFTY CHART",
+      "fileName": "NIFTY CHART.xml",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\templates\\Chart\\NIFTY CHART.xml"
+    },
+    {
+      "name": "USER CHART",
+      "fileName": "USER CHART.xml",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\templates\\Chart\\USER CHART.xml"
+    }
+  ],
+  "customAssemblies": [
+    {
+      "name": "AccelPixNT8.dll",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\bin\\Custom\\AccelPixNT8.dll"
+    },
+    {
+      "name": "IPCBridge.dll",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\bin\\Custom\\IPCBridge.dll"
+    },
+    {
+      "name": "MZpack.NT8.dll",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\bin\\Custom\\MZpack.NT8.dll"
+    },
+    {
+      "name": "Newtonsoft.Json.dll",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\bin\\Custom\\Newtonsoft.Json.dll"
+    },
+    {
+      "name": "NinjaTrader.Custom.dll",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\bin\\Custom\\NinjaTrader.Custom.dll"
+    },
+    {
+      "name": "NinjaTrader.Vendor.dll",
+      "path": "C:\\Users\\AK\\Documents\\NinjaTrader 8\\bin\\Custom\\NinjaTrader.Vendor.dll"
+    }
+  ],
+  "contracts": [
+    {
+      "symbol": "GC",
+      "name": "Gold Futures",
+      "exchange": "COMEX",
+      "category": "Metals",
+      "tickSize": 0.1,
+      "pointValue": 100,
+      "dayMargin": 1000,
+      "initialMargin": 10450,
+      "frontMonth": "12-26",
+      "currentPrice": 4104.9
+    },
+    {
+      "symbol": "MGC",
+      "name": "Micro Gold",
+      "exchange": "COMEX",
+      "category": "Metals",
+      "tickSize": 0.1,
+      "pointValue": 10,
+      "dayMargin": 100,
+      "initialMargin": 1045,
+      "frontMonth": "12-26",
+      "currentPrice": 4104.9
+    },
+    {
+      "symbol": "ES",
+      "name": "E-mini S&P 500",
+      "exchange": "CME",
+      "category": "Equity Index",
+      "tickSize": 0.25,
+      "pointValue": 50,
+      "dayMargin": 500,
+      "initialMargin": 12980,
+      "frontMonth": "03-26",
+      "currentPrice": 5892.5
+    },
+    {
+      "symbol": "MES",
+      "name": "Micro E-mini S&P 500",
+      "exchange": "CME",
+      "category": "Equity Index",
+      "tickSize": 0.25,
+      "pointValue": 5,
+      "dayMargin": 50,
+      "initialMargin": 1298,
+      "frontMonth": "03-26",
+      "currentPrice": 5892.5
+    },
+    {
+      "symbol": "NQ",
+      "name": "E-mini Nasdaq 100",
+      "exchange": "CME",
+      "category": "Equity Index",
+      "tickSize": 0.25,
+      "pointValue": 20,
+      "dayMargin": 1000,
+      "initialMargin": 18700,
+      "frontMonth": "03-26",
+      "currentPrice": 20850.25
+    },
+    {
+      "symbol": "MNQ",
+      "name": "Micro E-mini Nasdaq 100",
+      "exchange": "CME",
+      "category": "Equity Index",
+      "tickSize": 0.25,
+      "pointValue": 2,
+      "dayMargin": 100,
+      "initialMargin": 1870,
+      "frontMonth": "03-26",
+      "currentPrice": 20850.25
+    },
+    {
+      "symbol": "YM",
+      "name": "E-mini Dow Jones",
+      "exchange": "CBOT",
+      "category": "Equity Index",
+      "tickSize": 1,
+      "pointValue": 5,
+      "dayMargin": 500,
+      "initialMargin": 9900,
+      "frontMonth": "03-26",
+      "currentPrice": 43250
+    },
+    {
+      "symbol": "MYM",
+      "name": "Micro E-mini Dow",
+      "exchange": "CBOT",
+      "category": "Equity Index",
+      "tickSize": 1,
+      "pointValue": 0.5,
+      "dayMargin": 50,
+      "initialMargin": 990,
+      "frontMonth": "03-26",
+      "currentPrice": 43250
+    },
+    {
+      "symbol": "RTY",
+      "name": "E-mini Russell 2000",
+      "exchange": "CME",
+      "category": "Equity Index",
+      "tickSize": 0.1,
+      "pointValue": 50,
+      "dayMargin": 500,
+      "initialMargin": 7700,
+      "frontMonth": "03-26",
+      "currentPrice": 2240.5
+    },
+    {
+      "symbol": "CL",
+      "name": "Crude Oil",
+      "exchange": "NYMEX",
+      "category": "Energy",
+      "tickSize": 0.01,
+      "pointValue": 1000,
+      "dayMargin": 1000,
+      "initialMargin": 7200,
+      "frontMonth": "04-26",
+      "currentPrice": 71.85
+    },
+    {
+      "symbol": "MCL",
+      "name": "Micro WTI Crude",
+      "exchange": "NYMEX",
+      "category": "Energy",
+      "tickSize": 0.01,
+      "pointValue": 100,
+      "dayMargin": 100,
+      "initialMargin": 720,
+      "frontMonth": "04-26",
+      "currentPrice": 71.85
+    },
+    {
+      "symbol": "NIFTY_I",
+      "name": "NIFTY 50 Futures",
+      "exchange": "NSE",
+      "category": "Indian Indices",
+      "tickSize": 0.05,
+      "pointValue": 25,
+      "dayMargin": 400,
+      "initialMargin": 3200,
+      "frontMonth": "OCT-26",
+      "currentPrice": 24780
+    },
+    {
+      "symbol": "BANKNIFTY_I",
+      "name": "BANK NIFTY Futures",
+      "exchange": "NSE",
+      "category": "Indian Indices",
+      "tickSize": 0.05,
+      "pointValue": 15,
+      "dayMargin": 500,
+      "initialMargin": 4100,
+      "frontMonth": "OCT-26",
+      "currentPrice": 51240
+    },
+    {
+      "symbol": "HDFCLIFE_I",
+      "name": "HDFC Life Futures",
+      "exchange": "NSE",
+      "category": "Indian Equities",
+      "tickSize": 0.05,
+      "pointValue": 1100,
+      "dayMargin": 200,
+      "initialMargin": 1800,
+      "frontMonth": "OCT-26",
+      "currentPrice": 742.5
+    }
+  ],
+  "chartThings": {
+    "timeframes": [
+      {
+        "label": "1 Min",
+        "value": "1 Minute",
+        "type": "Minute",
+        "period": 1
+      },
+      {
+        "label": "2 Min",
+        "value": "2 Minute",
+        "type": "Minute",
+        "period": 2
+      },
+      {
+        "label": "3 Min",
+        "value": "3 Minute",
+        "type": "Minute",
+        "period": 3
+      },
+      {
+        "label": "5 Min",
+        "value": "5 Minute",
+        "type": "Minute",
+        "period": 5,
+        "isDefault": true
+      },
+      {
+        "label": "15 Min",
+        "value": "15 Minute",
+        "type": "Minute",
+        "period": 15
+      },
+      {
+        "label": "30 Min",
+        "value": "30 Minute",
+        "type": "Minute",
+        "period": 30
+      },
+      {
+        "label": "60 Min",
+        "value": "60 Minute",
+        "type": "Minute",
+        "period": 60
+      },
+      {
+        "label": "Daily",
+        "value": "Daily",
+        "type": "Day",
+        "period": 1
+      },
+      {
+        "label": "100 Tick",
+        "value": "100 Tick",
+        "type": "Tick",
+        "period": 100
+      },
+      {
+        "label": "8-12 Range",
+        "value": "8-12 Range",
+        "type": "Range",
+        "period": 8
+      },
+      {
+        "label": "1000 Vol",
+        "value": "1000 Volume",
+        "type": "Volume",
+        "period": 1000
+      }
+    ],
+    "chartTypes": [
+      {
+        "name": "Footprint (MZpack)",
+        "icon": "📊",
+        "description": "Volumetric Order Flow with Bid x Ask, Imbalances & POC",
+        "isDefault": true
+      },
+      {
+        "name": "Candlestick",
+        "icon": "🕯️",
+        "description": "Classic Japanese Candlesticks with Real-time Wicks"
+      },
+      {
+        "name": "OHLC Bars",
+        "icon": "📈",
+        "description": "Standard Open-High-Low-Close Western Bars"
+      },
+      {
+        "name": "Volume Profile",
+        "icon": "🧱",
+        "description": "Session Volume Profile Histogram & Value Area"
+      },
+      {
+        "name": "Mountain / Area",
+        "icon": "⛰️",
+        "description": "Smoothed Gradient Area Line Chart"
+      }
+    ],
+    "drawingTools": [
+      {
+        "name": "Cursor / Pan",
+        "icon": "👆",
+        "shortcut": "Ctrl+1"
+      },
+      {
+        "name": "Crosshair",
+        "icon": "➕",
+        "shortcut": "Ctrl+2"
+      },
+      {
+        "name": "Trend Line",
+        "icon": "📏",
+        "shortcut": "F2"
+      },
+      {
+        "name": "Horizontal Line",
+        "icon": "➖",
+        "shortcut": "F3"
+      },
+      {
+        "name": "Vertical Line",
+        "icon": "┃",
+        "shortcut": "F4"
+      },
+      {
+        "name": "Fibonacci Retracement",
+        "icon": "📐",
+        "shortcut": "F6"
+      },
+      {
+        "name": "Risk / Reward Ruler",
+        "icon": "🎯",
+        "shortcut": "F7"
+      },
+      {
+        "name": "Rectangle / Zone Box",
+        "icon": "▭",
+        "shortcut": "F8"
+      },
+      {
+        "name": "Arrow Marker",
+        "icon": "➔",
+        "shortcut": "F9"
+      }
+    ],
+    "indicators": [
+      {
+        "name": "MZpack mzFootprint 3.14.21",
+        "category": "Order Flow",
+        "isEnabled": true,
+        "params": {
+          "mode": "Bid x Ask",
+          "imbalanceRatio": 3,
+          "showPOC": true,
+          "showABS": true
+        }
+      },
+      {
+        "name": "VWAP (Volume Weighted Average Price)",
+        "category": "Volume/Price",
+        "isEnabled": true,
+        "params": {
+          "stdDev1": true,
+          "stdDev2": true,
+          "stdDev3": false
+        }
+      },
+      {
+        "name": "Volume Profile (Session VP)",
+        "category": "Profile",
+        "isEnabled": true,
+        "params": {
+          "valueAreaPercent": 70,
+          "showVAH": true,
+          "showVAL": true,
+          "showPOC": true
+        }
+      },
+      {
+        "name": "Cumulative Delta (CVD)",
+        "category": "Order Flow",
+        "isEnabled": true,
+        "params": {
+          "panel": "SubPanel",
+          "displayMode": "Histogram"
+        }
+      },
+      {
+        "name": "EMA (9, 21, 50, 200)",
+        "category": "Trend",
+        "isEnabled": false,
+        "params": {
+          "fastPeriod": 9,
+          "slowPeriod": 21
+        }
+      },
+      {
+        "name": "SuperTrend Oscillator",
+        "category": "Momentum",
+        "isEnabled": false,
+        "params": {
+          "period": 10,
+          "multiplier": 3
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,429 @@
+<UserControl x:Class="WindowsApp.Ninja.Views.NinjaSuperDomView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             xmlns:local="clr-namespace:WindowsApp"
+             mc:Ignorable="d" 
+             d:DesignHeight="700" d:DesignWidth="1000"
+             Background="#0B1120" Foreground="#F8FAFC">
+    <UserControl.Resources>
+        <local:PositiveToVisibilityConverter x:Key="PositiveToVisibleConv"/>
+        <!-- Custom Scrollbar & Buttons -->
+        <Style x:Key="DomActionButton" TargetType="Button">
+            <Setter Property="Foreground" Value="#FFFFFF"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Opacity" Value="0.88"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="bd" Property="Opacity" Value="0.75"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="QtyButton" TargetType="Button">
+            <Setter Property="Background" Value="#1E293B"/>
+            <Setter Property="Foreground" Value="#94A3B8"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Padding" Value="8,4"/>
+            <Setter Property="Margin" Value="2,0"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="BorderBrush" Value="#334155"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="qbd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" 
+                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="qbd" Property="Background" Value="#334155"/>
+                                <Setter Property="Foreground" Value="#FFFFFF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <!-- 0: Header & Navigation -->
+            <RowDefinition Height="Auto"/>
+            <!-- 1: SuperDOM Ladder & Sidebar -->
+            <RowDefinition Height="*"/>
+            <!-- 2: Quick Order Entry Bar -->
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Top Header & Account Strip -->
+        <Border Grid.Row="0" Background="#131D33" BorderBrush="#1E293B" BorderThickness="1" CornerRadius="10" Padding="14,10" Margin="0,0,0,12">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Left: Instrument Selector -->
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Border Background="#2563EB" CornerRadius="6" Padding="6,4" Margin="0,0,10,0">
+                        <TextBlock Text="NINJA" FontWeight="Bold" FontSize="11" Foreground="#FFFFFF"/>
+                    </Border>
+                    <TextBlock Text="Instrument:" VerticalAlignment="Center" Foreground="#94A3B8" FontSize="13" Margin="0,0,8,0"/>
+                    <ComboBox x:Name="InstrumentCombo" Width="140" Height="30" SelectionChanged="InstrumentCombo_SelectionChanged"
+                              Background="#1E293B" Foreground="#F8FAFC" BorderBrush="#334155"/>
+
+                    <TextBlock Text="Contract Details:" VerticalAlignment="Center" Foreground="#64748B" FontSize="12" Margin="14,0,6,0"/>
+                    <TextBlock x:Name="ContractInfoText" Text="Tick: 0.25 | Pt: $50 | CME" VerticalAlignment="Center" Foreground="#38BDF8" FontWeight="SemiBold" FontSize="12"/>
+                </StackPanel>
+
+                <!-- Center: Account & Position Status -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <!-- Account Pill -->
+                    <Border Background="#1E293B" CornerRadius="6" Padding="10,4" Margin="6,0">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Account: " Foreground="#64748B" FontSize="12"/>
+                            <TextBlock Text="Sim101" FontWeight="Bold" Foreground="#F8FAFC" FontSize="12"/>
+                        </StackPanel>
+                    </Border>
+                    
+                    <!-- Position Pill -->
+                    <Border x:Name="PositionBadge" Background="#1E293B" CornerRadius="6" Padding="10,4" Margin="6,0">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Pos: " Foreground="#64748B" FontSize="12"/>
+                            <TextBlock x:Name="PositionText" Text="FLAT" FontWeight="Bold" Foreground="#94A3B8" FontSize="12"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Unrealized PnL Pill -->
+                    <Border Background="#1E293B" CornerRadius="6" Padding="10,4" Margin="6,0">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Open PnL: " Foreground="#64748B" FontSize="12"/>
+                            <TextBlock x:Name="OpenPnlText" Text="$0.00" FontWeight="Bold" Foreground="#94A3B8" FontSize="12"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Realized PnL Pill -->
+                    <Border Background="#1E293B" CornerRadius="6" Padding="10,4" Margin="6,0">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Realized: " Foreground="#64748B" FontSize="12"/>
+                            <TextBlock x:Name="RealizedPnlText" Text="$0.00" FontWeight="Bold" Foreground="#34D399" FontSize="12"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <!-- Right: Simulation Stream Controls -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="PlayPauseButton" Content="⏸ Pause Feed" Style="{StaticResource DomActionButton}" 
+                            Background="#334155" Padding="10,4" Click="PlayPauseButton_Click" Margin="0,0,8,0"/>
+                    <Button x:Name="CenterDomButton" Content="🎯 Center DOM" Style="{StaticResource DomActionButton}" 
+                            Background="#2563EB" Padding="10,4" Click="CenterDomButton_Click"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Main Content Area: DOM Ladder + Right ATM/Activity Panel -->
+        <Grid Grid.Row="1" Margin="0,0,0,12">
+            <Grid.ColumnDefinitions>
+                <!-- Left: SuperDOM Ladder -->
+                <ColumnDefinition Width="640"/>
+                <!-- Splitter -->
+                <ColumnDefinition Width="14"/>
+                <!-- Right: ATM Strategy & Activity Log -->
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- SuperDOM Ladder Card -->
+            <Border Grid.Column="0" Background="#111827" BorderBrush="#1F2937" BorderThickness="1" CornerRadius="10" ClipToBounds="True">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <!-- Ladder Header -->
+                        <RowDefinition Height="36"/>
+                        <!-- Ladder Rows List -->
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- DOM Columns Header -->
+                    <Border Grid.Row="0" Background="#1F2937" BorderBrush="#374151" BorderThickness="0,0,0,1">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="50"/>  <!-- Working Buy -->
+                                <ColumnDefinition Width="80"/>  <!-- Bid Volume -->
+                                <ColumnDefinition Width="120"/> <!-- Price -->
+                                <ColumnDefinition Width="80"/>  <!-- Ask Volume -->
+                                <ColumnDefinition Width="50"/>  <!-- Working Sell -->
+                                <ColumnDefinition Width="*"/>   <!-- Volume Profile -->
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Work B" Foreground="#60A5FA" FontSize="11" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" Text="Bid Vol" Foreground="#34D399" FontSize="11" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="2" Text="Price" Foreground="#F9FAFB" FontSize="12" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="3" Text="Ask Vol" Foreground="#F87171" FontSize="11" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="4" Text="Work S" Foreground="#F87171" FontSize="11" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="5" Text="Volume Profile" Foreground="#9CA3AF" FontSize="11" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Grid>
+                    </Border>
+
+                    <!-- Scrollable Ladder ItemsControl -->
+                    <ScrollViewer x:Name="LadderScrollViewer" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <ItemsControl x:Name="LadderItemsControl">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border BorderBrush="#1F2937" BorderThickness="0,0,0,1" Height="28">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Background" Value="Transparent"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsLastTraded}" Value="True">
+                                                        <Setter Property="Background" Value="#1E3A8A"/>
+                                                    </DataTrigger>
+                                                    <MultiDataTrigger>
+                                                        <MultiDataTrigger.Conditions>
+                                                            <Condition Binding="{Binding IsInsideAsk}" Value="True"/>
+                                                            <Condition Binding="{Binding IsLastTraded}" Value="False"/>
+                                                        </MultiDataTrigger.Conditions>
+                                                        <Setter Property="Background" Value="#3F1D28"/>
+                                                    </MultiDataTrigger>
+                                                    <MultiDataTrigger>
+                                                        <MultiDataTrigger.Conditions>
+                                                            <Condition Binding="{Binding IsInsideBid}" Value="True"/>
+                                                            <Condition Binding="{Binding IsLastTraded}" Value="False"/>
+                                                        </MultiDataTrigger.Conditions>
+                                                        <Setter Property="Background" Value="#06392F"/>
+                                                    </MultiDataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="50"/>  <!-- Working Buy -->
+                                                <ColumnDefinition Width="80"/>  <!-- Bid Volume -->
+                                                <ColumnDefinition Width="120"/> <!-- Price -->
+                                                <ColumnDefinition Width="80"/>  <!-- Ask Volume -->
+                                                <ColumnDefinition Width="50"/>  <!-- Working Sell -->
+                                                <ColumnDefinition Width="*"/>   <!-- Volume Profile -->
+                                            </Grid.ColumnDefinitions>
+
+                                            <!-- 0: Working Buy Column (Click to cancel working buy) -->
+                                            <Border Grid.Column="0" Background="Transparent" Cursor="Hand" MouseLeftButtonDown="WorkingBuy_Click" Tag="{Binding}">
+                                                <Border Background="#2563EB" CornerRadius="4" Margin="4,2" HorizontalAlignment="Center"
+                                                        Visibility="{Binding WorkingBuyQuantity, Converter={StaticResource PositiveToVisibleConv}}">
+                                                    <TextBlock Text="{Binding WorkingBuyQuantity, StringFormat='+{0}'}" Foreground="#FFFFFF" FontSize="11" FontWeight="Bold" Padding="5,1"/>
+                                                </Border>
+                                            </Border>
+
+                                            <!-- 1: Bid Volume Column (Click to Place Buy Limit) -->
+                                            <Border Grid.Column="1" Background="#064E3B" Opacity="0.8" Cursor="Hand" 
+                                                    Margin="2,1" CornerRadius="3" MouseLeftButtonDown="BidCell_Click" Tag="{Binding}">
+                                                <TextBlock Text="{Binding BidVolume}" Foreground="#6EE7B7" FontWeight="SemiBold" FontSize="12"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            </Border>
+
+                                            <!-- 2: Price Column -->
+                                            <Border Grid.Column="2" Background="Transparent">
+                                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding FormattedPrice}" FontWeight="Bold" FontSize="13" Foreground="#F9FAFB"/>
+                                                </StackPanel>
+                                            </Border>
+
+                                            <!-- 3: Ask Volume Column (Click to Place Sell Limit) -->
+                                            <Border Grid.Column="3" Background="#7F1D1D" Opacity="0.8" Cursor="Hand" 
+                                                    Margin="2,1" CornerRadius="3" MouseLeftButtonDown="AskCell_Click" Tag="{Binding}">
+                                                <TextBlock Text="{Binding AskVolume}" Foreground="#FCA5A5" FontWeight="SemiBold" FontSize="12"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            </Border>
+
+                                            <!-- 4: Working Sell Column (Click to cancel working sell) -->
+                                            <Border Grid.Column="4" Background="Transparent" Cursor="Hand" MouseLeftButtonDown="WorkingSell_Click" Tag="{Binding}">
+                                                <Border Background="#DC2626" CornerRadius="4" Margin="4,2" HorizontalAlignment="Center"
+                                                        Visibility="{Binding WorkingSellQuantity, Converter={StaticResource PositiveToVisibleConv}}">
+                                                    <TextBlock Text="{Binding WorkingSellQuantity, StringFormat='-{0}'}" Foreground="#FFFFFF" FontSize="11" FontWeight="Bold" Padding="5,1"/>
+                                                </Border>
+                                            </Border>
+
+                                            <!-- 5: Volume Profile Bar -->
+                                            <Grid Grid.Column="5" Margin="4,2">
+                                                <ProgressBar Value="{Binding VolumeProfilePercentage}" Maximum="100" Height="14" 
+                                                             Foreground="#1E40AF" Background="#1E293B" BorderThickness="0"/>
+                                                <TextBlock Text="{Binding TradedVolume, StringFormat='{}{0:N0}'}" FontSize="10" Foreground="#E2E8F0" 
+                                                           HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                            </Grid>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+
+            <!-- Right Panel: ATM Strategy Manager & Activity Log -->
+            <Grid Grid.Column="2">
+                <Grid.RowDefinitions>
+                    <!-- ATM Strategy Card -->
+                    <RowDefinition Height="Auto"/>
+                    <!-- Order History & Execution Feed -->
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <!-- ATM Strategy Box -->
+                <Border Grid.Row="0" Background="#131D33" BorderBrush="#1E293B" BorderThickness="1" CornerRadius="10" Padding="14" Margin="0,0,0,12">
+                    <StackPanel>
+                        <Grid Margin="0,0,0,10">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="ATM Strategy" FontSize="14" FontWeight="Bold" Foreground="#38BDF8"/>
+                                <TextBlock Text=" (Advanced Trade Mgmt)" FontSize="11" Foreground="#64748B" VerticalAlignment="Center"/>
+                            </StackPanel>
+                            <CheckBox x:Name="AtmEnabledCheck" Content="Active" IsChecked="True" HorizontalAlignment="Right" 
+                                      Foreground="#34D399" FontWeight="Bold" Checked="AtmConfig_Changed" Unchecked="AtmConfig_Changed"/>
+                        </Grid>
+
+                        <!-- Target and Stop Loss Configuration -->
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="10"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <!-- Profit Target -->
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="Target (Ticks):" Foreground="#94A3B8" FontSize="11" Margin="0,0,0,3"/>
+                                <TextBox x:Name="TargetTicksBox" Text="8" Height="26" Background="#1E293B" Foreground="#34D399" 
+                                         FontWeight="Bold" BorderBrush="#334155" Padding="4,2" TextChanged="AtmConfig_Changed"/>
+                            </StackPanel>
+
+                            <!-- Stop Loss -->
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="Stop Loss (Ticks):" Foreground="#94A3B8" FontSize="11" Margin="0,0,0,3"/>
+                                <TextBox x:Name="StopTicksBox" Text="8" Height="26" Background="#1E293B" Foreground="#F87171" 
+                                         FontWeight="Bold" BorderBrush="#334155" Padding="4,2" TextChanged="AtmConfig_Changed"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- Auto Break-Even and Auto Trail -->
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="10"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Grid.Column="0">
+                                <CheckBox x:Name="AutoBeCheck" Content="Auto Break-Even" IsChecked="True" Foreground="#CBD5E1" FontSize="11" 
+                                          Margin="0,0,0,3" Checked="AtmConfig_Changed" Unchecked="AtmConfig_Changed"/>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="Trigger: " Foreground="#64748B" FontSize="11" VerticalAlignment="Center"/>
+                                    <TextBox x:Name="AutoBeTriggerBox" Text="4" Width="40" Height="22" Background="#1E293B" Foreground="#F8FAFC" 
+                                             BorderBrush="#334155" Padding="2,0" TextChanged="AtmConfig_Changed"/>
+                                    <TextBlock Text=" t" Foreground="#64748B" FontSize="11" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="2">
+                                <CheckBox x:Name="AutoTrailCheck" Content="Auto Trail Stop" IsChecked="False" Foreground="#CBD5E1" FontSize="11" 
+                                          Margin="0,0,0,3" Checked="AtmConfig_Changed" Unchecked="AtmConfig_Changed"/>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="Trail: " Foreground="#64748B" FontSize="11" VerticalAlignment="Center"/>
+                                    <TextBox x:Name="AutoTrailStepBox" Text="2" Width="40" Height="22" Background="#1E293B" Foreground="#F8FAFC" 
+                                             BorderBrush="#334155" Padding="2,0" TextChanged="AtmConfig_Changed"/>
+                                    <TextBlock Text=" t" Foreground="#64748B" FontSize="11" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <!-- Activity Log & Live Orders -->
+                <Border Grid.Row="1" Background="#131D33" BorderBrush="#1E293B" BorderThickness="1" CornerRadius="10" Padding="14">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        
+                        <Grid Grid.Row="0" Margin="0,0,0,8">
+                            <TextBlock Text="Execution &amp; ATM Audit Log" FontSize="13" FontWeight="Bold" Foreground="#94A3B8"/>
+                            <Button Content="Clear" Background="Transparent" Foreground="#64748B" BorderThickness="0" 
+                                    FontSize="11" HorizontalAlignment="Right" Cursor="Hand" Click="ClearLog_Click"/>
+                        </Grid>
+
+                        <ListBox x:Name="LogListBox" Grid.Row="1" Background="#0B1120" BorderBrush="#1E293B" 
+                                 FontFamily="Consolas" FontSize="11" Foreground="#94A3B8"/>
+                    </Grid>
+                </Border>
+            </Grid>
+        </Grid>
+
+        <!-- Bottom Quick-Order Control Bar (Authentic SuperDOM Action Bar) -->
+        <Border Grid.Row="2" Background="#131D33" BorderBrush="#1E293B" BorderThickness="1" CornerRadius="10" Padding="12,10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <!-- Quantity Selector -->
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="14"/>
+                    <!-- Buy Cluster -->
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="14"/>
+                    <!-- Position Management Cluster -->
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="14"/>
+                    <!-- Sell Cluster -->
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Quantity Selector -->
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="Qty:" VerticalAlignment="Center" Foreground="#94A3B8" FontSize="12" Margin="0,0,6,0"/>
+                    <TextBox x:Name="OrderQtyBox" Text="1" Width="40" Height="28" Background="#1E293B" Foreground="#F8FAFC" 
+                             FontWeight="Bold" BorderBrush="#334155" Padding="4,2" VerticalContentAlignment="Center"/>
+                    <Button Content="1" Style="{StaticResource QtyButton}" Click="SetQty_Click" Tag="1"/>
+                    <Button Content="2" Style="{StaticResource QtyButton}" Click="SetQty_Click" Tag="2"/>
+                    <Button Content="5" Style="{StaticResource QtyButton}" Click="SetQty_Click" Tag="5"/>
+                    <Button Content="10" Style="{StaticResource QtyButton}" Click="SetQty_Click" Tag="10"/>
+                </StackPanel>
+
+                <!-- Buy Action Cluster -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Content="BUY MARKET" Style="{StaticResource DomActionButton}" Background="#2563EB" Margin="0,0,6,0" Click="BuyMarket_Click"/>
+                    <Button Content="BUY BID" Style="{StaticResource DomActionButton}" Background="#0D9488" Margin="0,0,6,0" Click="BuyBid_Click"/>
+                    <Button Content="BUY ASK" Style="{StaticResource DomActionButton}" Background="#0284C7" Click="BuyAsk_Click"/>
+                </StackPanel>
+
+                <!-- Position Flatten & Reverse Cluster -->
+                <StackPanel Grid.Column="4" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <Button Content="CLOSE / FLATTEN" Style="{StaticResource DomActionButton}" Background="#475569" Margin="0,0,8,0" Click="Flatten_Click"/>
+                    <Button Content="REVERSE" Style="{StaticResource DomActionButton}" Background="#7C3AED" Margin="0,0,8,0" Click="Reverse_Click"/>
+                    <Button Content="CANCEL ALL" Style="{StaticResource DomActionButton}" Background="#B91C1C" Click="CancelAll_Click"/>
+                </StackPanel>
+
+                <!-- Sell Action Cluster -->
+                <StackPanel Grid.Column="6" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Content="SELL BID" Style="{StaticResource DomActionButton}" Background="#EA580C" Margin="0,0,6,0" Click="SellBid_Click"/>
+                    <Button Content="SELL ASK" Style="{StaticResource DomActionButton}" Background="#C026D3" Margin="0,0,6,0" Click="SellAsk_Click"/>
+                    <Button Content="SELL MARKET" Style="{StaticResource DomActionButton}" Background="#DC2626" Click="SellMarket_Click"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

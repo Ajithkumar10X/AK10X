@@ -1,0 +1,325 @@
+<Window x:Class="WindowsApp.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:WindowsApp"
+        xmlns:ninja="clr-namespace:WindowsApp.Ninja.Views"
+        xmlns:orderflow="clr-namespace:WindowsApp.Ninja.OrderFlow.Views"
+        xmlns:marketprofile="clr-namespace:WindowsApp.MarketProfile.Views"
+        mc:Ignorable="d"
+        Title="AK10X - REA, NINJA &amp; 50CHARTS Trading Platform" 
+        Icon="Assets/app.ico"
+        Height="860" Width="1280"
+        MinHeight="720" MinWidth="1024"
+        WindowState="Maximized"
+        WindowStartupLocation="CenterScreen"
+        Background="#0B1120"
+        Foreground="#F8FAFC">
+    <Window.Resources>
+        <!-- Nav Button Style -->
+        <Style x:Key="NavTabButton" TargetType="RadioButton">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#94A3B8"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Padding" Value="16,8"/>
+            <Setter Property="Margin" Value="4,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="tabBorder" Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="tabBorder" Property="Background" Value="#1E293B"/>
+                                <Setter Property="Foreground" Value="#F8FAFC"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="tabBorder" Property="Background" Value="#2563EB"/>
+                                <Setter Property="Foreground" Value="#FFFFFF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Dashboard Card Style -->
+        <Style x:Key="GlassCard" TargetType="Border">
+            <Setter Property="Background" Value="#131D33"/>
+            <Setter Property="CornerRadius" Value="12"/>
+            <Setter Property="BorderBrush" Value="#1E293B"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="20"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <!-- Top App Bar -->
+            <RowDefinition Height="Auto"/>
+            <!-- Content View Area -->
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Top Navigation Header -->
+        <Border Grid.Row="0" Background="#0F172A" BorderBrush="#1E293B" BorderThickness="0,0,0,1" Padding="20,12">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Brand & Logo -->
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Border Width="40" Height="40" CornerRadius="20" Background="#0A0E17" BorderBrush="#38BDF8" BorderThickness="1.5" Margin="0,0,12,0" VerticalAlignment="Center">
+                        <Border.Effect>
+                            <DropShadowEffect Color="#38BDF8" BlurRadius="8" ShadowDepth="0" Opacity="0.4"/>
+                        </Border.Effect>
+                        <Image Source="Assets/logo.png" Width="38" Height="38" RenderOptions.BitmapScalingMode="HighQuality">
+                            <Image.Clip>
+                                <EllipseGeometry Center="19,19" RadiusX="19" RadiusY="19"/>
+                            </Image.Clip>
+                        </Image>
+                    </Border>
+                    <StackPanel VerticalAlignment="Center">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="AK10X" FontSize="19" FontWeight="ExtraBold" Foreground="#F8FAFC" VerticalAlignment="Center"/>
+                            <Border Background="#065F46" BorderBrush="#10B981" BorderThickness="1" CornerRadius="4" Padding="6,2" Margin="10,0,0,0" VerticalAlignment="Center">
+                                <TextBlock Text="MODULE 1: NINJA" Foreground="#34D399" FontSize="10" FontWeight="Bold"/>
+                            </Border>
+                            <Border Background="#1E3A8A" BorderBrush="#3B82F6" BorderThickness="1" CornerRadius="4" Padding="6,2" Margin="6,0,0,0" VerticalAlignment="Center">
+                                <TextBlock Text="MODULE 2: 50CHARTS MP" Foreground="#60A5FA" FontSize="10" FontWeight="Bold"/>
+                            </Border>
+                        </StackPanel>
+                        <TextBlock Text="Reverse Engineered NinjaTrader 8 &amp; AmiBroker 50Charts Trading Platform" FontSize="11" Foreground="#64748B" Margin="0,2,0,0"/>
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- Navigation Tabs -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <RadioButton x:Name="MarketProfileTab" Content="🏛️ Market Profile (50Charts)" Style="{StaticResource NavTabButton}" Checked="Tab_Checked"/>
+                    <RadioButton x:Name="OrderFlowTab" Content="📊 Order Flow (Footprint)" Style="{StaticResource NavTabButton}" Checked="Tab_Checked"/>
+                    <RadioButton x:Name="NinjaTab" Content="⚡ SuperDOM" Style="{StaticResource NavTabButton}" Checked="Tab_Checked"/>
+                    <RadioButton x:Name="ConnectionsTab" Content="🔌 Connections" Style="{StaticResource NavTabButton}" Checked="Tab_Checked"/>
+                    <RadioButton x:Name="ReaTab" Content="🔬 REA Engine" Style="{StaticResource NavTabButton}" Checked="Tab_Checked"/>
+                    <RadioButton x:Name="SysTab" Content="⚙ System" Style="{StaticResource NavTabButton}" Checked="Tab_Checked"/>
+                </StackPanel>
+
+                <!-- Right Status Badges -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <!-- Live Connection Badge Button (Cloned from NT8) -->
+                    <Border x:Name="TopConnectionBorder" Background="#064E3B" BorderBrush="#059669" BorderThickness="1" CornerRadius="6" 
+                            Padding="10,5" Margin="0,0,10,0" Cursor="Hand" MouseLeftButtonDown="TopConnectionBorder_Click">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Ellipse x:Name="TopConnectionDot" Width="8" Height="8" Fill="#10B981" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="TopConnectionText" Text="● My NinjaTrader (14ms)" Foreground="#D1FAE5" FontSize="11" FontWeight="Bold"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Background="#1E293B" CornerRadius="6" Padding="10,6">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse Width="8" Height="8" Fill="#38BDF8" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="50Charts MP 8.1" Foreground="#CBD5E1" FontSize="11" FontWeight="SemiBold"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Main Views Host -->
+        <Grid Grid.Row="1">
+            <!-- View 1: Module 2: Market Profile (50Charts Style) -->
+            <marketprofile:FiftyChartsMarketProfileView x:Name="MarketProfileView" Visibility="Visible"/>
+
+            <!-- View 2: Order Flow Footprint View (MZpack style) -->
+            <orderflow:NinjaOrderFlowView x:Name="OrderFlowView" Visibility="Collapsed"/>
+
+            <!-- View 3: NINJA Module (SuperDOM & Trading Engine) -->
+            <ninja:NinjaSuperDomView x:Name="NinjaView" Visibility="Collapsed"/>
+
+            <!-- View 4: NinjaTrader 8 Connection Center (Cloned via REA) -->
+            <ninja:NinjaConnectionView x:Name="ConnectionsView" Visibility="Collapsed"/>
+
+            <!-- View 5: REA Reverse Engineering Dashboard -->
+            <ScrollViewer x:Name="ReaView" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                <Grid Margin="24">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- REA Banner -->
+                    <Border Grid.Row="0" Style="{StaticResource GlassCard}" Margin="0,0,0,18">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="REA: Reverse Engineer Anything" FontSize="20" FontWeight="Bold" Foreground="#38BDF8" Margin="0,0,0,6"/>
+                                <TextBlock Text="Analysis and extraction bridge targeting NinjaTrader 8 core assemblies and futures specifications." 
+                                           Foreground="#94A3B8" FontSize="13" TextWrapping="Wrap"/>
+                                <TextBlock Text="Target: C:\Program Files\NinjaTrader 8\bin\NinjaTrader.Core.dll" Foreground="#64748B" FontSize="11" Margin="0,8,0,0" FontFamily="Consolas"/>
+                            </StackPanel>
+                            <Button Grid.Column="1" x:Name="RunReaBtn" Content="🔄 Re-run REA Extraction" Background="#2563EB" Foreground="#FFFFFF" 
+                                    FontWeight="SemiBold" FontSize="13" Padding="16,8" Cursor="Hand" VerticalAlignment="Center" Click="RunReaBtn_Click"/>
+                        </Grid>
+                    </Border>
+
+                    <!-- Extracted Futures Summary Cards -->
+                    <Grid Grid.Row="1" Margin="0,0,0,18">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="16"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="16"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <Border Grid.Column="0" Style="{StaticResource GlassCard}">
+                            <StackPanel>
+                                <TextBlock Text="Extracted Contracts" Foreground="#94A3B8" FontSize="12"/>
+                                <TextBlock Text="11 Futures" FontSize="22" FontWeight="Bold" Foreground="#F8FAFC" Margin="0,4,0,0"/>
+                                <TextBlock Text="ES, NQ, MES, MNQ, YM, MYM, RTY, CL, MCL, GC, MGC" Foreground="#64748B" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Grid.Column="2" Style="{StaticResource GlassCard}">
+                            <StackPanel>
+                                <TextBlock Text="Disassembled Types" Foreground="#94A3B8" FontSize="12"/>
+                                <TextBlock Text="3 Managed Classes" FontSize="22" FontWeight="Bold" Foreground="#34D399" Margin="0,4,0,0"/>
+                                <TextBlock Text="MasterInstrument (25 props), Order (48 props), AtmStrategy" Foreground="#64748B" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Grid.Column="4" Style="{StaticResource GlassCard}">
+                            <StackPanel>
+                                <TextBlock Text="Bridge Location" Foreground="#94A3B8" FontSize="12"/>
+                                <TextBlock Text="D:\AK10X\rea" FontSize="18" FontWeight="Bold" Foreground="#A855F7" Margin="0,4,0,0"/>
+                                <TextBlock Text="scripts/extract_ninja_contracts.ps1" Foreground="#64748B" FontSize="11" Margin="0,4,0,0" FontFamily="Consolas"/>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+
+                    <!-- Schema Details Viewer -->
+                    <Border Grid.Row="2" Style="{StaticResource GlassCard}">
+                        <StackPanel>
+                            <TextBlock Text="Reversed Schema (ninja_extracted_contracts.json)" FontSize="15" FontWeight="Bold" Foreground="#F8FAFC" Margin="0,0,0,12"/>
+                            <TextBox x:Name="ReaSchemaBox" Height="340" Background="#0B1120" Foreground="#38BDF8" BorderBrush="#1E293B" 
+                                     FontFamily="Consolas" FontSize="11" IsReadOnly="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </ScrollViewer>
+
+            <!-- View 3: System Overview -->
+            <ScrollViewer x:Name="SysView" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                <Grid Margin="28">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Application Identity Brand Banner -->
+                    <Border Grid.Row="0" Style="{StaticResource GlassCard}" Margin="0,0,0,20" Background="#0C1427" BorderBrush="#2563EB">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Border Grid.Column="0" Width="68" Height="68" CornerRadius="34" Background="#080D1A" BorderBrush="#38BDF8" BorderThickness="2" Margin="0,0,18,0">
+                                <Border.Effect>
+                                    <DropShadowEffect Color="#38BDF8" BlurRadius="12" ShadowDepth="0" Opacity="0.5"/>
+                                </Border.Effect>
+                                <Image Source="Assets/logo.png" Width="64" Height="64" RenderOptions.BitmapScalingMode="HighQuality">
+                                    <Image.Clip>
+                                        <EllipseGeometry Center="32,32" RadiusX="32" RadiusY="32"/>
+                                    </Image.Clip>
+                                </Image>
+                            </Border>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="AK10X" FontSize="24" FontWeight="Black" Foreground="#F8FAFC"/>
+                                    <Border Background="#1E293B" CornerRadius="6" Padding="8,3" Margin="12,0,0,0" VerticalAlignment="Center">
+                                        <TextBlock Text="v1.0.0 PRO" Foreground="#38BDF8" FontSize="11" FontWeight="Bold"/>
+                                    </Border>
+                                </StackPanel>
+                                <TextBlock Text="Professional Trading Workstation with Reverse Engineered NinjaTrader &amp; 50Charts Market Profile" 
+                                           Foreground="#94A3B8" FontSize="12" Margin="0,4,0,0"/>
+                                <TextBlock Text="Executable: AK10X.exe | Architecture: x64 | Target: .NET 10.0 Windows" 
+                                           Foreground="#64748B" FontSize="11" Margin="0,4,0,0" FontFamily="Consolas"/>
+                            </StackPanel>
+                            <Border Grid.Column="2" Background="#064E3B" BorderBrush="#059669" BorderThickness="1" CornerRadius="8" Padding="14,10" VerticalAlignment="Center">
+                                <TextBlock Text="● ENGINE ONLINE" Foreground="#6EE7B7" FontWeight="Bold" FontSize="12"/>
+                            </Border>
+                        </Grid>
+                    </Border>
+
+                    <!-- Ecosystem Columns -->
+                    <Grid Grid.Row="1">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="20"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <Border Grid.Column="0" Style="{StaticResource GlassCard}">
+                            <StackPanel>
+                                <TextBlock Text="AK10X Ecosystem Architecture" FontSize="18" FontWeight="Bold" Foreground="#38BDF8" Margin="0,0,0,16"/>
+                                
+                                <Grid Margin="0,0,0,10">
+                                    <TextBlock Text="Application Name:" Foreground="#94A3B8" FontSize="13"/>
+                                    <TextBlock Text="AK10X (.NET 10.0 WPF)" HorizontalAlignment="Right" Foreground="#F8FAFC" FontWeight="SemiBold" FontSize="13"/>
+                                </Grid>
+
+                                <Grid Margin="0,0,0,10">
+                                    <TextBlock Text="Active Modules:" Foreground="#94A3B8" FontSize="13"/>
+                                    <TextBlock Text="Module 1: NINJA + Module 2: 50CHARTS" HorizontalAlignment="Right" Foreground="#38BDF8" FontWeight="Bold" FontSize="13"/>
+                                </Grid>
+
+                                <Grid Margin="0,0,0,10">
+                                    <TextBlock Text="Reverse Engineering Provider:" Foreground="#94A3B8" FontSize="13"/>
+                                    <TextBlock Text="REA (D:\AK10X\rea)" HorizontalAlignment="Right" Foreground="#A855F7" FontWeight="SemiBold" FontSize="13"/>
+                                </Grid>
+
+                                <Grid Margin="0,0,0,10">
+                                    <TextBlock Text="Installed Target 1:" Foreground="#94A3B8" FontSize="13"/>
+                                    <TextBlock Text="NinjaTrader 8.1.5.2 (x64)" HorizontalAlignment="Right" Foreground="#34D399" FontWeight="SemiBold" FontSize="13"/>
+                                </Grid>
+
+                                <Grid Margin="0,0,0,10">
+                                    <TextBlock Text="Installed Target 2:" Foreground="#94A3B8" FontSize="13"/>
+                                    <TextBlock Text="AmiBroker + 50Charts MP v8.1" HorizontalAlignment="Right" Foreground="#60A5FA" FontWeight="SemiBold" FontSize="13"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Grid.Column="2" Style="{StaticResource GlassCard}">
+                            <StackPanel>
+                                <TextBlock Text="Integrated Platform Capabilities" FontSize="18" FontWeight="Bold" Foreground="#F8FAFC" Margin="0,0,0,16"/>
+                                <TextBlock Text="[Module 1 - NINJA &amp; Order Flow]" Foreground="#34D399" FontWeight="Bold" FontSize="13" Margin="0,0,0,4"/>
+                                <TextBlock Text="✓ MZpack-style Order Flow Footprint with Bid x Ask volume imbalances" Foreground="#CBD5E1" FontSize="12" Margin="0,0,0,4"/>
+                                <TextBlock Text="✓ Dynamic VWAP + 3 Standard Deviation Bands and CVD (Cumulative Volume Delta)" Foreground="#CBD5E1" FontSize="12" Margin="0,0,0,4"/>
+                                <TextBlock Text="✓ High-performance Depth of Market (SuperDOM) with ATM Bracket trading" Foreground="#CBD5E1" FontSize="12" Margin="0,0,0,8"/>
+
+                                <TextBlock Text="[Module 2 - 50Charts Market Profile]" Foreground="#60A5FA" FontWeight="Bold" FontSize="13" Margin="0,4,0,4"/>
+                                <TextBlock Text="✓ Exact 50Charts Dark Theme (#070D10) with A-M Rainbow Letter Palette" Foreground="#CBD5E1" FontSize="12" Margin="0,0,0,4"/>
+                                <TextBlock Text="✓ 70% Value Area (VAH / VAL) with shaded background box and POC/VPOC rays" Foreground="#CBD5E1" FontSize="12" Margin="0,0,0,4"/>
+                                <TextBlock Text="✓ Initial Balance (IB High/Low/Range) with green brackets and Open Type detection" Foreground="#CBD5E1" FontSize="12" Margin="0,0,0,4"/>
+                                <TextBlock Text="✓ Single Prints (SP Buy/Sell zones) and Poor High / Poor Low auction tracking" Foreground="#CBD5E1" FontSize="12" Margin="0,0,0,4"/>
+                                <TextBlock Text="✓ Instant Split / Merge toggle for chronological vs bell-curve distribution" Foreground="#CBD5E1" FontSize="12" Margin="0,0,0,4"/>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </Grid>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</Window>

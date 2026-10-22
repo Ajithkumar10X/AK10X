@@ -1,0 +1,585 @@
+<UserControl x:Class="WindowsApp.Ninja.OrderFlow.Views.NinjaOrderFlowView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             mc:Ignorable="d" 
+             d:DesignHeight="850" d:DesignWidth="1280"
+             Background="#121214" Foreground="#E4E4E7">
+    <UserControl.Resources>
+        <!-- Down Arrow Geometry -->
+        <StreamGeometry x:Key="DownArrowGeometry">M 0 0 L 3.5 3.5 L 7 0 Z</StreamGeometry>
+
+        <!-- Dark ComboBox Item Style -->
+        <Style x:Key="DarkComboBoxItem" TargetType="ComboBoxItem">
+            <Setter Property="Background" Value="#1E1E24"/>
+            <Setter Property="Foreground" Value="#F4F4F5"/>
+            <Setter Property="Padding" Value="8,4"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#2E2E38"/>
+                    <Setter Property="Foreground" Value="#FFFFFF"/>
+                </Trigger>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="#2563EB"/>
+                    <Setter Property="Foreground" Value="#FFFFFF"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- ToggleButton Template for DarkComboBox -->
+        <ControlTemplate x:Key="DarkComboBoxToggleButtonTemplate" TargetType="ToggleButton">
+            <Border x:Name="border" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="4">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="18"/>
+                    </Grid.ColumnDefinitions>
+                    <Path x:Name="arrow" Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center"
+                          Fill="#A1A1AA" Data="{StaticResource DownArrowGeometry}"/>
+                </Grid>
+            </Border>
+            <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter TargetName="border" Property="BorderBrush" Value="#60A5FA"/>
+                    <Setter TargetName="arrow" Property="Fill" Value="#FFFFFF"/>
+                </Trigger>
+            </ControlTemplate.Triggers>
+        </ControlTemplate>
+
+        <!-- Dark ComboBox Style with Full Custom Template -->
+        <Style x:Key="DarkComboBox" TargetType="ComboBox">
+            <Setter Property="Background" Value="#1E1E24"/>
+            <Setter Property="Foreground" Value="#F4F4F5"/>
+            <Setter Property="BorderBrush" Value="#3F3F46"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="6,2"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="ItemContainerStyle" Value="{StaticResource DarkComboBoxItem}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid x:Name="MainGrid">
+                            <ToggleButton x:Name="ToggleButton" Template="{StaticResource DarkComboBoxToggleButtonTemplate}"
+                                          Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                          BorderThickness="{TemplateBinding BorderThickness}"
+                                          Focusable="False" IsChecked="{Binding Path=IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
+                                          ClickMode="Press"/>
+                            <ContentPresenter x:Name="ContentSite" IsHitTestVisible="False" Margin="8,2,20,2"
+                                              Content="{TemplateBinding SelectionBoxItem}"
+                                              ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                              ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"
+                                              VerticalAlignment="Center" HorizontalAlignment="Left"/>
+                            <Popup x:Name="Popup" Placement="Bottom" IsOpen="{TemplateBinding IsDropDownOpen}" AllowsTransparency="True" Focusable="False" PopupAnimation="Slide">
+                                <Grid x:Name="DropDown" SnapsToDevicePixels="True" MinWidth="{TemplateBinding ActualWidth}" MaxHeight="220" Margin="0,2,0,0">
+                                    <Border x:Name="DropDownBorder" Background="#18181B" BorderBrush="#3F3F46" BorderThickness="1" CornerRadius="4">
+                                        <ScrollViewer Margin="2" SnapsToDevicePixels="True">
+                                            <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained"/>
+                                        </ScrollViewer>
+                                    </Border>
+                                </Grid>
+                            </Popup>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="RibbonLabelHeader" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#E4E4E7"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Padding" Value="8,2"/>
+        </Style>
+
+        <Style x:Key="SmallToolButton" TargetType="Button">
+            <Setter Property="Background" Value="#27272A"/>
+            <Setter Property="Foreground" Value="#E4E4E7"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="BorderBrush" Value="#3F3F46"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="8,3"/>
+            <Setter Property="Margin" Value="2,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="tb" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" 
+                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="tb" Property="Background" Value="#3F3F46"/>
+                                <Setter Property="Foreground" Value="#FFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="tb" Property="Background" Value="#18181B"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <!-- 0: Window / Chart Title Bar (Timeframe, Chart Type, Symbol, Price) -->
+            <RowDefinition Height="32"/>
+            <!-- 1: Chart Tools Toolbar (Mode, Indicators, Drawing Tools, Zoom) -->
+            <RowDefinition Height="42"/>
+            <!-- 2: Footprint Main Chart Area -->
+            <RowDefinition Height="*"/>
+            <!-- 3: Order Flow Data Ribbon (6 MZpack Rows + Time) -->
+            <RowDefinition Height="165"/>
+            <!-- 4: Bottom Instrument Switcher Tabs -->
+            <RowDefinition Height="28"/>
+        </Grid.RowDefinitions>
+
+        <!-- 0: Chart Window Title Bar -->
+        <Border Grid.Row="0" Background="#1F1F23" BorderBrush="#2E2E33" BorderThickness="0,0,0,1" Padding="8,2">
+            <Grid>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock x:Name="SymbolTitleText" Text="📈 NIFTY_I (700 Range)" Foreground="#E4E4E7" FontSize="11" FontWeight="Bold" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                    
+                    <!-- Symbol Selector ComboBox -->
+                    <ComboBox x:Name="SymbolSelectCombo" Width="170" Height="25" Style="{StaticResource DarkComboBox}" 
+                              SelectionChanged="SymbolSelectCombo_SelectionChanged" Margin="0,0,6,0">
+                        <ComboBoxItem Content="NIFTY_I (NSE Futures)" IsSelected="True"/>
+                        <ComboBoxItem Content="BANKNIFTY_I (NSE Futures)"/>
+                        <ComboBoxItem Content="HDFCLIFE_I (NSE Futures)"/>
+                        <ComboBoxItem Content="RELIANCE_I (NSE Futures)"/>
+                        <ComboBoxItem Content="TATASTEEL_I (NSE Futures)"/>
+                        <ComboBoxItem Content="SBIN_I (NSE Futures)"/>
+                        <ComboBoxItem Content="TCS_I (NSE Futures)"/>
+                        <ComboBoxItem Content="INFY_I (NSE Futures)"/>
+                        <ComboBoxItem Content="GC 12-26 (COMEX Gold)"/>
+                        <ComboBoxItem Content="ES 03-26 (CME S&amp;P 500)"/>
+                        <ComboBoxItem Content="NQ 03-26 (CME Nasdaq)"/>
+                    </ComboBox>
+
+                    <Button x:Name="SearchSymbolBtn" Content="🔎 Symbol" Style="{StaticResource SmallToolButton}" Click="OpenSymbolSearch_Click" ToolTip="Search All Accelpix EQ &amp; Futures Symbols" Margin="0,0,8,0"/>
+
+                    <!-- Timeframe Selector -->
+                    <TextBlock Text="TF:" Foreground="#A1A1AA" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" Margin="4,0,4,0"/>
+                    <ComboBox x:Name="TimeframeCombo" Width="95" Height="24" Style="{StaticResource DarkComboBox}" 
+                              SelectionChanged="TimeframeCombo_SelectionChanged" Margin="0,0,8,0">
+                        <ComboBoxItem Content="700 Range" IsSelected="True"/>
+                        <ComboBoxItem Content="1 Min"/>
+                        <ComboBoxItem Content="2 Min"/>
+                        <ComboBoxItem Content="3 Min"/>
+                        <ComboBoxItem Content="5 Min"/>
+                        <ComboBoxItem Content="15 Min"/>
+                        <ComboBoxItem Content="30 Min"/>
+                        <ComboBoxItem Content="60 Min"/>
+                        <ComboBoxItem Content="Daily"/>
+                    </ComboBox>
+
+                    <!-- Chart Style / Type Selector -->
+                    <TextBlock Text="Type:" Foreground="#A1A1AA" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" Margin="4,0,4,0"/>
+                    <ComboBox x:Name="ChartTypeCombo" Width="125" Height="24" Style="{StaticResource DarkComboBox}" 
+                              SelectionChanged="ChartTypeCombo_SelectionChanged" Margin="0,0,8,0">
+                        <ComboBoxItem Content="Footprint (MZpack)" IsSelected="True"/>
+                        <ComboBoxItem Content="Candlestick"/>
+                        <ComboBoxItem Content="OHLC Bars"/>
+                        <ComboBoxItem Content="Volume Profile"/>
+                        <ComboBoxItem Content="Area Line"/>
+                    </ComboBox>
+
+                    <Button x:Name="PropertiesBtn" Content="⚙️ Properties" Style="{StaticResource SmallToolButton}" Click="OpenProperties_Click" ToolTip="NinjaTrader 8 mzFootprint Properties" Background="#1E3A8A" BorderBrush="#3B82F6" Foreground="#FFFFFF" FontWeight="Bold" Margin="0,0,6,0"/>
+
+                    <Border Background="#064E3B" BorderBrush="#059669" BorderThickness="1" CornerRadius="3" Padding="6,2" VerticalAlignment="Center">
+                        <TextBlock Text="● Accelpix (Active)" Foreground="#34D399" FontSize="10" FontWeight="Bold"/>
+                    </Border>
+                </StackPanel>
+                
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <Border Background="#09090B" BorderBrush="#27272A" BorderThickness="1" CornerRadius="4" Padding="8,2" Margin="0,0,4,0">
+                        <TextBlock x:Name="LivePriceIndicator" Text="Last: 24,374.50  Ask: 24,375.00  Bid: 24,374.00  Delta: +142" Foreground="#38BDF8" FontSize="11" FontWeight="Bold"/>
+                    </Border>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- 1: Chart Tools Toolbar (Mode, Imbalances, Indicators, Drawing Tools, Zoom) -->
+        <Border Grid.Row="1" Background="#18181B" BorderBrush="#27272A" BorderThickness="0,0,0,1" Padding="8,4">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Left 1: Mode & Imbalances -->
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="Mode:" Foreground="#A1A1AA" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                    <ComboBox x:Name="ModeCombo" Width="95" Height="24" Style="{StaticResource DarkComboBox}" SelectionChanged="ModeCombo_SelectionChanged">
+                        <ComboBoxItem Content="Bid x Ask" IsSelected="True"/>
+                        <ComboBoxItem Content="Delta"/>
+                        <ComboBoxItem Content="Volume"/>
+                    </ComboBox>
+
+                    <TextBlock Text="Imbal:" Foreground="#A1A1AA" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" Margin="8,0,4,0"/>
+                    <ComboBox x:Name="ImbalanceCombo" Width="92" Height="24" Style="{StaticResource DarkComboBox}" SelectionChanged="ImbalanceCombo_SelectionChanged">
+                        <ComboBoxItem Content="300% (3x)" IsSelected="True"/>
+                        <ComboBoxItem Content="200% (2x)"/>
+                        <ComboBoxItem Content="400% (4x)"/>
+                    </ComboBox>
+
+                    <!-- Indicators Toggles -->
+                    <CheckBox x:Name="ShowCandleCheck" Content="Candle Line" IsChecked="True" Foreground="#38BDF8" FontSize="11" FontWeight="SemiBold"
+                              VerticalAlignment="Center" Margin="8,0,4,0" Checked="OptionCheck_Changed" Unchecked="OptionCheck_Changed" ToolTip="Show Candlestick Body, Spine &amp; High/Low Wick Straight Line"/>
+                    <CheckBox x:Name="ShowZonesCheck" Content="Zones" IsChecked="True" Foreground="#CBD5E1" FontSize="11" 
+                              VerticalAlignment="Center" Margin="4,0,4,0" Checked="OptionCheck_Changed" Unchecked="OptionCheck_Changed"/>
+                    <CheckBox x:Name="ShowPocLineCheck" Content="POC" IsChecked="True" Foreground="#FFFF00" FontSize="11" FontWeight="SemiBold"
+                              VerticalAlignment="Center" Margin="4,0,4,0" Checked="OptionCheck_Changed" Unchecked="OptionCheck_Changed"/>
+                    <CheckBox x:Name="ShowVwapCheck" Content="VWAP + Bands" IsChecked="True" Foreground="#F59E0B" FontSize="11" FontWeight="SemiBold"
+                              VerticalAlignment="Center" Margin="4,0,4,0" Checked="OptionCheck_Changed" Unchecked="OptionCheck_Changed" ToolTip="Volume-Weighted Average Price with StdDev Bands"/>
+                    <CheckBox x:Name="ShowProfileCheck" Content="Profile" IsChecked="True" Foreground="#38BDF8" FontSize="11" FontWeight="SemiBold"
+                              VerticalAlignment="Center" Margin="4,0,4,0" Checked="OptionCheck_Changed" Unchecked="OptionCheck_Changed" ToolTip="Composite Session Volume Profile"/>
+                    <CheckBox x:Name="ShowCvdCheck" Content="CVD" IsChecked="True" Foreground="#A855F7" FontSize="11" FontWeight="SemiBold"
+                              VerticalAlignment="Center" Margin="4,0,4,0" Checked="OptionCheck_Changed" Unchecked="OptionCheck_Changed" ToolTip="Cumulative Volume Delta Curve"/>
+                    <CheckBox x:Name="ShowAbsCheck" Content="ABS" IsChecked="True" Foreground="#F59E0B" FontSize="11" FontWeight="Bold"
+                              VerticalAlignment="Center" Margin="4,0,8,0" Checked="OptionCheck_Changed" Unchecked="OptionCheck_Changed" ToolTip="Show Absorption Detection (ABS Badges)"/>
+                </StackPanel>
+
+                <!-- Center-Left: Drawing Tools Toolbar -->
+                <Border Grid.Column="1" Background="#1E1E24" BorderBrush="#27272A" BorderThickness="1" CornerRadius="6" Padding="4,2" Margin="6,0">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button x:Name="ToolPanBtn" Content="✋ Pan" Style="{StaticResource SmallToolButton}" Tag="Pan" Click="DrawingTool_Click" ToolTip="Drag to Pan Chart"/>
+                        <Button x:Name="ToolCrosshairBtn" Content="➕ Cross" Style="{StaticResource SmallToolButton}" Tag="Crosshair" Click="DrawingTool_Click" ToolTip="Interactive Crosshair Coordinate Inspection"/>
+                        <Button x:Name="ToolTrendlineBtn" Content="📉 Trend" Style="{StaticResource SmallToolButton}" Tag="Trendline" Click="DrawingTool_Click" ToolTip="Click two points to draw Trendline"/>
+                        <Button x:Name="ToolHorizontalRayBtn" Content="➖ H-Ray" Style="{StaticResource SmallToolButton}" Tag="HRay" Click="DrawingTool_Click" ToolTip="Place Horizontal Support/Resistance Level"/>
+                        <Button x:Name="ToolFibonacciBtn" Content="🎯 Fib" Style="{StaticResource SmallToolButton}" Tag="Fib" Click="DrawingTool_Click" ToolTip="Draw Fibonacci Retracement Levels"/>
+                        <Button x:Name="ToolRulerBtn" Content="📏 Ruler" Style="{StaticResource SmallToolButton}" Tag="Ruler" Click="DrawingTool_Click" ToolTip="Measure Price, Ticks &amp; Delta"/>
+                        <Button Content="🗑️" Style="{StaticResource SmallToolButton}" Click="ClearDrawings_Click" ToolTip="Clear All Custom Drawings"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- Center-Right: Interactive Zoom Controls -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <Border Background="#1E1E24" BorderBrush="#27272A" BorderThickness="1" CornerRadius="6" Padding="6,2">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="🔍" Foreground="#A1A1AA" FontSize="11" VerticalAlignment="Center" Margin="2,0,4,0"/>
+                            <Button Content="➖" Style="{StaticResource SmallToolButton}" Width="24" Height="22" Padding="0" Click="ZoomOutBtn_Click" ToolTip="Zoom Out"/>
+                            <Slider x:Name="ZoomSlider" Minimum="0.6" Maximum="3.0" Value="1.35" Width="75" Margin="4,0" 
+                                    VerticalAlignment="Center" ValueChanged="ZoomSlider_ValueChanged"/>
+                            <TextBlock x:Name="ZoomLabel" Text="135%" Foreground="#38BDF8" FontWeight="Bold" FontSize="11" Width="36" VerticalAlignment="Center"/>
+                            <Button Content="➕" Style="{StaticResource SmallToolButton}" Width="24" Height="22" Padding="0" Click="ZoomInBtn_Click" ToolTip="Zoom In"/>
+                            <Button Content="100%" Style="{StaticResource SmallToolButton}" Padding="4,2" Click="ZoomResetBtn_Click" ToolTip="Reset Zoom"/>
+                            <Button Content="Fit" Style="{StaticResource SmallToolButton}" Padding="4,2" Click="ZoomFitBtn_Click" ToolTip="Auto-Fit Range"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <!-- Right: Stream Toggle & Reset -->
+                <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="FeedToggleBtn" Content="▶ Resume" Style="{StaticResource SmallToolButton}" Click="FeedToggleBtn_Click"/>
+                    <Button Content="🔄 Reset" Style="{StaticResource SmallToolButton}" Click="ResetViewBtn_Click"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- 2: Main Footprint Canvas & Price Axis -->
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <!-- Chart Canvas Area -->
+                <ColumnDefinition Width="*"/>
+                <!-- Price Axis (Right) -->
+                <ColumnDefinition Width="70"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Footprint Candles Scrollable Area with Layered Canvases for Draw & Crosshair -->
+            <ScrollViewer x:Name="ChartScrollViewer" Grid.Column="0" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
+                          Background="#0E0E10" PreviewMouseWheel="ChartScrollViewer_PreviewMouseWheel" 
+                          PreviewMouseLeftButtonDown="ChartCanvas_MouseDown" PreviewMouseMove="ChartCanvas_MouseMove" PreviewMouseLeftButtonUp="ChartCanvas_MouseUp">
+                <Grid x:Name="ChartContainerGrid" Width="2400" Height="500">
+                    <!-- Layer 0: Main Chart & Footprints -->
+                    <Canvas x:Name="FootprintCanvas" Width="2400" Height="500" Background="#0E0E10"/>
+                    
+                    <!-- Layer 1: User Drawings (Trendlines, H-Rays, Fibs, Ruler) -->
+                    <Canvas x:Name="DrawingsCanvas" Width="2400" Height="500" IsHitTestVisible="False"/>
+                    
+                    <!-- Layer 2: Interactive Crosshair & Cursor Readout -->
+                    <Canvas x:Name="CrosshairCanvas" Width="2400" Height="500" IsHitTestVisible="False"/>
+                </Grid>
+            </ScrollViewer>
+
+            <!-- Price Axis (Right) inside ScrollViewer for vertical synchronization and drag scaling -->
+            <ScrollViewer x:Name="PriceAxisScrollViewer" Grid.Column="1" 
+                          HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Hidden"
+                          Background="#161619" BorderBrush="#27272A" BorderThickness="1,0,0,0"
+                          PreviewMouseWheel="PriceAxis_MouseWheel" 
+                          PreviewMouseLeftButtonDown="PriceAxis_MouseDown"
+                          PreviewMouseMove="PriceAxis_MouseMove"
+                          PreviewMouseLeftButtonUp="PriceAxis_MouseUp">
+                <Canvas x:Name="PriceAxisCanvas" Background="#161619" Width="70" Cursor="SizeNS"/>
+            </ScrollViewer>
+        </Grid>
+
+        <!-- 3: Order Flow Data Ribbon (Exact 6 MZpack Rows + Time) -->
+        <Border Grid.Row="3" Background="#09090B" BorderBrush="#27272A" BorderThickness="0,1,0,1">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <!-- Left Row Headers -->
+                    <ColumnDefinition Width="110"/>
+                    <!-- Data Columns Canvas (Synced horizontally with Chart) -->
+                    <ColumnDefinition Width="*"/>
+                    <!-- Right padding aligned with price axis -->
+                    <ColumnDefinition Width="70"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Left Row Headers matching NinjaTrader 8 MZpack 3.18.8 -->
+                <StackPanel Grid.Column="0" Background="#161619" VerticalAlignment="Stretch">
+                    <Border Height="23" Background="#1E6B37" BorderBrush="#27272A" BorderThickness="0,0,1,1"><TextBlock Text="Buy volume" Style="{StaticResource RibbonLabelHeader}"/></Border>
+                    <Border Height="23" Background="#8B1E22" BorderBrush="#27272A" BorderThickness="0,0,1,1"><TextBlock Text="Sell volume" Style="{StaticResource RibbonLabelHeader}"/></Border>
+                    <Border Height="23" Background="#18181B" BorderBrush="#27272A" BorderThickness="0,0,1,1"><TextBlock Text="Delta" Style="{StaticResource RibbonLabelHeader}"/></Border>
+                    <Border Height="23" Background="#B91C1C" BorderBrush="#27272A" BorderThickness="0,0,1,1"><TextBlock Text="Cum Delta" Style="{StaticResource RibbonLabelHeader}"/></Border>
+                    <Border Height="23" Background="#4A151B" BorderBrush="#27272A" BorderThickness="0,0,1,1"><TextBlock Text="Min Delta" Style="{StaticResource RibbonLabelHeader}" Foreground="#FDA4AF"/></Border>
+                    <Border Height="23" Background="#064E3B" BorderBrush="#27272A" BorderThickness="0,0,1,1"><TextBlock Text="Max Delta" Style="{StaticResource RibbonLabelHeader}" Foreground="#6EE7B7"/></Border>
+                    <Border Height="23" Background="#18181B" BorderBrush="#27272A" BorderThickness="0,0,1,0"><TextBlock Text="Time" Style="{StaticResource RibbonLabelHeader}" Foreground="#71717A"/></Border>
+                </StackPanel>
+
+                <!-- Data Matrix Canvas ScrollViewer (synchronized with main chart) -->
+                <ScrollViewer x:Name="RibbonScrollViewer" Grid.Column="1" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled"
+                              ScrollChanged="RibbonScrollViewer_ScrollChanged">
+                    <Canvas x:Name="RibbonCanvas" Height="165" Width="2400"/>
+                </ScrollViewer>
+
+                <!-- Right Label aligned with Price Axis -->
+                <Border Grid.Column="2" Background="#161619" BorderBrush="#27272A" BorderThickness="1,0,0,0">
+                    <StackPanel VerticalAlignment="Bottom" HorizontalAlignment="Center" Margin="0,0,0,4">
+                        <TextBlock Text="MZpack 3.14.21" Foreground="#52525B" FontSize="9" HorizontalAlignment="Center"/>
+                        <TextBlock Text="footprint" Foreground="#38BDF8" FontSize="9" FontWeight="Bold" HorizontalAlignment="Center"/>
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Border>
+
+        <!-- 4: Bottom Instrument Switcher Tabs (Clickable Interactive Clones) -->
+        <Border Grid.Row="4" Background="#141416" BorderBrush="#27272A" BorderThickness="0,1,0,0" Padding="6,2">
+            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                <StackPanel x:Name="InstrumentTabsPanel" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="TabNifty" Content="NIFTY_I" Style="{StaticResource SmallToolButton}" Tag="NIFTY_I" Click="InstrumentTab_Click" Margin="2,0" Background="#09090B" BorderBrush="#2563EB" Foreground="#60A5FA" FontWeight="Bold"/>
+                    <Button x:Name="TabBankNifty" Content="BANKNIFTY_I" Style="{StaticResource SmallToolButton}" Tag="BANKNIFTY_I" Click="InstrumentTab_Click" Margin="2,0"/>
+                    <Button x:Name="TabHdfcLife" Content="HDFCLIFE_I" Style="{StaticResource SmallToolButton}" Tag="HDFCLIFE_I" Click="InstrumentTab_Click" Margin="2,0"/>
+                    <Button x:Name="TabReliance" Content="RELIANCE_I" Style="{StaticResource SmallToolButton}" Tag="RELIANCE_I" Click="InstrumentTab_Click" Margin="2,0"/>
+                    <Button x:Name="TabGC" Content="GC 12-26" Style="{StaticResource SmallToolButton}" Tag="GC" Click="InstrumentTab_Click" Margin="2,0"/>
+                    <Button x:Name="TabAddBtn" Content="➕ Add Tab" Style="{StaticResource SmallToolButton}" Click="AddTab_Click" Margin="6,0,2,0" Background="#1F2937" BorderBrush="#374151" Foreground="#9CA3AF"/>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <!-- NinjaTrader 8 mzFootprint Properties Modal -->
+        <Grid x:Name="PropertiesModal" Grid.RowSpan="5" Background="#D0050508" Visibility="Collapsed" Panel.ZIndex="2000">
+            <Border Width="650" MaxHeight="720" Background="#18181B" BorderBrush="#3F3F46" BorderThickness="1" CornerRadius="8" Padding="0" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Dialog Header -->
+                    <Border Grid.Row="0" Background="#1E1E24" BorderBrush="#27272A" BorderThickness="0,0,0,1" Padding="14,10" CornerRadius="8,8,0,0">
+                        <Grid>
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="⚙️ MZpack.NT8.mzFootprint 3.14.21 beta - Properties" Foreground="#FFFFFF" FontWeight="Bold" FontSize="13"/>
+                                <Border Background="#064E3B" BorderBrush="#059669" BorderThickness="1" CornerRadius="3" Padding="6,1" Margin="10,0,0,0">
+                                    <TextBlock Text="NIFTY CHART.xml" Foreground="#34D399" FontSize="10" FontWeight="Bold"/>
+                                </Border>
+                            </StackPanel>
+                            <Button Content="✕" Style="{StaticResource SmallToolButton}" HorizontalAlignment="Right" Width="26" Height="24" Padding="0" Click="CloseProperties_Click"/>
+                        </Grid>
+                    </Border>
+
+                    <!-- Scrollable Properties Form -->
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="16,10">
+                        <StackPanel>
+                            <!-- Group 1: Footprint & Clusters -->
+                            <Border Background="#121215" BorderBrush="#27272A" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <TextBlock Text="CLUSTERS &amp; FOOTPRINT DISPLAY" Foreground="#38BDF8" FontWeight="Bold" FontSize="11" Margin="0,0,0,8"/>
+                                    <Grid Margin="0,2">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="200"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="Volumetric Delta Type:" Foreground="#A1A1AA" FontSize="11" VerticalAlignment="Center"/>
+                                        <ComboBox x:Name="PropClusterTypeCombo" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="24">
+                                            <ComboBoxItem Content="BidAsk" IsSelected="True"/>
+                                            <ComboBoxItem Content="Delta"/>
+                                            <ComboBoxItem Content="Total Volume"/>
+                                            <ComboBoxItem Content="BidAsk + Delta"/>
+                                        </ComboBox>
+                                    </Grid>
+                                    <Grid Margin="0,6">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="200"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="Ticks Per Level:" Foreground="#A1A1AA" FontSize="11" VerticalAlignment="Center"/>
+                                        <TextBox x:Name="PropTicksPerLevelText" Grid.Column="1" Text="100 (5 pts for Nifty)" Background="#1E1E24" Foreground="#FFFFFF" BorderBrush="#3F3F46" Padding="6,2" FontSize="11"/>
+                                    </Grid>
+                                    <CheckBox x:Name="PropShowCandleCheck" Content="Show Candlestick Body &amp; Wicks" IsChecked="True" Foreground="#E4E4E7" FontSize="11" Margin="0,4"/>
+                                    <CheckBox x:Name="PropShowBarDeltaCheck" Content="Show Large Bar Delta Above/Below Candle" IsChecked="True" Foreground="#E4E4E7" FontSize="11" Margin="0,4"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Group 2: Imbalances & S/R Zones -->
+                            <Border Background="#121215" BorderBrush="#27272A" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <TextBlock Text="IMBALANCES &amp; S/R ZONES (STACKED)" Foreground="#F59E0B" FontWeight="Bold" FontSize="11" Margin="0,0,0,8"/>
+                                    <CheckBox x:Name="PropShowImbalancesCheck" Content="Show Diagonal Imbalance Highlights" IsChecked="True" Foreground="#E4E4E7" FontSize="11" Margin="0,2"/>
+                                    <Grid Margin="0,4">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="200"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="Imbalance Percentage:" Foreground="#A1A1AA" FontSize="11" VerticalAlignment="Center"/>
+                                        <ComboBox x:Name="PropImbalanceRatioCombo" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="24">
+                                            <ComboBoxItem Content="400% (4x - NT8 Default)" IsSelected="True"/>
+                                            <ComboBoxItem Content="300% (3x)"/>
+                                            <ComboBoxItem Content="200% (2x)"/>
+                                            <ComboBoxItem Content="500% (5x)"/>
+                                        </ComboBox>
+                                    </Grid>
+                                    <Grid Margin="0,4">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="200"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="Ask Imbalance Color:" Foreground="#A1A1AA" FontSize="11" VerticalAlignment="Center"/>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <Border Width="16" Height="16" Background="#00FF00" CornerRadius="3" Margin="0,0,6,0"/>
+                                            <TextBlock Text="#00FF00 (Bright Green)" Foreground="#FFFFFF" FontSize="11" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Grid>
+                                    <Grid Margin="0,4">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="200"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="Bid Imbalance Color:" Foreground="#A1A1AA" FontSize="11" VerticalAlignment="Center"/>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <Border Width="16" Height="16" Background="#FF1493" CornerRadius="3" Margin="0,0,6,0"/>
+                                            <TextBlock Text="#FF1493 (DeepPink)" Foreground="#FFFFFF" FontSize="11" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Grid>
+                                    <CheckBox x:Name="PropShowStackedZonesCheck" Content="Show Imbalance S/R Stacked Zones (2+ Consecutive Levels)" IsChecked="True" Foreground="#E4E4E7" FontSize="11" Margin="0,4"/>
+                                    <CheckBox x:Name="PropShowAbsorptionCheck" Content="Show Absorption Detection (ABS Badges)" IsChecked="True" Foreground="#E4E4E7" FontSize="11" Margin="0,4"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Group 3: POC & Value Area -->
+                            <Border Background="#121215" BorderBrush="#27272A" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <TextBlock Text="POINT OF CONTROL &amp; VALUE AREA" Foreground="#34D399" FontWeight="Bold" FontSize="11" Margin="0,0,0,8"/>
+                                    <CheckBox x:Name="PropShowBarPocCheck" Content="Show Bar POC (Yellow Border Box #FFFF00)" IsChecked="True" Foreground="#FFFF00" FontWeight="SemiBold" FontSize="11" Margin="0,3"/>
+                                    <CheckBox x:Name="PropShowBarVaCheck" Content="Show Bar Value Area (70% #7FFFD4)" IsChecked="True" Foreground="#7FFFD4" FontSize="11" Margin="0,3"/>
+                                    <CheckBox x:Name="PropShowDevelopingPocCheck" Content="Show Developing POC Line" IsChecked="True" Foreground="#F59E0B" FontSize="11" Margin="0,3"/>
+                                    <CheckBox x:Name="PropShowVwapCheck" Content="Show VWAP &amp; StdDev Bands" IsChecked="True" Foreground="#E4E4E7" FontSize="11" Margin="0,3"/>
+                                    <CheckBox x:Name="PropShowProfileCheck" Content="Show Composite Volume Profile" IsChecked="True" Foreground="#38BDF8" FontSize="11" Margin="0,3"/>
+                                    <CheckBox x:Name="PropShowCvdCheck" Content="Show Cumulative Volume Delta (CVD)" IsChecked="True" Foreground="#A855F7" FontSize="11" Margin="0,3"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Group 4: Statistics Grid -->
+                            <Border Background="#121215" BorderBrush="#27272A" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <TextBlock Text="STATISTICS GRID (FOOTER ROWS)" Foreground="#CBD5E1" FontWeight="Bold" FontSize="11" Margin="0,0,0,8"/>
+                                    <WrapPanel>
+                                        <CheckBox x:Name="PropRowBuyVol" Content="Buy Volume" IsChecked="True" Foreground="#E4E4E7" FontSize="11" Margin="0,2,12,2"/>
+                                        <CheckBox x:Name="PropRowSellVol" Content="Sell Volume" IsChecked="True" Foreground="#E4E4E7" FontSize="11" Margin="0,2,12,2"/>
+                                        <CheckBox x:Name="PropRowDelta" Content="Delta" IsChecked="True" Foreground="#E4E4E7" FontSize="11" Margin="0,2,12,2"/>
+                                        <CheckBox x:Name="PropRowCumDelta" Content="Cum Delta" IsChecked="True" Foreground="#E4E4E7" FontSize="11" Margin="0,2,12,2"/>
+                                        <CheckBox x:Name="PropRowMinDelta" Content="Min Delta" IsChecked="True" Foreground="#E4E4E7" FontSize="11" Margin="0,2,12,2"/>
+                                        <CheckBox x:Name="PropRowMaxDelta" Content="Max Delta" IsChecked="True" Foreground="#E4E4E7" FontSize="11" Margin="0,2,12,2"/>
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Group 5: Accelpix Live Feed -->
+                            <Border Background="#121215" BorderBrush="#27272A" BorderThickness="1" CornerRadius="6" Padding="12">
+                                <StackPanel>
+                                    <TextBlock Text="ACCELPIX DATA ENGINE STATUS" Foreground="#10B981" FontWeight="Bold" FontSize="11" Margin="0,0,0,8"/>
+                                    <TextBlock Text="Connected to: C:\Program Files (x86)\Accelpix\Pix Connect" Foreground="#94A3B8" FontSize="10" Margin="0,0,0,4"/>
+                                    <Grid Margin="0,4">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="200"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                        <TextBlock Text="Stream Speed Multiplier:" Foreground="#A1A1AA" FontSize="11" VerticalAlignment="Center"/>
+                                        <ComboBox x:Name="PropStreamSpeedCombo" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="24">
+                                            <ComboBoxItem Content="1x" IsSelected="True"/>
+                                            <ComboBoxItem Content="2x"/>
+                                            <ComboBoxItem Content="5x"/>
+                                            <ComboBoxItem Content="10x"/>
+                                        </ComboBox>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- Dialog Footer -->
+                    <Border Grid.Row="2" Background="#1E1E24" BorderBrush="#27272A" BorderThickness="0,1,0,0" Padding="14,10" CornerRadius="0,0,8,8">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button Content="Reset to NT8 Defaults" Style="{StaticResource SmallToolButton}" Margin="0,0,8,0" Click="ResetPropertiesToNt8_Click"/>
+                            <Button Content="Apply Changes" Style="{StaticResource SmallToolButton}" Background="#2563EB" BorderBrush="#3B82F6" Foreground="#FFFFFF" FontWeight="Bold" Margin="0,0,8,0" Click="ApplyProperties_Click"/>
+                            <Button Content="Close" Style="{StaticResource SmallToolButton}" Click="CloseProperties_Click"/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- Symbol Search Modal -->
+        <Grid x:Name="SymbolSearchModal" Grid.RowSpan="5" Background="#D0050508" Visibility="Collapsed" Panel.ZIndex="2000">
+            <Border Width="500" MaxHeight="550" Background="#18181B" BorderBrush="#3F3F46" BorderThickness="1" CornerRadius="8" Padding="0" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Header -->
+                    <Border Grid.Row="0" Background="#1E1E24" BorderBrush="#27272A" BorderThickness="0,0,0,1" Padding="14,10" CornerRadius="8,8,0,0">
+                        <Grid>
+                            <TextBlock Text="🔎 NinjaTrader 8 Instrument Search (Accelpix EQ &amp; Futures)" Foreground="#FFFFFF" FontWeight="Bold" FontSize="13" VerticalAlignment="Center"/>
+                            <Button Content="✕" Style="{StaticResource SmallToolButton}" HorizontalAlignment="Right" Width="26" Height="24" Padding="0" Click="CloseSymbolSearch_Click"/>
+                        </Grid>
+                    </Border>
+
+                    <!-- Search Input Box -->
+                    <Border Grid.Row="1" Padding="14,10,14,6" Background="#141416">
+                        <TextBox x:Name="SymbolSearchQueryBox" Background="#1E1E24" Foreground="#FFFFFF" BorderBrush="#3B82F6" BorderThickness="1.5"
+                                 Padding="8,6" FontSize="12" FontFamily="Segoe UI" TextChanged="SymbolSearchQueryBox_TextChanged"
+                                 Tag="Type symbol (e.g. NIFTY, BANKNIFTY, HDFCLIFE, RELIANCE, TCS)..."/>
+                    </Border>
+
+                    <!-- Search Results List -->
+                    <ListBox x:Name="SymbolSearchResultsList" Grid.Row="2" Background="#18181B" BorderThickness="0" Margin="10,4"
+                             MouseDoubleClick="SymbolSearchResultsList_MouseDoubleClick">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border BorderBrush="#27272A" BorderThickness="0,0,0,1" Padding="8,6" Background="Transparent">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="130"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="{Binding Symbol}" FontWeight="Bold" Foreground="#38BDF8" FontSize="12"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Name}" Foreground="#E4E4E7" FontSize="11" TextTrimming="CharacterEllipsis"/>
+                                        <Border Grid.Column="2" Background="#1E293B" CornerRadius="3" Padding="6,2">
+                                            <TextBlock Text="{Binding Category}" Foreground="#94A3B8" FontSize="10"/>
+                                        </Border>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <!-- Footer -->
+                    <Border Grid.Row="3" Background="#1E1E24" BorderBrush="#27272A" BorderThickness="0,1,0,0" Padding="14,8" CornerRadius="0,0,8,8">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button Content="Select &amp; Open" Style="{StaticResource SmallToolButton}" Background="#2563EB" BorderBrush="#3B82F6" Foreground="#FFFFFF" FontWeight="Bold" Margin="0,0,8,0" Click="SelectSearchedSymbol_Click"/>
+                            <Button Content="Cancel" Style="{StaticResource SmallToolButton}" Click="CloseSymbolSearch_Click"/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

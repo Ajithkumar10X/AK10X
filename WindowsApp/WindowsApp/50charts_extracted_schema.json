@@ -1,0 +1,132 @@
+﻿{
+    "Module":  "MarketProfile_50Charts",
+    "ExtractedAt":  "2026-10-22T16:07:35.7243570+05:30",
+    "TargetAmiBroker":  "C:\\Program Files (x86)\\AmiBroker",
+    "AflDarkThemeFile":  "C:\\Program Files (x86)\\AmiBroker\\Formulas\\50Charts\\50ChartsMarketProfile\\50ChartsMarketProfile_DarkTheme.afl",
+    "AflCalcFile":  "C:\\Program Files (x86)\\AmiBroker\\Formulas\\Include\\50Charts\\50ChartsMP\\50Charts_mp_calc.afl",
+    "PluginDll":  "C:\\Program Files (x86)\\AmiBroker\\Plugins\\50chartsMP.dll",
+    "Version":  "50Charts MP v8.1",
+    "ColorTheme":  {
+                       "Background":  "#070D10",
+                       "Divider":  "#202020",
+                       "Title":  "#808080",
+                       "TitleHighlight":  "#CA8A29",
+                       "PricePOC":  "#FFFF00",
+                       "PriceVPOC":  "#8C8C00",
+                       "PriceVPPOC":  "#C8C800",
+                       "PriceValueArea":  "#122229",
+                       "VolumePOC":  "#FF53AD",
+                       "VolumeValueArea":  "#A60057",
+                       "InitialBalance":  "#00FF00",
+                       "SinglePrintBuyLine":  "#00783C",
+                       "SinglePrintBuyZone":  "#004020",
+                       "SinglePrintBuyZoneCleared":  "#002C16",
+                       "SinglePrintSellLine":  "#960000",
+                       "SinglePrintSellZone":  "#420000",
+                       "SinglePrintSellZoneCleared":  "#2C0000",
+                       "PoorHighLow":  "#464691",
+                       "FailedAuction":  "#8585C5",
+                       "ProfileHalfback":  "#666666",
+                       "IntrabarHalfback":  "#FFFFFF",
+                       "YAxisLTP":  "#3D3D7E"
+                   },
+    "TpoLetterColors":  {
+                            "A":  "#F10508",
+                            "B":  "#FE2D00",
+                            "C":  "#FE6F00",
+                            "D":  "#FE9B00",
+                            "E":  "#F1BC0F",
+                            "F":  "#EFE101",
+                            "G":  "#D1FE03",
+                            "H":  "#96FE26",
+                            "I":  "#45F370",
+                            "J":  "#00DCC8",
+                            "K":  "#01AAD4",
+                            "L":  "#007CE0",
+                            "M":  "#004BEC",
+                            "Remaining":  "#FFFFFF"
+                        },
+    "CalculationParameters":  {
+                                  "DefaultPeriod":  "Daily",
+                                  "SupportedPeriods":  [
+                                                           "Daily",
+                                                           "Weekly",
+                                                           "Weekly - Series",
+                                                           "Monthly",
+                                                           "Monthly - Series",
+                                                           "Quarterly",
+                                                           "Yearly"
+                                                       ],
+                                  "DailyTpoTimeframes":  [
+                                                             "30 min",
+                                                             "15 min",
+                                                             "5 min"
+                                                         ],
+                                  "WeeklyTpoTimeframes":  [
+                                                              "75 min",
+                                                              "30 min",
+                                                              "15 min"
+                                                          ],
+                                  "InitialBalancePeriodsCount":  2,
+                                  "ValueAreaPercentage":  70,
+                                  "ProminentPocPercentage":  80,
+                                  "DefaultMarketHours":  {
+                                                             "NSE_MCX":  {
+                                                                             "Start":  "09:15",
+                                                                             "End":  "15:30"
+                                                                         },
+                                                             "CME_RTH":  {
+                                                                             "Start":  "09:30",
+                                                                             "End":  "16:15"
+                                                                         },
+                                                             "CME_ETH":  {
+                                                                             "Start":  "18:00",
+                                                                             "End":  "17:00"
+                                                                         }
+                                                         },
+                                  "SupportedInstruments":  [
+                                                               {
+                                                                   "Symbol":  "NIFTY",
+                                                                   "Name":  "Nifty 50 Index",
+                                                                   "Exchange":  "NSE",
+                                                                   "DefaultTick":  0.05,
+                                                                   "AutoTpoSize":  3
+                                                               },
+                                                               {
+                                                                   "Symbol":  "BANKNIFTY",
+                                                                   "Name":  "Bank Nifty Index",
+                                                                   "Exchange":  "NSE",
+                                                                   "DefaultTick":  0.05,
+                                                                   "AutoTpoSize":  10
+                                                               },
+                                                               {
+                                                                   "Symbol":  "ES",
+                                                                   "Name":  "E-mini S\u0026P 500",
+                                                                   "Exchange":  "CME",
+                                                                   "DefaultTick":  0.25,
+                                                                   "AutoTpoSize":  0.25
+                                                               },
+                                                               {
+                                                                   "Symbol":  "GC",
+                                                                   "Name":  "Gold Futures",
+                                                                   "Exchange":  "COMEX",
+                                                                   "DefaultTick":  0.1,
+                                                                   "AutoTpoSize":  0.5
+                                                               }
+                                                           ]
+                              },
+    "IdentifiedCoreFeatures":  [
+                                   "TPO Distribution with Letter Stamping (A to M for standard intraday session)",
+                                   "Split and Merged Profile Toggle with Real-time Animation",
+                                   "Initial Balance (IB) calculation with Range (IBR) and High/Low lines",
+                                   "Point of Control (POC) and Virgin Point of Control (VPOC) ray projection",
+                                   "Prominent Point of Control (PPoC) width detection (\u003e80%)",
+                                   "70% One-Sigma Value Area (VAH and VAL) with shaded background",
+                                   "Single Prints (SP) Buy/Sell acceleration zones and Cleared state detection",
+                                   "Poor High / Poor Low (lack of excess taper) detection",
+                                   "Failed Auction detection at prior extremes",
+                                   "Rotational Factor calculation",
+                                   "Volume Profile Overlay side-by-side with TPO bars",
+                                   "Intrabar and Profile Halfback (50% range) tracking"
+                               ]
+}
