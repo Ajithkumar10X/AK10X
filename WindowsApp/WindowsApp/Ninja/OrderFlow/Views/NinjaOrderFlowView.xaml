@@ -125,6 +125,41 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <Style x:Key="Nt8PropertyExpander" TargetType="Expander">
+            <Setter Property="Background" Value="#1E1E22"/>
+            <Setter Property="BorderBrush" Value="#2B2B30"/>
+            <Setter Property="BorderThickness" Value="0,0,0,1"/>
+            <Setter Property="Foreground" Value="#E4E4E7"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="2,1"/>
+        </Style>
+
+        <Style x:Key="Nt8PropLabel" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#CCCCCC"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="16,2,4,2"/>
+        </Style>
+
+        <Style x:Key="Nt8PropSubLabel" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#999999"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="32,2,4,2"/>
+        </Style>
+
+        <Style x:Key="Nt8PropTextBox" TargetType="TextBox">
+            <Setter Property="Background" Value="#18181B"/>
+            <Setter Property="Foreground" Value="#F4F4F5"/>
+            <Setter Property="BorderBrush" Value="#3F3F46"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="6,2"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Height" Value="23"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
     </UserControl.Resources>
 
     <Grid>
@@ -135,8 +170,8 @@
             <RowDefinition Height="42"/>
             <!-- 2: Footprint Main Chart Area -->
             <RowDefinition Height="*"/>
-            <!-- 3: Order Flow Data Ribbon (6 MZpack Rows + Time) -->
-            <RowDefinition Height="165"/>
+            <!-- 3: Order Flow Data Ribbon (Dynamic MZpack Rows + Time) -->
+            <RowDefinition x:Name="RibbonGridRow" Height="175"/>
             <!-- 4: Bottom Instrument Switcher Tabs -->
             <RowDefinition Height="28"/>
         </Grid.RowDefinitions>
@@ -169,14 +204,14 @@
                     <TextBlock Text="TF:" Foreground="#A1A1AA" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" Margin="4,0,4,0"/>
                     <ComboBox x:Name="TimeframeCombo" Width="95" Height="24" Style="{StaticResource DarkComboBox}" 
                               SelectionChanged="TimeframeCombo_SelectionChanged" Margin="0,0,8,0">
-                        <ComboBoxItem Content="700 Range" IsSelected="True"/>
+                        <ComboBoxItem Content="5 Min" IsSelected="True"/>
                         <ComboBoxItem Content="1 Min"/>
                         <ComboBoxItem Content="2 Min"/>
                         <ComboBoxItem Content="3 Min"/>
-                        <ComboBoxItem Content="5 Min"/>
                         <ComboBoxItem Content="15 Min"/>
                         <ComboBoxItem Content="30 Min"/>
                         <ComboBoxItem Content="60 Min"/>
+                        <ComboBoxItem Content="700 Range"/>
                         <ComboBoxItem Content="Daily"/>
                     </ComboBox>
 
@@ -206,51 +241,17 @@
             </Grid>
         </Border>
 
-        <!-- 1: Chart Tools Toolbar (Mode, Imbalances, Indicators, Drawing Tools, Zoom) -->
+        <!-- 1: Chart Tools Toolbar (Drawing Tools, Interactive Zoom, Stream Toggle) -->
         <Border Grid.Row="1" Background="#18181B" BorderBrush="#27272A" BorderThickness="0,0,0,1" Padding="8,4">
             <Grid>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- Left 1: Mode & Imbalances -->
-                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="Mode:" Foreground="#A1A1AA" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                    <ComboBox x:Name="ModeCombo" Width="95" Height="24" Style="{StaticResource DarkComboBox}" SelectionChanged="ModeCombo_SelectionChanged">
-                        <ComboBoxItem Content="Bid x Ask" IsSelected="True"/>
-                        <ComboBoxItem Content="Delta"/>
-                        <ComboBoxItem Content="Volume"/>
-                    </ComboBox>
-
-                    <TextBlock Text="Imbal:" Foreground="#A1A1AA" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" Margin="8,0,4,0"/>
-                    <ComboBox x:Name="ImbalanceCombo" Width="92" Height="24" Style="{StaticResource DarkComboBox}" SelectionChanged="ImbalanceCombo_SelectionChanged">
-                        <ComboBoxItem Content="300% (3x)" IsSelected="True"/>
-                        <ComboBoxItem Content="200% (2x)"/>
-                        <ComboBoxItem Content="400% (4x)"/>
-                    </ComboBox>
-
-                    <!-- Indicators Toggles -->
-                    <CheckBox x:Name="ShowCandleCheck" Content="Candle Line" IsChecked="True" Foreground="#38BDF8" FontSize="11" FontWeight="SemiBold"
-                              VerticalAlignment="Center" Margin="8,0,4,0" Checked="OptionCheck_Changed" Unchecked="OptionCheck_Changed" ToolTip="Show Candlestick Body, Spine &amp; High/Low Wick Straight Line"/>
-                    <CheckBox x:Name="ShowZonesCheck" Content="Zones" IsChecked="True" Foreground="#CBD5E1" FontSize="11" 
-                              VerticalAlignment="Center" Margin="4,0,4,0" Checked="OptionCheck_Changed" Unchecked="OptionCheck_Changed"/>
-                    <CheckBox x:Name="ShowPocLineCheck" Content="POC" IsChecked="True" Foreground="#FFFF00" FontSize="11" FontWeight="SemiBold"
-                              VerticalAlignment="Center" Margin="4,0,4,0" Checked="OptionCheck_Changed" Unchecked="OptionCheck_Changed"/>
-                    <CheckBox x:Name="ShowVwapCheck" Content="VWAP + Bands" IsChecked="True" Foreground="#F59E0B" FontSize="11" FontWeight="SemiBold"
-                              VerticalAlignment="Center" Margin="4,0,4,0" Checked="OptionCheck_Changed" Unchecked="OptionCheck_Changed" ToolTip="Volume-Weighted Average Price with StdDev Bands"/>
-                    <CheckBox x:Name="ShowProfileCheck" Content="Profile" IsChecked="True" Foreground="#38BDF8" FontSize="11" FontWeight="SemiBold"
-                              VerticalAlignment="Center" Margin="4,0,4,0" Checked="OptionCheck_Changed" Unchecked="OptionCheck_Changed" ToolTip="Composite Session Volume Profile"/>
-                    <CheckBox x:Name="ShowCvdCheck" Content="CVD" IsChecked="True" Foreground="#A855F7" FontSize="11" FontWeight="SemiBold"
-                              VerticalAlignment="Center" Margin="4,0,4,0" Checked="OptionCheck_Changed" Unchecked="OptionCheck_Changed" ToolTip="Cumulative Volume Delta Curve"/>
-                    <CheckBox x:Name="ShowAbsCheck" Content="ABS" IsChecked="True" Foreground="#F59E0B" FontSize="11" FontWeight="Bold"
-                              VerticalAlignment="Center" Margin="4,0,8,0" Checked="OptionCheck_Changed" Unchecked="OptionCheck_Changed" ToolTip="Show Absorption Detection (ABS Badges)"/>
-                </StackPanel>
-
-                <!-- Center-Left: Drawing Tools Toolbar -->
-                <Border Grid.Column="1" Background="#1E1E24" BorderBrush="#27272A" BorderThickness="1" CornerRadius="6" Padding="4,2" Margin="6,0">
+                <!-- Left: Drawing Tools Toolbar -->
+                <Border Grid.Column="0" Background="#1E1E24" BorderBrush="#27272A" BorderThickness="1" CornerRadius="6" Padding="4,2">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                         <Button x:Name="ToolPanBtn" Content="✋ Pan" Style="{StaticResource SmallToolButton}" Tag="Pan" Click="DrawingTool_Click" ToolTip="Drag to Pan Chart"/>
                         <Button x:Name="ToolCrosshairBtn" Content="➕ Cross" Style="{StaticResource SmallToolButton}" Tag="Crosshair" Click="DrawingTool_Click" ToolTip="Interactive Crosshair Coordinate Inspection"/>
@@ -262,8 +263,8 @@
                     </StackPanel>
                 </Border>
 
-                <!-- Center-Right: Interactive Zoom Controls -->
-                <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <!-- Center: Interactive Zoom Controls -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
                     <Border Background="#1E1E24" BorderBrush="#27272A" BorderThickness="1" CornerRadius="6" Padding="6,2">
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <TextBlock Text="🔍" Foreground="#A1A1AA" FontSize="11" VerticalAlignment="Center" Margin="2,0,4,0"/>
@@ -279,7 +280,7 @@
                 </StackPanel>
 
                 <!-- Right: Stream Toggle & Reset -->
-                <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                     <Button x:Name="FeedToggleBtn" Content="▶ Resume" Style="{StaticResource SmallToolButton}" Click="FeedToggleBtn_Click"/>
                     <Button Content="🔄 Reset" Style="{StaticResource SmallToolButton}" Click="ResetViewBtn_Click"/>
                 </StackPanel>
@@ -323,27 +324,27 @@
             </ScrollViewer>
         </Grid>
 
-        <!-- 3: Order Flow Data Ribbon (Exact 6 MZpack Rows + Time) -->
-        <Border Grid.Row="3" Background="#09090B" BorderBrush="#27272A" BorderThickness="0,1,0,1">
+        <!-- 3: Order Flow Data Ribbon (Dynamic MZpack Statistic Grid Rows + Time) -->
+        <Border x:Name="RibbonContainerBorder" Grid.Row="3" Background="#09090B" BorderBrush="#27272A" BorderThickness="0,1,0,1">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <!-- Left Row Headers -->
-                    <ColumnDefinition Width="110"/>
+                    <ColumnDefinition x:Name="RibbonHeadersCol" Width="110"/>
                     <!-- Data Columns Canvas (Synced horizontally with Chart) -->
                     <ColumnDefinition Width="*"/>
                     <!-- Right padding aligned with price axis -->
                     <ColumnDefinition Width="70"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- Left Row Headers matching NinjaTrader 8 MZpack 3.18.8 -->
-                <StackPanel Grid.Column="0" Background="#161619" VerticalAlignment="Stretch">
-                    <Border Height="23" Background="#1E6B37" BorderBrush="#27272A" BorderThickness="0,0,1,1"><TextBlock Text="Buy volume" Style="{StaticResource RibbonLabelHeader}"/></Border>
-                    <Border Height="23" Background="#8B1E22" BorderBrush="#27272A" BorderThickness="0,0,1,1"><TextBlock Text="Sell volume" Style="{StaticResource RibbonLabelHeader}"/></Border>
-                    <Border Height="23" Background="#18181B" BorderBrush="#27272A" BorderThickness="0,0,1,1"><TextBlock Text="Delta" Style="{StaticResource RibbonLabelHeader}"/></Border>
-                    <Border Height="23" Background="#B91C1C" BorderBrush="#27272A" BorderThickness="0,0,1,1"><TextBlock Text="Cum Delta" Style="{StaticResource RibbonLabelHeader}"/></Border>
-                    <Border Height="23" Background="#4A151B" BorderBrush="#27272A" BorderThickness="0,0,1,1"><TextBlock Text="Min Delta" Style="{StaticResource RibbonLabelHeader}" Foreground="#FDA4AF"/></Border>
-                    <Border Height="23" Background="#064E3B" BorderBrush="#27272A" BorderThickness="0,0,1,1"><TextBlock Text="Max Delta" Style="{StaticResource RibbonLabelHeader}" Foreground="#6EE7B7"/></Border>
-                    <Border Height="23" Background="#18181B" BorderBrush="#27272A" BorderThickness="0,0,1,0"><TextBlock Text="Time" Style="{StaticResource RibbonLabelHeader}" Foreground="#71717A"/></Border>
+                <!-- Left Row Headers matching NinjaTrader 8 MZpack 3.14.21 -->
+                <StackPanel x:Name="RibbonHeadersPanel" Grid.Column="0" Background="#161619" VerticalAlignment="Stretch">
+                    <Border Height="24" Background="#1E6B37" BorderBrush="#27272A" BorderThickness="0,0,1,1"><TextBlock Text="Buy volume" Style="{StaticResource RibbonLabelHeader}"/></Border>
+                    <Border Height="24" Background="#8B1E22" BorderBrush="#27272A" BorderThickness="0,0,1,1"><TextBlock Text="Sell volume" Style="{StaticResource RibbonLabelHeader}"/></Border>
+                    <Border Height="24" Background="#18181B" BorderBrush="#27272A" BorderThickness="0,0,1,1"><TextBlock Text="Delta" Style="{StaticResource RibbonLabelHeader}"/></Border>
+                    <Border Height="24" Background="#B91C1C" BorderBrush="#27272A" BorderThickness="0,0,1,1"><TextBlock Text="Cum Delta" Style="{StaticResource RibbonLabelHeader}"/></Border>
+                    <Border Height="24" Background="#4A151B" BorderBrush="#27272A" BorderThickness="0,0,1,1"><TextBlock Text="Min Delta" Style="{StaticResource RibbonLabelHeader}" Foreground="#FDA4AF"/></Border>
+                    <Border Height="24" Background="#064E3B" BorderBrush="#27272A" BorderThickness="0,0,1,1"><TextBlock Text="Max Delta" Style="{StaticResource RibbonLabelHeader}" Foreground="#6EE7B7"/></Border>
+                    <Border Height="24" Background="#18181B" BorderBrush="#27272A" BorderThickness="0,0,1,0"><TextBlock Text="Time" Style="{StaticResource RibbonLabelHeader}" Foreground="#71717A"/></Border>
                 </StackPanel>
 
                 <!-- Data Matrix Canvas ScrollViewer (synchronized with main chart) -->
@@ -370,153 +371,1007 @@
                     <Button x:Name="TabBankNifty" Content="BANKNIFTY_I" Style="{StaticResource SmallToolButton}" Tag="BANKNIFTY_I" Click="InstrumentTab_Click" Margin="2,0"/>
                     <Button x:Name="TabHdfcLife" Content="HDFCLIFE_I" Style="{StaticResource SmallToolButton}" Tag="HDFCLIFE_I" Click="InstrumentTab_Click" Margin="2,0"/>
                     <Button x:Name="TabReliance" Content="RELIANCE_I" Style="{StaticResource SmallToolButton}" Tag="RELIANCE_I" Click="InstrumentTab_Click" Margin="2,0"/>
+                    <Button x:Name="TabTataSteel" Content="TATASTEEL_I" Style="{StaticResource SmallToolButton}" Tag="TATASTEEL_I" Click="InstrumentTab_Click" Margin="2,0"/>
                     <Button x:Name="TabGC" Content="GC 12-26" Style="{StaticResource SmallToolButton}" Tag="GC" Click="InstrumentTab_Click" Margin="2,0"/>
                     <Button x:Name="TabAddBtn" Content="➕ Add Tab" Style="{StaticResource SmallToolButton}" Click="AddTab_Click" Margin="6,0,2,0" Background="#1F2937" BorderBrush="#374151" Foreground="#9CA3AF"/>
                 </StackPanel>
             </ScrollViewer>
         </Border>
 
-        <!-- NinjaTrader 8 mzFootprint Properties Modal -->
-        <Grid x:Name="PropertiesModal" Grid.RowSpan="5" Background="#D0050508" Visibility="Collapsed" Panel.ZIndex="2000">
-            <Border Width="650" MaxHeight="720" Background="#18181B" BorderBrush="#3F3F46" BorderThickness="1" CornerRadius="8" Padding="0" HorizontalAlignment="Center" VerticalAlignment="Center">
+        <!-- NinjaTrader 8 MZpack mzFootprint Properties Window -->
+        <Grid x:Name="PropertiesModal" Grid.RowSpan="5" Background="#80000000" Visibility="Collapsed" Panel.ZIndex="2000">
+            <Border Width="460" MaxHeight="740" Background="#202024" BorderBrush="#3F3F46" BorderThickness="1" CornerRadius="4" Padding="0" HorizontalAlignment="Center" VerticalAlignment="Center">
                 <Grid>
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="28"/> <!-- NT8 Orange Title Bar -->
+                        <RowDefinition Height="26"/> <!-- Properties subheader -->
+                        <RowDefinition Height="*"/>  <!-- Scrollable properties tree -->
+                        <RowDefinition Height="38"/> <!-- Bottom action buttons -->
                     </Grid.RowDefinitions>
 
-                    <!-- Dialog Header -->
-                    <Border Grid.Row="0" Background="#1E1E24" BorderBrush="#27272A" BorderThickness="0,0,0,1" Padding="14,10" CornerRadius="8,8,0,0">
+                    <!-- Row 0: NT8 Orange Window Title Bar -->
+                    <Border Grid.Row="0" Background="#D9531E" CornerRadius="3,3,0,0" Padding="8,0">
                         <Grid>
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBlock Text="⚙️ MZpack.NT8.mzFootprint 3.14.21 beta - Properties" Foreground="#FFFFFF" FontWeight="Bold" FontSize="13"/>
-                                <Border Background="#064E3B" BorderBrush="#059669" BorderThickness="1" CornerRadius="3" Padding="6,1" Margin="10,0,0,0">
-                                    <TextBlock Text="NIFTY CHART.xml" Foreground="#34D399" FontSize="10" FontWeight="Bold"/>
-                                </Border>
+                            <TextBlock x:Name="PropWindowTitleText" Text="MZpack.NT8.mzFootprint 3.14.21 beta(TATASTEEL)" Foreground="#FFFFFF" FontWeight="SemiBold" FontSize="11.5" VerticalAlignment="Center"/>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                <Button Content="—" Style="{StaticResource SmallToolButton}" Width="22" Height="18" Padding="0" Background="Transparent" BorderThickness="0" Foreground="#FFFFFF" FontSize="10"/>
+                                <Button Content="□" Style="{StaticResource SmallToolButton}" Width="22" Height="18" Padding="0" Background="Transparent" BorderThickness="0" Foreground="#FFFFFF" FontSize="10"/>
+                                <Button Content="✕" Style="{StaticResource SmallToolButton}" Width="22" Height="18" Padding="0" Background="Transparent" BorderThickness="0" Foreground="#FFFFFF" FontSize="10" Click="CloseProperties_Click"/>
                             </StackPanel>
-                            <Button Content="✕" Style="{StaticResource SmallToolButton}" HorizontalAlignment="Right" Width="26" Height="24" Padding="0" Click="CloseProperties_Click"/>
                         </Grid>
                     </Border>
 
-                    <!-- Scrollable Properties Form -->
-                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="16,10">
+                    <!-- Row 1: NT8 Properties Bar -->
+                    <Border Grid.Row="1" Background="#26262A" BorderBrush="#1C1C20" BorderThickness="0,0,0,1" Padding="8,4">
+                        <TextBlock Text="Properties" Foreground="#E4E4E7" FontWeight="SemiBold" FontSize="11.5" VerticalAlignment="Center"/>
+                    </Border>
+
+                    <!-- Row 2: Scrollable Properties Tree -->
+                    <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" Background="#1E1E22">
                         <StackPanel>
-                            <!-- Group 1: Footprint & Clusters -->
-                            <Border Background="#121215" BorderBrush="#27272A" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,10">
-                                <StackPanel>
-                                    <TextBlock Text="CLUSTERS &amp; FOOTPRINT DISPLAY" Foreground="#38BDF8" FontWeight="Bold" FontSize="11" Margin="0,0,0,8"/>
-                                    <Grid Margin="0,2">
-                                        <Grid.ColumnDefinitions><ColumnDefinition Width="200"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                        <TextBlock Text="Volumetric Delta Type:" Foreground="#A1A1AA" FontSize="11" VerticalAlignment="Center"/>
-                                        <ComboBox x:Name="PropClusterTypeCombo" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="24">
-                                            <ComboBoxItem Content="BidAsk" IsSelected="True"/>
-                                            <ComboBoxItem Content="Delta"/>
-                                            <ComboBoxItem Content="Total Volume"/>
-                                            <ComboBoxItem Content="BidAsk + Delta"/>
-                                        </ComboBox>
-                                    </Grid>
-                                    <Grid Margin="0,6">
-                                        <Grid.ColumnDefinitions><ColumnDefinition Width="200"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                        <TextBlock Text="Ticks Per Level:" Foreground="#A1A1AA" FontSize="11" VerticalAlignment="Center"/>
-                                        <TextBox x:Name="PropTicksPerLevelText" Grid.Column="1" Text="100 (5 pts for Nifty)" Background="#1E1E24" Foreground="#FFFFFF" BorderBrush="#3F3F46" Padding="6,2" FontSize="11"/>
-                                    </Grid>
-                                    <CheckBox x:Name="PropShowCandleCheck" Content="Show Candlestick Body &amp; Wicks" IsChecked="True" Foreground="#E4E4E7" FontSize="11" Margin="0,4"/>
-                                    <CheckBox x:Name="PropShowBarDeltaCheck" Content="Show Large Bar Delta Above/Below Candle" IsChecked="True" Foreground="#E4E4E7" FontSize="11" Margin="0,4"/>
-                                </StackPanel>
-                            </Border>
+                            <!-- 1. Left Footprint -->
+                            <Expander Header="Left Footprint" IsExpanded="True" Style="{StaticResource Nt8PropertyExpander}">
+                                <Grid Margin="4,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                    </Grid.RowDefinitions>
 
-                            <!-- Group 2: Imbalances & S/R Zones -->
-                            <Border Background="#121215" BorderBrush="#27272A" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,10">
-                                <StackPanel>
-                                    <TextBlock Text="IMBALANCES &amp; S/R ZONES (STACKED)" Foreground="#F59E0B" FontWeight="Bold" FontSize="11" Margin="0,0,0,8"/>
-                                    <CheckBox x:Name="PropShowImbalancesCheck" Content="Show Diagonal Imbalance Highlights" IsChecked="True" Foreground="#E4E4E7" FontSize="11" Margin="0,2"/>
-                                    <Grid Margin="0,4">
-                                        <Grid.ColumnDefinitions><ColumnDefinition Width="200"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                        <TextBlock Text="Imbalance Percentage:" Foreground="#A1A1AA" FontSize="11" VerticalAlignment="Center"/>
-                                        <ComboBox x:Name="PropImbalanceRatioCombo" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="24">
-                                            <ComboBoxItem Content="400% (4x - NT8 Default)" IsSelected="True"/>
-                                            <ComboBoxItem Content="300% (3x)"/>
-                                            <ComboBoxItem Content="200% (2x)"/>
-                                            <ComboBoxItem Content="500% (5x)"/>
-                                        </ComboBox>
-                                    </Grid>
-                                    <Grid Margin="0,4">
-                                        <Grid.ColumnDefinitions><ColumnDefinition Width="200"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                        <TextBlock Text="Ask Imbalance Color:" Foreground="#A1A1AA" FontSize="11" VerticalAlignment="Center"/>
-                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                            <Border Width="16" Height="16" Background="#00FF00" CornerRadius="3" Margin="0,0,6,0"/>
-                                            <TextBlock Text="#00FF00 (Bright Green)" Foreground="#FFFFFF" FontSize="11" VerticalAlignment="Center"/>
-                                        </StackPanel>
-                                    </Grid>
-                                    <Grid Margin="0,4">
-                                        <Grid.ColumnDefinitions><ColumnDefinition Width="200"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                        <TextBlock Text="Bid Imbalance Color:" Foreground="#A1A1AA" FontSize="11" VerticalAlignment="Center"/>
-                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                            <Border Width="16" Height="16" Background="#FF1493" CornerRadius="3" Margin="0,0,6,0"/>
-                                            <TextBlock Text="#FF1493 (DeepPink)" Foreground="#FFFFFF" FontSize="11" VerticalAlignment="Center"/>
-                                        </StackPanel>
-                                    </Grid>
-                                    <CheckBox x:Name="PropShowStackedZonesCheck" Content="Show Imbalance S/R Stacked Zones (2+ Consecutive Levels)" IsChecked="True" Foreground="#E4E4E7" FontSize="11" Margin="0,4"/>
-                                    <CheckBox x:Name="PropShowAbsorptionCheck" Content="Show Absorption Detection (ABS Badges)" IsChecked="True" Foreground="#E4E4E7" FontSize="11" Margin="0,4"/>
-                                </StackPanel>
-                            </Border>
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Footprint style" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropLeftFootprintStyle" Grid.Row="0" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="Bid" IsSelected="True"/><ComboBoxItem Content="Ask"/><ComboBoxItem Content="Delta"/><ComboBoxItem Content="Volume"/><ComboBoxItem Content="BidAsk"/>
+                                    </ComboBox>
 
-                            <!-- Group 3: POC & Value Area -->
-                            <Border Background="#121215" BorderBrush="#27272A" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,10">
-                                <StackPanel>
-                                    <TextBlock Text="POINT OF CONTROL &amp; VALUE AREA" Foreground="#34D399" FontWeight="Bold" FontSize="11" Margin="0,0,0,8"/>
-                                    <CheckBox x:Name="PropShowBarPocCheck" Content="Show Bar POC (Yellow Border Box #FFFF00)" IsChecked="True" Foreground="#FFFF00" FontWeight="SemiBold" FontSize="11" Margin="0,3"/>
-                                    <CheckBox x:Name="PropShowBarVaCheck" Content="Show Bar Value Area (70% #7FFFD4)" IsChecked="True" Foreground="#7FFFD4" FontSize="11" Margin="0,3"/>
-                                    <CheckBox x:Name="PropShowDevelopingPocCheck" Content="Show Developing POC Line" IsChecked="True" Foreground="#F59E0B" FontSize="11" Margin="0,3"/>
-                                    <CheckBox x:Name="PropShowVwapCheck" Content="Show VWAP &amp; StdDev Bands" IsChecked="True" Foreground="#E4E4E7" FontSize="11" Margin="0,3"/>
-                                    <CheckBox x:Name="PropShowProfileCheck" Content="Show Composite Volume Profile" IsChecked="True" Foreground="#38BDF8" FontSize="11" Margin="0,3"/>
-                                    <CheckBox x:Name="PropShowCvdCheck" Content="Show Cumulative Volume Delta (CVD)" IsChecked="True" Foreground="#A855F7" FontSize="11" Margin="0,3"/>
-                                </StackPanel>
-                            </Border>
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Cluster style" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropLeftClusterStyle" Grid.Row="1" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="None" IsSelected="True"/><ComboBoxItem Content="Volume"/><ComboBoxItem Content="Delta"/><ComboBoxItem Content="Profile"/>
+                                    </ComboBox>
 
-                            <!-- Group 4: Statistics Grid -->
-                            <Border Background="#121215" BorderBrush="#27272A" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,10">
-                                <StackPanel>
-                                    <TextBlock Text="STATISTICS GRID (FOOTER ROWS)" Foreground="#CBD5E1" FontWeight="Bold" FontSize="11" Margin="0,0,0,8"/>
-                                    <WrapPanel>
-                                        <CheckBox x:Name="PropRowBuyVol" Content="Buy Volume" IsChecked="True" Foreground="#E4E4E7" FontSize="11" Margin="0,2,12,2"/>
-                                        <CheckBox x:Name="PropRowSellVol" Content="Sell Volume" IsChecked="True" Foreground="#E4E4E7" FontSize="11" Margin="0,2,12,2"/>
-                                        <CheckBox x:Name="PropRowDelta" Content="Delta" IsChecked="True" Foreground="#E4E4E7" FontSize="11" Margin="0,2,12,2"/>
-                                        <CheckBox x:Name="PropRowCumDelta" Content="Cum Delta" IsChecked="True" Foreground="#E4E4E7" FontSize="11" Margin="0,2,12,2"/>
-                                        <CheckBox x:Name="PropRowMinDelta" Content="Min Delta" IsChecked="True" Foreground="#E4E4E7" FontSize="11" Margin="0,2,12,2"/>
-                                        <CheckBox x:Name="PropRowMaxDelta" Content="Max Delta" IsChecked="True" Foreground="#E4E4E7" FontSize="11" Margin="0,2,12,2"/>
-                                    </WrapPanel>
-                                </StackPanel>
-                            </Border>
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Cluster scale" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropLeftClusterScale" Grid.Row="2" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="Bar" IsSelected="True"/><ComboBoxItem Content="Chart"/><ComboBoxItem Content="Session"/>
+                                    </ComboBox>
 
-                            <!-- Group 5: Accelpix Live Feed -->
-                            <Border Background="#121215" BorderBrush="#27272A" BorderThickness="1" CornerRadius="6" Padding="12">
-                                <StackPanel>
-                                    <TextBlock Text="ACCELPIX DATA ENGINE STATUS" Foreground="#10B981" FontWeight="Bold" FontSize="11" Margin="0,0,0,8"/>
-                                    <TextBlock Text="Connected to: C:\Program Files (x86)\Accelpix\Pix Connect" Foreground="#94A3B8" FontSize="10" Margin="0,0,0,4"/>
-                                    <Grid Margin="0,4">
-                                        <Grid.ColumnDefinitions><ColumnDefinition Width="200"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                        <TextBlock Text="Stream Speed Multiplier:" Foreground="#A1A1AA" FontSize="11" VerticalAlignment="Center"/>
-                                        <ComboBox x:Name="PropStreamSpeedCombo" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="24">
-                                            <ComboBoxItem Content="1x" IsSelected="True"/>
-                                            <ComboBoxItem Content="2x"/>
-                                            <ComboBoxItem Content="5x"/>
-                                            <ComboBoxItem Content="10x"/>
-                                        </ComboBox>
-                                    </Grid>
-                                </StackPanel>
-                            </Border>
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Scale source" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropLeftScaleSource" Grid.Row="3" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="Delta" IsSelected="True"/><ComboBoxItem Content="Volume"/><ComboBoxItem Content="Trades"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Color source" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropLeftColorSource" Grid.Row="4" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="Delta" IsSelected="True"/><ComboBoxItem Content="Volume"/><ComboBoxItem Content="Custom"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="5" Grid.Column="0" Text="Gradient source" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropLeftGradientSource" Grid.Row="5" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="Delta" IsSelected="True"/><ComboBoxItem Content="Volume"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="6" Grid.Column="0" Text="Cluster" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropLeftClusterColor" Grid.Row="6" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem IsSelected="True"><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#4682B4" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="SteelBlue"/></StackPanel></ComboBoxItem>
+                                        <ComboBoxItem><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#FF0000" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="Red"/></StackPanel></ComboBoxItem>
+                                        <ComboBoxItem><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#006400" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="DarkGreen"/></StackPanel></ComboBoxItem>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="7" Grid.Column="0" Text="Negative Delta" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropLeftNegDeltaColor" Grid.Row="7" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem IsSelected="True"><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#FF0000" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="Red"/></StackPanel></ComboBoxItem>
+                                        <ComboBoxItem><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#8B0000" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="DarkRed"/></StackPanel></ComboBoxItem>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="8" Grid.Column="0" Text="Positive Delta" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropLeftPosDeltaColor" Grid.Row="8" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem IsSelected="True"><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#006400" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="DarkGreen"/></StackPanel></ComboBoxItem>
+                                        <ComboBoxItem><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#00FF00" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="Lime"/></StackPanel></ComboBoxItem>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="9" Grid.Column="0" Text="▶ Cluster border" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox Grid.Row="9" Grid.Column="1" Text="Solid, 1px" Style="{StaticResource Nt8PropTextBox}" IsReadOnly="True"/>
+
+                                    <TextBlock Grid.Row="10" Grid.Column="0" Text="Color mode" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropLeftColorMode" Grid.Row="10" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="Saturation" IsSelected="True"/><ComboBoxItem Content="Brightness"/><ComboBoxItem Content="Solid"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="11" Grid.Column="0" Text="Values: show" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropLeftValuesShow" Grid.Row="11" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="12" Grid.Column="0" Text="Values: align" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropLeftValuesAlign" Grid.Row="12" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="Center" IsSelected="True"/><ComboBoxItem Content="Left"/><ComboBoxItem Content="Right"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="13" Grid.Column="0" Text="Values: divider" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropLeftValuesDivider" Grid.Row="13" Grid.Column="1" Text="1" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="14" Grid.Column="0" Text="Values: decimal places" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropLeftValuesDecimalPlaces" Grid.Row="14" Grid.Column="1" Text="1" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="15" Grid.Column="0" Text="Values: abs Delta/Delt..." Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropLeftValuesAbsDelta" Grid.Row="15" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="16" Grid.Column="0" Text="Values: color" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropLeftValuesColor" Grid.Row="16" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem IsSelected="True"><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#F8F8FF" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="GhostWhite"/></StackPanel></ComboBoxItem>
+                                        <ComboBoxItem><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#FFFFFF" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="White"/></StackPanel></ComboBoxItem>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="17" Grid.Column="0" Text="▶ Values: font" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox Grid.Row="17" Grid.Column="1" Text="Arial, 18px" Style="{StaticResource Nt8PropTextBox}" IsReadOnly="True"/>
+
+                                    <TextBlock Grid.Row="18" Grid.Column="0" Text="Cluster Zones: enable" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropLeftClusterZonesEnable" Grid.Row="18" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                                </Grid>
+                            </Expander>
+
+                            <!-- 2. Right Footprint -->
+                            <Expander Header="Right Footprint" IsExpanded="True" Style="{StaticResource Nt8PropertyExpander}">
+                                <Grid Margin="4,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Footprint style" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropRightFootprintStyle" Grid.Row="0" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="Ask" IsSelected="True"/><ComboBoxItem Content="Bid"/><ComboBoxItem Content="Delta"/><ComboBoxItem Content="Volume"/><ComboBoxItem Content="BidAsk"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Cluster style" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropRightClusterStyle" Grid.Row="1" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="None" IsSelected="True"/><ComboBoxItem Content="Volume"/><ComboBoxItem Content="Delta"/><ComboBoxItem Content="Profile"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Cluster scale" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropRightClusterScale" Grid.Row="2" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="Bar" IsSelected="True"/><ComboBoxItem Content="Chart"/><ComboBoxItem Content="Session"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Scale source" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropRightScaleSource" Grid.Row="3" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="Delta" IsSelected="True"/><ComboBoxItem Content="Volume"/><ComboBoxItem Content="Trades"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Color source" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropRightColorSource" Grid.Row="4" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="Delta" IsSelected="True"/><ComboBoxItem Content="Volume"/><ComboBoxItem Content="Custom"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="5" Grid.Column="0" Text="Gradient source" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropRightGradientSource" Grid.Row="5" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="Delta" IsSelected="True"/><ComboBoxItem Content="Volume"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="6" Grid.Column="0" Text="Cluster" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropRightClusterColor" Grid.Row="6" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem IsSelected="True"><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#4682B4" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="SteelBlue"/></StackPanel></ComboBoxItem>
+                                        <ComboBoxItem><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#FF0000" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="Red"/></StackPanel></ComboBoxItem>
+                                        <ComboBoxItem><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#006400" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="DarkGreen"/></StackPanel></ComboBoxItem>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="7" Grid.Column="0" Text="Negative Delta" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropRightNegDeltaColor" Grid.Row="7" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem IsSelected="True"><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#FF0000" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="Red"/></StackPanel></ComboBoxItem>
+                                        <ComboBoxItem><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#8B0000" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="DarkRed"/></StackPanel></ComboBoxItem>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="8" Grid.Column="0" Text="Positive Delta" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropRightPosDeltaColor" Grid.Row="8" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem IsSelected="True"><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#006400" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="DarkGreen"/></StackPanel></ComboBoxItem>
+                                        <ComboBoxItem><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#00FF00" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="Lime"/></StackPanel></ComboBoxItem>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="9" Grid.Column="0" Text="▶ Cluster border" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox Grid.Row="9" Grid.Column="1" Text="Solid, 1px" Style="{StaticResource Nt8PropTextBox}" IsReadOnly="True"/>
+
+                                    <TextBlock Grid.Row="10" Grid.Column="0" Text="Color mode" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropRightColorMode" Grid.Row="10" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="Saturation" IsSelected="True"/><ComboBoxItem Content="Brightness"/><ComboBoxItem Content="Solid"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="11" Grid.Column="0" Text="Values: show" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropRightValuesShow" Grid.Row="11" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="12" Grid.Column="0" Text="Values: align" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropRightValuesAlign" Grid.Row="12" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="Center" IsSelected="True"/><ComboBoxItem Content="Left"/><ComboBoxItem Content="Right"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="13" Grid.Column="0" Text="Values: divider" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropRightValuesDivider" Grid.Row="13" Grid.Column="1" Text="1" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="14" Grid.Column="0" Text="Values: decimal places" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropRightValuesDecimalPlaces" Grid.Row="14" Grid.Column="1" Text="1" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="15" Grid.Column="0" Text="Values: abs Delta/Delt..." Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropRightValuesAbsDelta" Grid.Row="15" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="16" Grid.Column="0" Text="Values: color" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropRightValuesColor" Grid.Row="16" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem IsSelected="True"><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#F8F8FF" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="GhostWhite"/></StackPanel></ComboBoxItem>
+                                        <ComboBoxItem><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#FFFFFF" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="White"/></StackPanel></ComboBoxItem>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="17" Grid.Column="0" Text="▶ Values: font" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox Grid.Row="17" Grid.Column="1" Text="Arial, 18px" Style="{StaticResource Nt8PropTextBox}" IsReadOnly="True"/>
+
+                                    <TextBlock Grid.Row="18" Grid.Column="0" Text="Cluster Zones: enable" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropRightClusterZonesEnable" Grid.Row="18" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                                </Grid>
+                            </Expander>
+
+                            <!-- 3. Filters -->
+                            <Expander Header="Filters" IsExpanded="True" Style="{StaticResource Nt8PropertyExpander}">
+                                <Grid Margin="4,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Ticks per level" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropTicksPerLevel" Grid.Row="0" Grid.Column="1" Text="1" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Trade min" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropTradeMin" Grid.Row="1" Grid.Column="1" Text="0" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Trade max" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropTradeMax" Grid.Row="2" Grid.Column="1" Text="-1" Style="{StaticResource Nt8PropTextBox}"/>
+                                </Grid>
+                            </Expander>
+
+                            <!-- 4. Presentation -->
+                            <Expander Header="Presentation" IsExpanded="True" Style="{StaticResource Nt8PropertyExpander}">
+                                <Grid Margin="4,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Display volume filter" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropDisplayVolumeFilter" Grid.Row="0" Grid.Column="1" Text="1" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Bid" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropBidColor" Grid.Row="1" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem IsSelected="True"><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#FF0000" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="Red"/></StackPanel></ComboBoxItem>
+                                        <ComboBoxItem><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#DC2626" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="DarkRed"/></StackPanel></ComboBoxItem>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Ask" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropAskColor" Grid.Row="2" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem IsSelected="True"><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#006400" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="DarkGreen"/></StackPanel></ComboBoxItem>
+                                        <ComboBoxItem><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#16A34A" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="Green"/></StackPanel></ComboBoxItem>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Auto-scale values" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropAutoScaleValues" Grid.Row="3" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Bar border" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropBarBorder" Grid.Row="4" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="5" Grid.Column="0" Text="Bar marker" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropBarMarker" Grid.Row="5" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="6" Grid.Column="0" Text="Bar space, px" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropBarSpacePx" Grid.Row="6" Grid.Column="1" Text="110.087914" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="7" Grid.Column="0" Text="Bar width, px" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropBarWidthPx" Grid.Row="7" Grid.Column="1" Text="3.30263750221495" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="8" Grid.Column="0" Text="Bar outer margin, px" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropBarOuterMarginPx" Grid.Row="8" Grid.Column="1" Text="8" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="9" Grid.Column="0" Text="Control right margin" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropControlRightMargin" Grid.Row="9" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="10" Grid.Column="0" Text="Chart right margin, px" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropChartRightMarginPx" Grid.Row="10" Grid.Column="1" Text="40" Style="{StaticResource Nt8PropTextBox}"/>
+                                </Grid>
+                            </Expander>
+
+                            <!-- 5. Bar Statistic -->
+                            <Expander Header="Bar Statistic" IsExpanded="True" Style="{StaticResource Nt8PropertyExpander}">
+                                <Grid Margin="4,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Volume" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropBarStatVolume" Grid.Row="0" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Delta" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropBarStatDelta" Grid.Row="1" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Absolute Delta Average" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropBarStatAbsDeltaAvg" Grid.Row="2" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Min/Max Delta" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropBarStatMinMaxDelta" Grid.Row="3" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Delta %" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropBarStatDeltaPercent" Grid.Row="4" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="5" Grid.Column="0" Text="COT" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropBarStatCot" Grid.Row="5" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="6" Grid.Column="0" Text="Ratio Numbers: enable" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropBarStatRatioNumbers" Grid.Row="6" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="7" Grid.Column="0" Text="Values divider" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropBarStatValuesDivider" Grid.Row="7" Grid.Column="1" Text="1" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="8" Grid.Column="0" Text="Negative Delta" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropBarStatNegDeltaColor" Grid.Row="8" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem IsSelected="True"><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#FF0000" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="Red"/></StackPanel></ComboBoxItem>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="9" Grid.Column="0" Text="Positive Delta" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropBarStatPosDeltaColor" Grid.Row="9" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem IsSelected="True"><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#008000" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="Green"/></StackPanel></ComboBoxItem>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="10" Grid.Column="0" Text="▶ Font" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox Grid.Row="10" Grid.Column="1" Text="Arial, 12px" Style="{StaticResource Nt8PropTextBox}" IsReadOnly="True"/>
+                                </Grid>
+                            </Expander>
+
+                            <!-- 6. Statistic grid -->
+                            <Expander Header="Statistic grid" IsExpanded="True" Style="{StaticResource Nt8PropertyExpander}">
+                                <Grid Margin="4,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Show" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGridShow" Grid.Row="0" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Show legend" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGridShowLegend" Grid.Row="1" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Legend position" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropGridLegendPosition" Grid.Row="2" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="Left" IsSelected="True"/><ComboBoxItem Content="Right"/><ComboBoxItem Content="None"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Trades" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGridTrades" Grid.Row="3" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Volume" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGridVolume" Grid.Row="4" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="5" Grid.Column="0" Text="Buy volume" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGridBuyVolume" Grid.Row="5" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="6" Grid.Column="0" Text="Sell volume" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGridSellVolume" Grid.Row="6" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="7" Grid.Column="0" Text="Delta" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGridDelta" Grid.Row="7" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="8" Grid.Column="0" Text="Delta %" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGridDeltaPercent" Grid.Row="8" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="9" Grid.Column="0" Text="Absolute Delta average" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGridAbsDeltaAvg" Grid.Row="9" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="10" Grid.Column="0" Text="Delta cumulative" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGridDeltaCumulative" Grid.Row="10" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="11" Grid.Column="0" Text="Min Delta" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGridMinDelta" Grid.Row="11" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="12" Grid.Column="0" Text="Max Delta" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGridMaxDelta" Grid.Row="12" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="13" Grid.Column="0" Text="Delta change" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGridDeltaChange" Grid.Row="13" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="14" Grid.Column="0" Text="Delta rate" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGridDeltaRate" Grid.Row="14" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="15" Grid.Column="0" Text="COT High" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGridCotHigh" Grid.Row="15" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="16" Grid.Column="0" Text="COT Low" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGridCotLow" Grid.Row="16" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="17" Grid.Column="0" Text="Volume per second" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGridVolPerSec" Grid.Row="17" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="18" Grid.Column="0" Text="Predicted values: show" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGridPredictedValues" Grid.Row="18" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="19" Grid.Column="0" Text="Values divider" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropGridValuesDivider" Grid.Row="19" Grid.Column="1" Text="1" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="20" Grid.Column="0" Text="Cell height, px" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropGridCellHeightPx" Grid.Row="20" Grid.Column="1" Text="24" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="21" Grid.Column="0" Text="Cell color scale" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropGridCellColorScale" Grid.Row="21" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="Chart" IsSelected="True"/><ComboBoxItem Content="Bar"/><ComboBoxItem Content="Session"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="22" Grid.Column="0" Text="Cell border" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGridCellBorder" Grid.Row="22" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="23" Grid.Column="0" Text="Auto-scale values" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGridAutoScaleValues" Grid.Row="23" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="24" Grid.Column="0" Text="Auto-scale bars" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGridAutoScaleBars" Grid.Row="24" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="25" Grid.Column="0" Text="▶ Font" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox Grid.Row="25" Grid.Column="1" Text="Arial, 20px" Style="{StaticResource Nt8PropTextBox}" IsReadOnly="True"/>
+
+                                    <TextBlock Grid.Row="26" Grid.Column="0" Text="Align" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropGridAlign" Grid.Row="26" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="Right" IsSelected="True"/><ComboBoxItem Content="Center"/><ComboBoxItem Content="Left"/>
+                                    </ComboBox>
+                                </Grid>
+                            </Expander>
+
+                            <!-- 7. Imbalance -->
+                            <Expander Header="Imbalance" IsExpanded="True" Style="{StaticResource Nt8PropertyExpander}">
+                                <Grid Margin="4,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Show" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropImbalanceShow" Grid.Row="0" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Only Imbalance" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropImbalanceOnly" Grid.Row="1" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Imbalance, %" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropImbalancePercent" Grid.Row="2" Grid.Column="1" Text="400" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Filter" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropImbalanceFilter" Grid.Row="3" Grid.Column="1" Text="10" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Marker: visibility" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropImbalanceMarkerVisibility" Grid.Row="4" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="NoValues" IsSelected="True"/><ComboBoxItem Content="All"/><ComboBoxItem Content="MarkerOnly"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="5" Grid.Column="0" Text="Marker: type" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropImbalanceMarkerType" Grid.Row="5" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="Dot" IsSelected="True"/><ComboBoxItem Content="Triangle"/><ComboBoxItem Content="Square"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="6" Grid.Column="0" Text="Marker: position" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropImbalanceMarkerPosition" Grid.Row="6" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="Outer" IsSelected="True"/><ComboBoxItem Content="Inner"/><ComboBoxItem Content="Center"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="7" Grid.Column="0" Text="Sell/Resistance zone" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropImbalanceSellZoneColor" Grid.Row="7" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem IsSelected="True"><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#FF1493" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="DeepPink"/></StackPanel></ComboBoxItem>
+                                        <ComboBoxItem><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#FF0000" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="Red"/></StackPanel></ComboBoxItem>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="8" Grid.Column="0" Text="Buy/Support zone" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropImbalanceBuyZoneColor" Grid.Row="8" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem IsSelected="True"><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#00FF00" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="Lime"/></StackPanel></ComboBoxItem>
+                                        <ComboBoxItem><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#006400" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="DarkGreen"/></StackPanel></ComboBoxItem>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="9" Grid.Column="0" Text="▶ Font" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox Grid.Row="9" Grid.Column="1" Text="Arial, 13px" Style="{StaticResource Nt8PropTextBox}" IsReadOnly="True"/>
+
+                                    <TextBlock Grid.Row="10" Grid.Column="0" Text="Highlight values" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropImbalanceHighlightValues" Grid.Row="10" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="11" Grid.Column="0" Text="S/R zones: enable" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropImbalanceSrZonesEnable" Grid.Row="11" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="12" Grid.Column="0" Text="S/R zones: consecutive..." Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropImbalanceSrConsecutiveLevels" Grid.Row="12" Grid.Column="1" Text="2" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="13" Grid.Column="0" Text="S/R zones: volume filter" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropImbalanceSrVolumeFilter" Grid.Row="13" Grid.Column="1" Text="1" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="14" Grid.Column="0" Text="S/R zones: ended by" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropImbalanceSrEndedBy" Grid.Row="14" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="ByBarHighLow" IsSelected="True"/><ComboBoxItem Content="ByBarClose"/><ComboBoxItem Content="ByTicks"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="15" Grid.Column="0" Text="S/R zones: approaching..." Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropImbalanceSrApproaching" Grid.Row="15" Grid.Column="1" Text="0" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="16" Grid.Column="0" Text="S/R zones: break on s..." Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropImbalanceSrBreakOnSession" Grid.Row="16" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="17" Grid.Column="0" Text="S/R zones: opacity, %" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropImbalanceSrOpacityPercent" Grid.Row="17" Grid.Column="1" Text="25" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="18" Grid.Column="0" Text="S/R zones: alert" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropImbalanceSrAlert" Grid.Row="18" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="19" Grid.Column="0" Text="S/R zones: support zo..." Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropImbalanceSupportZoneSound" Grid.Row="19" Grid.Column="1" Text="imbalance_support_zone.wav" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="20" Grid.Column="0" Text="S/R zones: resistance..." Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropImbalanceResistanceZoneSound" Grid.Row="20" Grid.Column="1" Text="imbalance_resistance_zone.wav" Style="{StaticResource Nt8PropTextBox}"/>
+                                </Grid>
+                            </Expander>
+
+                            <!-- 8. Absorption -->
+                            <Expander Header="Absorption" IsExpanded="False" Style="{StaticResource Nt8PropertyExpander}">
+                                <Grid Margin="4,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Show" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropAbsorptionShow" Grid.Row="0" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Only Absorption" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropAbsorptionOnly" Grid.Row="1" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Absorption, %" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropAbsorptionPercent" Grid.Row="2" Grid.Column="1" Text="70" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Depth" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropAbsorptionDepth" Grid.Row="3" Grid.Column="1" Text="1" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Filter" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropAbsorptionFilter" Grid.Row="4" Grid.Column="1" Text="10" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="5" Grid.Column="0" Text="▶ Sell/Support zone" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox Grid.Row="5" Grid.Column="1" Text="Solid, 1px" Style="{StaticResource Nt8PropTextBox}" IsReadOnly="True"/>
+
+                                    <TextBlock Grid.Row="6" Grid.Column="0" Text="▶ Buy/Resistance zone" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox Grid.Row="6" Grid.Column="1" Text="Solid, 1px" Style="{StaticResource Nt8PropTextBox}" IsReadOnly="True"/>
+
+                                    <TextBlock Grid.Row="7" Grid.Column="0" Text="S/R zones: enable" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropAbsorptionSrZonesEnable" Grid.Row="7" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="8" Grid.Column="0" Text="S/R zones: approaching..." Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropAbsorptionSrApproaching" Grid.Row="8" Grid.Column="1" Text="0" Style="{StaticResource Nt8PropTextBox}"/>
+                                </Grid>
+                            </Expander>
+
+                            <!-- 9. Unfinished Auction -->
+                            <Expander Header="Unfinished Auction" IsExpanded="False" Style="{StaticResource Nt8PropertyExpander}">
+                                <Grid Margin="4,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Show" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropUnfinishedAuctionShow" Grid.Row="0" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Color" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropUnfinishedAuctionColor" Grid.Row="1" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem IsSelected="True"><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#4B0082" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="Indigo"/></StackPanel></ComboBoxItem>
+                                        <ComboBoxItem><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#800080" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="Purple"/></StackPanel></ComboBoxItem>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Opacity, %" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropUnfinishedAuctionOpacity" Grid.Row="2" Grid.Column="1" Text="30" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="▶ Border" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox Grid.Row="3" Grid.Column="1" Text="Solid, 1px" Style="{StaticResource Nt8PropTextBox}" IsReadOnly="True"/>
+                                </Grid>
+                            </Expander>
+
+                            <!-- 10. Bar Volume Profile -->
+                            <Expander Header="Bar Volume Profile" IsExpanded="False" Style="{StaticResource Nt8PropertyExpander}">
+                                <Grid Margin="4,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="POCs" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropBarPocsShow" Grid.Row="0" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="POCs count" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropBarPocsCount" Grid.Row="1" Grid.Column="1" Text="1" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="▶ Primary POC border" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox Grid.Row="2" Grid.Column="1" Text="Solid, 1px" Style="{StaticResource Nt8PropTextBox}" IsReadOnly="True"/>
+
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="▶ Other POCs border" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox Grid.Row="3" Grid.Column="1" Text="Solid, 1px" Style="{StaticResource Nt8PropTextBox}" IsReadOnly="True"/>
+
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="VA" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropBarVaShow" Grid.Row="4" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="5" Grid.Column="0" Text="VA, %" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropBarVaPercent" Grid.Row="5" Grid.Column="1" Text="70" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="6" Grid.Column="0" Text="VA" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropBarVaColor" Grid.Row="6" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem IsSelected="True"><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#7FFFD4" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="Aquamarine"/></StackPanel></ComboBoxItem>
+                                        <ComboBoxItem><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#00FFFF" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="Cyan"/></StackPanel></ComboBoxItem>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="7" Grid.Column="0" Text="VA opacity, %" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropBarVaOpacity" Grid.Row="7" Grid.Column="1" Text="20" Style="{StaticResource Nt8PropTextBox}"/>
+                                </Grid>
+                            </Expander>
+
+                            <!-- 11. Volume Profile Levels -->
+                            <Expander Header="Volume Profile Levels" IsExpanded="False" Style="{StaticResource Nt8PropertyExpander}">
+                                <Grid Margin="4,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Mode" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropVpMode" Grid.Row="0" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="Daily" IsSelected="True"/><ComboBoxItem Content="Session"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="POC: enable" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropVpPocEnable" Grid.Row="1" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="POC: developing" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropVpPocDeveloping" Grid.Row="2" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="▶ POC: line" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox Grid.Row="3" Grid.Column="1" Text="Solid, 2px" Style="{StaticResource Nt8PropTextBox}" IsReadOnly="True"/>
+
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="VA: enable" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropVpVaEnable" Grid.Row="4" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="5" Grid.Column="0" Text="VA: developing" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropVpVaDeveloping" Grid.Row="5" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="6" Grid.Column="0" Text="VA: %" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropVpVaPercent" Grid.Row="6" Grid.Column="1" Text="68" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="7" Grid.Column="0" Text="▶ VA: line" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox Grid.Row="7" Grid.Column="1" Text="Solid, 2px" Style="{StaticResource Nt8PropTextBox}" IsReadOnly="True"/>
+
+                                    <TextBlock Grid.Row="8" Grid.Column="0" Text="Session Profile: show" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropVpSessionProfileShow" Grid.Row="8" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                                </Grid>
+                            </Expander>
+
+                            <!-- 12. Notifications -->
+                            <Expander Header="▶ Notifications" IsExpanded="False" Style="{StaticResource Nt8PropertyExpander}">
+                                <Grid Margin="4,2">
+                                    <TextBlock Text="Alert notifications and sound triggers active" Foreground="#888888" FontSize="10.5" Margin="16,4"/>
+                                </Grid>
+                            </Expander>
+
+                            <!-- 13. Levels -->
+                            <Expander Header="Levels" IsExpanded="False" Style="{StaticResource Nt8PropertyExpander}">
+                                <Grid Margin="4,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Enable" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropLevelsEnable" Grid.Row="0" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="▶ Support level" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox Grid.Row="1" Grid.Column="1" Text="Solid, 10px" Style="{StaticResource Nt8PropTextBox}" IsReadOnly="True"/>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="▶ Resistance level" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox Grid.Row="2" Grid.Column="1" Text="Solid, 10px" Style="{StaticResource Nt8PropTextBox}" IsReadOnly="True"/>
+
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Value position" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropLevelsValuePosition" Grid.Row="3" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="Right" IsSelected="True"/><ComboBoxItem Content="Left"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Value/Label color" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropLevelsValueColor" Grid.Row="4" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem IsSelected="True"><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#D3D3D3" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="LightGray"/></StackPanel></ComboBoxItem>
+                                        <ComboBoxItem><StackPanel Orientation="Horizontal"><Border Width="16" Height="10" Background="#FFFFFF" BorderBrush="#000000" BorderThickness="1" Margin="0,0,6,0"/><TextBlock Text="White"/></StackPanel></ComboBoxItem>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="5" Grid.Column="0" Text="▶ Value/Label font" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox Grid.Row="5" Grid.Column="1" Text="Arial, 10px" Style="{StaticResource Nt8PropTextBox}" IsReadOnly="True"/>
+
+                                    <TextBlock Grid.Row="6" Grid.Column="0" Text="Alert" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropLevelsAlert" Grid.Row="6" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="7" Grid.Column="0" Text="Alert on" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropLevelsAlertOn" Grid.Row="7" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="LevelCross" IsSelected="True"/><ComboBoxItem Content="Touch"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="8" Grid.Column="0" Text="Rearm" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropLevelsRearm" Grid.Row="8" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="9" Grid.Column="0" Text="Rearm interval, sec" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropLevelsRearmInterval" Grid.Row="9" Grid.Column="1" Text="5" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="10" Grid.Column="0" Text="Sound" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropLevelsSound" Grid.Row="10" Grid.Column="1" Text="crossed.wav" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="11" Grid.Column="0" Text="Add/remove: Mouse L..." Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropLevelsAddRemoveKey" Grid.Row="11" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="LeftShift" IsSelected="True"/><ComboBoxItem Content="LeftCtrl"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="12" Grid.Column="0" Text="Modify: Mouse Left +" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropLevelsModifyKey" Grid.Row="12" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="LeftAlt" IsSelected="True"/><ComboBoxItem Content="LeftShift"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="13" Grid.Column="0" Text="Drag with Mouse" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropLevelsDragWithMouse" Grid.Row="13" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                                </Grid>
+                            </Expander>
+
+                            <!-- 14. Orderflow & Overlays -->
+                            <Expander Header="Orderflow" IsExpanded="True" Style="{StaticResource Nt8PropertyExpander}">
+                                <Grid Margin="4,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Footprint style / mode" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropOrderflowFootprintMode" Grid.Row="0" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="Bid x Ask" IsSelected="True"/><ComboBoxItem Content="Bid"/><ComboBoxItem Content="Ask"/><ComboBoxItem Content="Delta"/><ComboBoxItem Content="Volume"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Candle line / spine" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropOrderflowCandleLine" Grid.Row="1" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="VWAP + Bands" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropOrderflowVwap" Grid.Row="2" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="CVD curve" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropOrderflowCvd" Grid.Row="3" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Calculation mode" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropOrderflowCalculationMode" Grid.Row="4" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="UpDownTick" IsSelected="True"/><ComboBoxItem Content="BidAskSpread"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="5" Grid.Column="0" Text="Spread trades" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropOrderflowSpreadTrades" Grid.Row="5" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="Split" IsSelected="True"/><ComboBoxItem Content="Ignore"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="6" Grid.Column="0" Text="Reconstruct tape" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropOrderflowReconstructTape" Grid.Row="6" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                                </Grid>
+                            </Expander>
+
+                            <!-- 15. General -->
+                            <Expander Header="General" IsExpanded="False" Style="{StaticResource Nt8PropertyExpander}">
+                                <Grid Margin="4,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Show price line" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGeneralShowPriceLine" Grid.Row="0" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="▶ Price line" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox Grid.Row="1" Grid.Column="1" Text="Dot, 1px" Style="{StaticResource Nt8PropTextBox}" IsReadOnly="True"/>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Non-Crypto volumes d..." Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropGeneralNonCryptoDivider" Grid.Row="2" Grid.Column="1" Text="1" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Crypto force instrument" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGeneralCryptoForce" Grid.Row="3" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Crypto decimal places" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropGeneralCryptoDecimals" Grid.Row="4" Grid.Column="1" Text="2" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="5" Grid.Column="0" Text="Working time" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGeneralWorkingTime" Grid.Row="5" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="6" Grid.Column="0" Text="Smooth render" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGeneralSmoothRender" Grid.Row="6" Grid.Column="1" IsChecked="False" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="7" Grid.Column="0" Text="Hint" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGeneralHint" Grid.Row="7" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="8" Grid.Column="0" Text="Warning" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGeneralWarning" Grid.Row="8" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="9" Grid.Column="0" Text="Version" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGeneralVersion" Grid.Row="9" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="10" Grid.Column="0" Text="Log" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropGeneralLog" Grid.Row="10" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                                </Grid>
+                            </Expander>
+
+                            <!-- 16. Licensing -->
+                            <Expander Header="Licensing" IsExpanded="False" Style="{StaticResource Nt8PropertyExpander}">
+                                <Grid Margin="4,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="26"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Hardware Id" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox Grid.Row="0" Grid.Column="1" Text="AK10X-NT8-8742-99B1" Style="{StaticResource Nt8PropTextBox}" IsReadOnly="True"/>
+                                </Grid>
+                            </Expander>
+
+                            <!-- 17. Data Series -->
+                            <Expander Header="Data Series" IsExpanded="False" Style="{StaticResource Nt8PropertyExpander}">
+                                <Grid Margin="4,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="26"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Input series" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropDataSeriesInput" Grid.Row="0" Grid.Column="1" Text="TATASTEEL_I (5 Minute)" Style="{StaticResource Nt8PropTextBox}" IsReadOnly="True"/>
+                                </Grid>
+                            </Expander>
+
+                            <!-- 18. Visual -->
+                            <Expander Header="Visual" IsExpanded="False" Style="{StaticResource Nt8PropertyExpander}">
+                                <Grid Margin="4,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Auto scale" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropVisualAutoScale" Grid.Row="0" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Displacement" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropVisualDisplacement" Grid.Row="1" Grid.Column="1" Text="0" Style="{StaticResource Nt8PropTextBox}"/>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Display in Data Box" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropVisualDisplayInDataBox" Grid.Row="2" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Panel" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropVisualPanel" Grid.Row="3" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="Same as input series" IsSelected="True"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Price marker(s)" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropVisualPriceMarkers" Grid.Row="4" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+
+                                    <TextBlock Grid.Row="5" Grid.Column="0" Text="Scale justification" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropVisualScaleJustification" Grid.Row="5" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="Right" IsSelected="True"/><ComboBoxItem Content="Left"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="6" Grid.Column="0" Text="Visible" Style="{StaticResource Nt8PropLabel}"/>
+                                    <CheckBox x:Name="PropVisualVisible" Grid.Row="6" Grid.Column="1" IsChecked="True" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                                </Grid>
+                            </Expander>
+
+                            <!-- 19. Setup -->
+                            <Expander Header="Setup" IsExpanded="False" Style="{StaticResource Nt8PropertyExpander}">
+                                <Grid Margin="4,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="26"/><RowDefinition Height="26"/><RowDefinition Height="26"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Calculate" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropSetupCalculate" Grid.Row="0" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="On each tick" IsSelected="True"/><ComboBoxItem Content="On bar close"/><ComboBoxItem Content="On price change"/>
+                                    </ComboBox>
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Label" Style="{StaticResource Nt8PropLabel}"/>
+                                    <TextBox x:Name="PropSetupLabel" Grid.Row="1" Grid.Column="1" Text="MZpack.NT8.mzFootprint 3.14.21" Style="{StaticResource Nt8PropTextBox}" IsReadOnly="True"/>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Maximum bars look back" Style="{StaticResource Nt8PropLabel}"/>
+                                    <ComboBox x:Name="PropSetupMaxBarsLookBack" Grid.Row="2" Grid.Column="1" Style="{StaticResource DarkComboBox}" Height="23">
+                                        <ComboBoxItem Content="256" IsSelected="True"/><ComboBoxItem Content="512"/><ComboBoxItem Content="1024"/><ComboBoxItem Content="Unlimited"/>
+                                    </ComboBox>
+                                </Grid>
+                            </Expander>
                         </StackPanel>
                     </ScrollViewer>
 
-                    <!-- Dialog Footer -->
-                    <Border Grid.Row="2" Background="#1E1E24" BorderBrush="#27272A" BorderThickness="0,1,0,0" Padding="14,10" CornerRadius="0,0,8,8">
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                            <Button Content="Reset to NT8 Defaults" Style="{StaticResource SmallToolButton}" Margin="0,0,8,0" Click="ResetPropertiesToNt8_Click"/>
-                            <Button Content="Apply Changes" Style="{StaticResource SmallToolButton}" Background="#2563EB" BorderBrush="#3B82F6" Foreground="#FFFFFF" FontWeight="Bold" Margin="0,0,8,0" Click="ApplyProperties_Click"/>
-                            <Button Content="Close" Style="{StaticResource SmallToolButton}" Click="CloseProperties_Click"/>
-                        </StackPanel>
+                    <!-- Row 3: Action Buttons Bar -->
+                    <Border Grid.Row="3" Background="#26262A" BorderBrush="#1C1C20" BorderThickness="0,1,0,0" Padding="10,6" CornerRadius="0,0,4,4">
+                        <Grid>
+                            <Button Content="Reset to NT8 Defaults" Style="{StaticResource SmallToolButton}" HorizontalAlignment="Left" Click="ResetPropertiesToNt8_Click"/>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Button Content="Apply" Style="{StaticResource SmallToolButton}" Margin="0,0,6,0" Click="ApplyProperties_Click"/>
+                                <Button Content="OK" Style="{StaticResource SmallToolButton}" Background="#2563EB" BorderBrush="#3B82F6" Foreground="#FFFFFF" FontWeight="Bold" Margin="0,0,6,0" Click="OkProperties_Click"/>
+                                <Button Content="Cancel" Style="{StaticResource SmallToolButton}" Click="CloseProperties_Click"/>
+                            </StackPanel>
+                        </Grid>
                     </Border>
                 </Grid>
             </Border>

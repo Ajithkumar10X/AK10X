@@ -54,7 +54,6 @@ public partial class NinjaOrderFlowView : UserControl
 
     // Drawing Interaction
     private Point? _drawingStartPoint = null;
-    private Shape? _drawingPreviewShape = null;
 
     // Crosshair Elements
     private Line? _crosshairH;
@@ -67,16 +66,16 @@ public partial class NinjaOrderFlowView : UserControl
     // Palette Colors matching NinjaTrader 8 MZpack 3.14.21
     private readonly Brush _chartBg = new SolidColorBrush(Color.FromRgb(14, 14, 16));
     private readonly Brush _gridLine = new SolidColorBrush(Color.FromRgb(30, 30, 38));
-    private readonly Brush _supplyZoneBrush = new SolidColorBrush(Color.FromArgb(85, 185, 28, 28)); // Crimson Red
-    private readonly Brush _demandZoneBrush = new SolidColorBrush(Color.FromArgb(85, 21, 128, 61));  // Forest Green
+    private Brush _supplyZoneBrush = new SolidColorBrush(Color.FromArgb(64, 255, 20, 147)); // DeepPink at 25% opacity
+    private Brush _demandZoneBrush = new SolidColorBrush(Color.FromArgb(64, 0, 255, 0));   // Lime at 25% opacity
     private readonly Brush _textWhite = new SolidColorBrush(Color.FromRgb(244, 244, 245));
     private readonly Brush _textMuted = new SolidColorBrush(Color.FromRgb(161, 161, 170));
     private readonly Brush _pocBorderBrush = new SolidColorBrush(Color.FromRgb(255, 255, 0)); // Pure Yellow #FFFF00 matching NT8 mzFootprint BarPOCStroke
     private readonly Brush _pocBgBrush = new SolidColorBrush(Color.FromArgb(90, 180, 160, 0)); // Warm golden POC tint
-    private readonly Brush _buyImbalanceBrush = new SolidColorBrush(Color.FromRgb(0, 255, 0)); // #00FF00 Lime Green NT8 Default
-    private readonly Brush _sellImbalanceBrush = new SolidColorBrush(Color.FromRgb(255, 20, 147)); // #FF1493 DeepPink NT8 Default
-    private readonly Brush _buyImbalanceBg = new SolidColorBrush(Color.FromArgb(100, 0, 180, 0));
-    private readonly Brush _sellImbalanceBg = new SolidColorBrush(Color.FromArgb(100, 180, 20, 80));
+    private Brush _buyImbalanceBrush = new SolidColorBrush(Color.FromRgb(0, 255, 0)); // #00FF00 Lime Green NT8 Default
+    private Brush _sellImbalanceBrush = new SolidColorBrush(Color.FromRgb(255, 20, 147)); // #FF1493 DeepPink NT8 Default
+    private Brush _buyImbalanceBg = new SolidColorBrush(Color.FromArgb(90, 0, 180, 0));
+    private Brush _sellImbalanceBg = new SolidColorBrush(Color.FromArgb(90, 180, 20, 80));
     private readonly Brush _absorptionBadgeBrush = new SolidColorBrush(Color.FromRgb(245, 158, 11)); // Amber
     private readonly Brush _vwapBrush = new SolidColorBrush(Color.FromRgb(245, 158, 11)); // Golden Amber
     private readonly Brush _vwapBandBrush = new SolidColorBrush(Color.FromArgb(160, 56, 189, 248)); // Sky Blue
@@ -84,6 +83,31 @@ public partial class NinjaOrderFlowView : UserControl
     private readonly Brush _profileBarBrush = new SolidColorBrush(Color.FromArgb(70, 56, 189, 248));
     private readonly Brush _profilePocBrush = new SolidColorBrush(Color.FromArgb(140, 16, 185, 129));
     private readonly Brush _developingPocBrush = new SolidColorBrush(Color.FromRgb(245, 158, 11)); // Developing POC Amber
+
+    // Active MZpack NT8 mzFootprint Properties Configuration
+    private MzFootprintSettings _settings = new();
+
+    private static Brush GetBrushFromName(string name, byte alpha = 255)
+    {
+        Color c = name?.Trim().ToLowerInvariant() switch
+        {
+            "steelblue" => Color.FromRgb(70, 130, 180),
+            "red" => Color.FromRgb(255, 0, 0),
+            "darkred" => Color.FromRgb(139, 0, 0),
+            "green" => Color.FromRgb(0, 128, 0),
+            "darkgreen" => Color.FromRgb(0, 100, 0),
+            "lime" => Color.FromRgb(0, 255, 0),
+            "deeppink" => Color.FromRgb(255, 20, 147),
+            "ghostwhite" => Color.FromRgb(248, 248, 255),
+            "white" => Color.FromRgb(255, 255, 255),
+            "lightgray" or "lightgrey" => Color.FromRgb(211, 211, 211),
+            "black" => Color.FromRgb(0, 0, 0),
+            "orange" => Color.FromRgb(255, 165, 0),
+            "crimson" => Color.FromRgb(220, 20, 60),
+            _ => Color.FromRgb(255, 255, 255)
+        };
+        return new SolidColorBrush(Color.FromArgb(alpha, c.R, c.G, c.B));
+    }
 
     public NinjaOrderFlowView()
     {
@@ -103,7 +127,7 @@ public partial class NinjaOrderFlowView : UserControl
         };
 
         _engine = new OrderFlowDataEngine(defaultContract);
-        _engine.CurrentTimeframe = "700 Range";
+        _engine.CurrentTimeframe = "5 Min";
         _engine.BarUpdated += OnBarUpdated;
 
         Loaded += NinjaOrderFlowView_Loaded;
@@ -200,7 +224,8 @@ public partial class NinjaOrderFlowView : UserControl
     {
         if (_engine.CurrentBar == null || ChartScrollViewer == null) return;
         double targetY = PriceToY(_engine.CurrentBar.Close);
-        double vOffset = Math.Max(0, targetY - (ChartScrollViewer.ActualHeight / 2));
+        double viewH = ChartScrollViewer.ActualHeight > 50 ? ChartScrollViewer.ActualHeight : 650;
+        double vOffset = Math.Max(0, targetY - (viewH / 2));
         ChartScrollViewer.ScrollToVerticalOffset(vOffset);
         ChartScrollViewer.ScrollToRightEnd();
     }
@@ -440,10 +465,35 @@ public partial class NinjaOrderFlowView : UserControl
         {
             RenderCvdCurve(barStride, barWidth);
         }
+
+        if (_settings.GeneralShowPriceLine && _engine.LastPrice > 0)
+        {
+            double curY = PriceToY(_engine.LastPrice) + (levelHeight / 2);
+            var priceLine = new Line
+            {
+                X1 = 0,
+                X2 = Math.Max(requiredWidth, FootprintCanvas.ActualWidth),
+                Y1 = curY,
+                Y2 = curY,
+                Stroke = new SolidColorBrush(Color.FromRgb(160, 160, 170)),
+                StrokeThickness = 1.0,
+                StrokeDashArray = new DoubleCollection { 1, 3 }
+            };
+            FootprintCanvas.Children.Add(priceLine);
+        }
+    }
+
+    public void SetFootprintMode(string mode)
+    {
+        _settings.FootprintMode = mode;
+        SelectComboItemByText(PropOrderflowFootprintMode, mode);
     }
 
     private void RenderFootprintBar(OrderFlowBar bar, double barLeft, double centerX, double barWidth, double levelHeight, double yHigh, double yLow, double yOpen, double yClose, bool isBullish)
     {
+        string mode = _settings.FootprintMode ?? "Bid x Ask";
+        double fontSize = Math.Clamp(10.0 * _zoomFactor, 9.0, 15.0);
+
         // 1. Footprint Column Outer Bounding Frame (Clean contiguous rectangular block)
         double colTop = yHigh;
         double colHeight = Math.Max(levelHeight, yLow - yHigh);
@@ -512,7 +562,7 @@ public partial class NinjaOrderFlowView : UserControl
                 Y1 = spineTop,
                 Y2 = spineBottom,
                 Stroke = isBullish ? _buyImbalanceBrush : _sellImbalanceBrush,
-                StrokeThickness = 2.2
+                StrokeThickness = 4.0
             };
             FootprintCanvas.Children.Add(spineLine);
         }
@@ -547,6 +597,13 @@ public partial class NinjaOrderFlowView : UserControl
                 rowBorder.BorderThickness = new Thickness(0.8);
                 rowBorder.Background = _sellImbalanceBg;
             }
+            else if (_settings.BarVaShow && lvl.IsValueArea)
+            {
+                byte vaAlpha = (byte)Math.Clamp((int)(255 * _settings.BarVaOpacity / 100.0), 10, 180);
+                rowBorder.Background = new SolidColorBrush(Color.FromArgb(vaAlpha, 127, 255, 212));
+                rowBorder.BorderBrush = new SolidColorBrush(Color.FromArgb(60, 127, 255, 212));
+                rowBorder.BorderThickness = new Thickness(0.6);
+            }
             else
             {
                 rowBorder.Background = new SolidColorBrush(Color.FromArgb(190, 20, 20, 24));
@@ -554,14 +611,83 @@ public partial class NinjaOrderFlowView : UserControl
                 rowBorder.BorderThickness = new Thickness(0.5);
             }
 
+            if (_settings.UnfinishedAuctionShow)
+            {
+                bool isUnfinished = (bar.IsUnfinishedAuctionHigh && Math.Abs(lvl.Price - bar.High) < 0.0001) ||
+                                    (bar.IsUnfinishedAuctionLow && Math.Abs(lvl.Price - bar.Low) < 0.0001);
+                if (isUnfinished)
+                {
+                    rowBorder.BorderBrush = new SolidColorBrush(Color.FromRgb(75, 0, 130)); // Indigo
+                    rowBorder.BorderThickness = new Thickness(1.5);
+                }
+            }
+
             var grid = new Grid();
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-            string mode = (ModeCombo?.SelectedItem as ComboBoxItem)?.Content.ToString() ?? "Bid x Ask";
-            double fontSize = Math.Clamp(10.0 * _zoomFactor, 9.0, 15.0);
+            if (mode == "Bid")
+            {
+                long maxBid = bar.Levels.Count > 0 ? bar.Levels.Max(l => l.BidVolume) : 1;
+                if (maxBid <= 0) maxBid = 1;
+                double fillWidth = (lvl.BidVolume / (double)maxBid) * (barWidth - 4);
 
-            if (mode == "Delta")
+                // Cluster profile histogram bar
+                var clusterBar = new Rectangle
+                {
+                    Width = Math.Max(2, fillWidth),
+                    Height = Math.Max(4, levelHeight - 2),
+                    Fill = lvl.IsPoc ? _pocBgBrush : (lvl.IsSellImbalance ? _sellImbalanceBg : new SolidColorBrush(Color.FromArgb(50, 185, 28, 28))),
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    RadiusX = 1,
+                    RadiusY = 1
+                };
+                Grid.SetColumnSpan(clusterBar, 2);
+                grid.Children.Add(clusterBar);
+
+                var bidOnlyText = new TextBlock
+                {
+                    Text = lvl.BidVolume.ToString(),
+                    Foreground = lvl.IsSellImbalance ? _sellImbalanceBrush : (lvl.IsPoc ? _pocBorderBrush : _textWhite),
+                    FontSize = fontSize,
+                    FontWeight = (lvl.IsSellImbalance || lvl.IsPoc) ? FontWeights.Bold : FontWeights.Normal,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                Grid.SetColumnSpan(bidOnlyText, 2);
+                grid.Children.Add(bidOnlyText);
+            }
+            else if (mode == "Ask")
+            {
+                long maxAsk = bar.Levels.Count > 0 ? bar.Levels.Max(l => l.AskVolume) : 1;
+                if (maxAsk <= 0) maxAsk = 1;
+                double fillWidth = (lvl.AskVolume / (double)maxAsk) * (barWidth - 4);
+
+                var clusterBar = new Rectangle
+                {
+                    Width = Math.Max(2, fillWidth),
+                    Height = Math.Max(4, levelHeight - 2),
+                    Fill = lvl.IsPoc ? _pocBgBrush : (lvl.IsBuyImbalance ? _buyImbalanceBg : new SolidColorBrush(Color.FromArgb(50, 22, 101, 52))),
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    RadiusX = 1,
+                    RadiusY = 1
+                };
+                Grid.SetColumnSpan(clusterBar, 2);
+                grid.Children.Add(clusterBar);
+
+                var askOnlyText = new TextBlock
+                {
+                    Text = lvl.AskVolume.ToString(),
+                    Foreground = lvl.IsBuyImbalance ? _buyImbalanceBrush : (lvl.IsPoc ? _pocBorderBrush : _textWhite),
+                    FontSize = fontSize,
+                    FontWeight = (lvl.IsBuyImbalance || lvl.IsPoc) ? FontWeights.Bold : FontWeights.Normal,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                Grid.SetColumnSpan(askOnlyText, 2);
+                grid.Children.Add(askOnlyText);
+            }
+            else if (mode == "Delta")
             {
                 long delta = lvl.Delta;
                 var deltaText = new TextBlock
@@ -626,17 +752,20 @@ public partial class NinjaOrderFlowView : UserControl
             FootprintCanvas.Children.Add(rowBorder);
         }
 
-        // 4. Straight Center Vertical Divider Line (Divides Bid from Ask cleanly)
-        var centerDivider = new Line
+        // 4. Straight Center Vertical Divider Line (Divides Bid from Ask cleanly in Bid x Ask mode)
+        if (mode == "Bid x Ask")
         {
-            X1 = centerX,
-            X2 = centerX,
-            Y1 = yHigh,
-            Y2 = yLow,
-            Stroke = new SolidColorBrush(Color.FromArgb(120, 82, 82, 91)),
-            StrokeThickness = 1.0
-        };
-        FootprintCanvas.Children.Add(centerDivider);
+            var centerDivider = new Line
+            {
+                X1 = centerX,
+                X2 = centerX,
+                Y1 = yHigh,
+                Y2 = yLow,
+                Stroke = new SolidColorBrush(Color.FromArgb(120, 82, 82, 91)),
+                StrokeThickness = 1.0
+            };
+            FootprintCanvas.Children.Add(centerDivider);
+        }
 
         // Candlestick Open/Close horizontal ticks drawn over center divider for crisp visibility
         if (_showCandleLine)
@@ -1012,73 +1141,172 @@ public partial class NinjaOrderFlowView : UserControl
         if (_priceChip != null) PriceAxisCanvas.Children.Add(_priceChip);
     }
 
-    // --- Order Flow Ribbon Rendering ---
+    // --- Order Flow Ribbon Rendering (MZpack NT8 Statistic Grid) ---
     private void RenderRibbonCanvas()
     {
+        if (RibbonCanvas == null) return;
         RibbonCanvas.Children.Clear();
+
+        if (!_settings.GridShow)
+        {
+            if (RibbonContainerBorder != null) RibbonContainerBorder.Visibility = Visibility.Collapsed;
+            if (RibbonGridRow != null) RibbonGridRow.Height = new GridLength(0);
+            return;
+        }
+
+        if (RibbonContainerBorder != null) RibbonContainerBorder.Visibility = Visibility.Visible;
+        if (RibbonHeadersCol != null)
+        {
+            RibbonHeadersCol.Width = _settings.GridShowLegend ? new GridLength(110) : new GridLength(0);
+        }
 
         double barWidth = _baseBarWidth * _zoomFactor;
         double barSpacing = 12.0 * _zoomFactor;
         double barStride = barWidth + barSpacing;
         RibbonCanvas.Width = Math.Max(2400, (_engine.Bars.Count * barStride) + 300);
 
-        string[] rowHeaders = { "Buy volume", "Sell volume", "Delta", "Cum Delta", "Min Delta", "Max Delta", "Time" };
-        for (int r = 0; r <= 7; r++)
+        double cellH = _settings.GridCellHeightPx > 10 ? _settings.GridCellHeightPx : 24.0;
+
+        // Build list of active rows based on MzFootprintSettings
+        var activeRows = new List<(string key, string label, Brush bg)>();
+        if (_settings.GridTrades) activeRows.Add(("Trades", "Trades", new SolidColorBrush(Color.FromRgb(24, 24, 27))));
+        if (_settings.GridVolume) activeRows.Add(("Volume", "Volume", new SolidColorBrush(Color.FromRgb(24, 24, 27))));
+        if (_settings.GridBuyVolume) activeRows.Add(("BuyVol", "Buy volume", new SolidColorBrush(Color.FromRgb(30, 107, 55))));
+        if (_settings.GridSellVolume) activeRows.Add(("SellVol", "Sell volume", new SolidColorBrush(Color.FromRgb(139, 30, 34))));
+        if (_settings.GridDelta) activeRows.Add(("Delta", "Delta", new SolidColorBrush(Color.FromRgb(24, 24, 27))));
+        if (_settings.GridDeltaPercent) activeRows.Add(("DeltaPct", "Delta %", new SolidColorBrush(Color.FromRgb(24, 24, 27))));
+        if (_settings.GridAbsDeltaAvg) activeRows.Add(("AbsDeltaAvg", "Abs Delta Avg", new SolidColorBrush(Color.FromRgb(24, 24, 27))));
+        if (_settings.GridDeltaCumulative) activeRows.Add(("CumDelta", "Cum Delta", new SolidColorBrush(Color.FromRgb(185, 28, 28))));
+        if (_settings.GridMinDelta) activeRows.Add(("MinDelta", "Min Delta", new SolidColorBrush(Color.FromRgb(74, 21, 27))));
+        if (_settings.GridMaxDelta) activeRows.Add(("MaxDelta", "Max Delta", new SolidColorBrush(Color.FromRgb(6, 78, 59))));
+        if (_settings.GridDeltaChange) activeRows.Add(("DeltaChange", "Delta change", new SolidColorBrush(Color.FromRgb(24, 24, 27))));
+        if (_settings.GridDeltaRate) activeRows.Add(("DeltaRate", "Delta rate", new SolidColorBrush(Color.FromRgb(24, 24, 27))));
+        if (_settings.GridCotHigh) activeRows.Add(("CotHigh", "COT High", new SolidColorBrush(Color.FromRgb(24, 24, 27))));
+        if (_settings.GridCotLow) activeRows.Add(("CotLow", "COT Low", new SolidColorBrush(Color.FromRgb(24, 24, 27))));
+        activeRows.Add(("Time", "Time", new SolidColorBrush(Color.FromRgb(24, 24, 27))));
+
+        double totalH = activeRows.Count * cellH;
+        RibbonCanvas.Height = totalH;
+        if (RibbonGridRow != null) RibbonGridRow.Height = new GridLength(totalH + 2);
+
+        // Rebuild Left Headers
+        if (RibbonHeadersPanel != null)
+        {
+            RibbonHeadersPanel.Children.Clear();
+            for (int r = 0; r < activeRows.Count; r++)
+            {
+                var rowDef = activeRows[r];
+                var hb = new Border
+                {
+                    Height = cellH,
+                    Background = rowDef.bg,
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(39, 39, 42)),
+                    BorderThickness = new Thickness(0, 0, 1, r < activeRows.Count - 1 ? 1 : 0),
+                    Child = new TextBlock
+                    {
+                        Text = rowDef.label,
+                        Style = (Style)FindResource("RibbonLabelHeader")
+                    }
+                };
+                RibbonHeadersPanel.Children.Add(hb);
+            }
+        }
+
+        // Draw horizontal grid lines
+        for (int r = 0; r <= activeRows.Count; r++)
         {
             var line = new Line
             {
                 X1 = 0,
                 X2 = RibbonCanvas.Width,
-                Y1 = r * 23,
-                Y2 = r * 23,
+                Y1 = r * cellH,
+                Y2 = r * cellH,
                 Stroke = new SolidColorBrush(Color.FromRgb(39, 39, 42)),
                 StrokeThickness = 1
             };
             RibbonCanvas.Children.Add(line);
         }
 
+        // Populate cells per bar
         for (int i = 0; i < _engine.Bars.Count; i++)
         {
             var bar = _engine.Bars[i];
             double x = (i * barStride) + 20;
 
-            // Row 0: Buy Volume
-            bool heavyBuy = bar.BuyVolume > bar.SellVolume * 1.4;
-            Brush? buyBg = heavyBuy ? new SolidColorBrush(Color.FromArgb(140, 22, 101, 52)) : null;
-            AddRibbonCell(bar.BuyVolume.ToString(), x, barWidth, 0 * 23, heavyBuy ? Brushes.White : _textWhite, heavyBuy, buyBg);
+            for (int r = 0; r < activeRows.Count; r++)
+            {
+                var rowDef = activeRows[r];
+                double y = r * cellH;
 
-            // Row 1: Sell Volume (User's screenshot shows red highlight on heavy sell)
-            bool heavySell = bar.SellVolume > bar.BuyVolume * 1.4;
-            Brush? sellBg = heavySell ? new SolidColorBrush(Color.FromArgb(180, 185, 28, 28)) : null;
-            AddRibbonCell(bar.SellVolume.ToString(), x, barWidth, 1 * 23, heavySell ? Brushes.White : _textWhite, heavySell, sellBg);
-
-            // Row 2: Delta
-            AddRibbonCell(bar.Delta.ToString(), x, barWidth, 2 * 23, bar.Delta >= 0 ? _buyImbalanceBrush : _sellImbalanceBrush, true, null);
-
-            // Row 3: Cum Delta
-            Brush cumBg = bar.CumDelta < 0 ? new SolidColorBrush(Color.FromArgb(140, 185, 28, 28)) : new SolidColorBrush(Color.FromArgb(140, 22, 101, 52));
-            AddRibbonCell(bar.CumDelta.ToString(), x, barWidth, 3 * 23, Brushes.White, true, cumBg);
-
-            // Row 4: Min Delta
-            AddRibbonCell(bar.MinDelta.ToString(), x, barWidth, 4 * 23, new SolidColorBrush(Color.FromRgb(253, 164, 175)), false, null);
-
-            // Row 5: Max Delta
-            AddRibbonCell(bar.MaxDelta.ToString(), x, barWidth, 5 * 23, new SolidColorBrush(Color.FromRgb(110, 231, 183)), false, null);
-
-            // Row 6: Time
-            AddRibbonCell(bar.FormattedTime, x, barWidth, 6 * 23, new SolidColorBrush(Color.FromRgb(161, 161, 170)), true, null);
+                switch (rowDef.key)
+                {
+                    case "Trades":
+                        AddRibbonCell((bar.Levels.Sum(l => l.BidVolume + l.AskVolume) / 5).ToString(), x, barWidth, y, cellH, _textWhite, false, null);
+                        break;
+                    case "Volume":
+                        AddRibbonCell((bar.BuyVolume + bar.SellVolume).ToString(), x, barWidth, y, cellH, _textWhite, true, null);
+                        break;
+                    case "BuyVol":
+                        bool heavyBuy = bar.BuyVolume > bar.SellVolume * 1.4;
+                        Brush? buyBg = heavyBuy ? new SolidColorBrush(Color.FromArgb(140, 22, 101, 52)) : null;
+                        AddRibbonCell(bar.BuyVolume.ToString(), x, barWidth, y, cellH, heavyBuy ? Brushes.White : _textWhite, heavyBuy, buyBg);
+                        break;
+                    case "SellVol":
+                        bool heavySell = bar.SellVolume > bar.BuyVolume * 1.4;
+                        Brush? sellBg = heavySell ? new SolidColorBrush(Color.FromArgb(180, 185, 28, 28)) : null;
+                        AddRibbonCell(bar.SellVolume.ToString(), x, barWidth, y, cellH, heavySell ? Brushes.White : _textWhite, heavySell, sellBg);
+                        break;
+                    case "Delta":
+                        AddRibbonCell(bar.Delta.ToString(), x, barWidth, y, cellH, bar.Delta >= 0 ? _buyImbalanceBrush : _sellImbalanceBrush, true, null);
+                        break;
+                    case "DeltaPct":
+                        double totalV = Math.Max(1, bar.BuyVolume + bar.SellVolume);
+                        double pct = Math.Round((double)bar.Delta / totalV * 100.0, 1);
+                        AddRibbonCell($"{pct:0.0}%", x, barWidth, y, cellH, bar.Delta >= 0 ? _buyImbalanceBrush : _sellImbalanceBrush, false, null);
+                        break;
+                    case "AbsDeltaAvg":
+                        AddRibbonCell(Math.Abs(bar.Delta / 4).ToString(), x, barWidth, y, cellH, _textWhite, false, null);
+                        break;
+                    case "CumDelta":
+                        Brush cumBg = bar.CumDelta < 0 ? new SolidColorBrush(Color.FromArgb(140, 185, 28, 28)) : new SolidColorBrush(Color.FromArgb(140, 22, 101, 52));
+                        AddRibbonCell(bar.CumDelta.ToString(), x, barWidth, y, cellH, Brushes.White, true, cumBg);
+                        break;
+                    case "MinDelta":
+                        AddRibbonCell(bar.MinDelta.ToString(), x, barWidth, y, cellH, new SolidColorBrush(Color.FromRgb(253, 164, 175)), false, null);
+                        break;
+                    case "MaxDelta":
+                        AddRibbonCell(bar.MaxDelta.ToString(), x, barWidth, y, cellH, new SolidColorBrush(Color.FromRgb(110, 231, 183)), false, null);
+                        break;
+                    case "DeltaChange":
+                        long dChange = i > 0 ? bar.Delta - _engine.Bars[i - 1].Delta : 0;
+                        AddRibbonCell(dChange.ToString(), x, barWidth, y, cellH, dChange >= 0 ? _buyImbalanceBrush : _sellImbalanceBrush, false, null);
+                        break;
+                    case "DeltaRate":
+                        AddRibbonCell($"{bar.Delta / 5}/s", x, barWidth, y, cellH, _textWhite, false, null);
+                        break;
+                    case "CotHigh":
+                        AddRibbonCell(bar.Levels.FirstOrDefault()?.Delta.ToString() ?? "0", x, barWidth, y, cellH, _textWhite, false, null);
+                        break;
+                    case "CotLow":
+                        AddRibbonCell(bar.Levels.LastOrDefault()?.Delta.ToString() ?? "0", x, barWidth, y, cellH, _textWhite, false, null);
+                        break;
+                    case "Time":
+                        AddRibbonCell(bar.FormattedTime, x, barWidth, y, cellH, new SolidColorBrush(Color.FromRgb(161, 161, 170)), true, null);
+                        break;
+                }
+            }
         }
 
         // Re-attach crosshair time chip
         if (_timeChip != null) RibbonCanvas.Children.Add(_timeChip);
     }
 
-    private void AddRibbonCell(string text, double x, double width, double y, Brush fg, bool isBold, Brush? bg)
+    private void AddRibbonCell(string text, double x, double width, double y, double height, Brush fg, bool isBold, Brush? bg)
     {
         var border = new Border
         {
             Width = width,
-            Height = 23,
+            Height = height,
             Background = bg ?? Brushes.Transparent,
             BorderBrush = new SolidColorBrush(Color.FromArgb(60, 39, 39, 42)),
             BorderThickness = new Thickness(0, 0, 1, 0)
@@ -1089,8 +1317,13 @@ public partial class NinjaOrderFlowView : UserControl
             Foreground = fg,
             FontWeight = isBold ? FontWeights.Bold : FontWeights.Normal,
             FontSize = 10.5,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center
+            HorizontalAlignment = _settings.GridAlign switch {
+                "Left" => HorizontalAlignment.Left,
+                "Center" => HorizontalAlignment.Center,
+                _ => HorizontalAlignment.Right
+            },
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(6, 0, 6, 0)
         };
         border.Child = tb;
         Canvas.SetLeft(border, x);
@@ -1443,27 +1676,13 @@ public partial class NinjaOrderFlowView : UserControl
 
     private void ImbalanceCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (!_isInitialized || ImbalanceCombo?.SelectedItem is not ComboBoxItem item) return;
-        string text = item.Content.ToString() ?? "";
-        double ratio = 3.0;
-        if (text.Contains("200%")) ratio = 2.0;
-        else if (text.Contains("400%")) ratio = 4.0;
-
-        _engine.RecalculateAllBars(ratio);
+        if (!_isInitialized) return;
         RedrawAll();
     }
 
     private void OptionCheck_Changed(object sender, RoutedEventArgs e)
     {
         if (!_isInitialized) return;
-        _showCandleLine = ShowCandleCheck?.IsChecked == true;
-        _showZones = ShowZonesCheck?.IsChecked == true;
-        _showPocLine = ShowPocLineCheck?.IsChecked == true;
-        _showVwap = ShowVwapCheck?.IsChecked == true;
-        _showProfile = ShowProfileCheck?.IsChecked == true;
-        _showCvd = ShowCvdCheck?.IsChecked == true;
-        _showAbsorption = ShowAbsCheck?.IsChecked == true;
-        _showPatterns = _showAbsorption;
         RedrawAll();
     }
 
@@ -1711,26 +1930,175 @@ public partial class NinjaOrderFlowView : UserControl
         if (targetTab != null) HighlightInstrumentTab(targetTab);
     }
 
-    // --- NinjaTrader 8 mzFootprint Properties Modal Handlers ---
+    // --- NinjaTrader 8 MZpack mzFootprint Properties Modal Handlers ---
     public void OpenProperties_Click(object sender, RoutedEventArgs e)
     {
-        if (PropShowCandleCheck != null) PropShowCandleCheck.IsChecked = _showCandleLine;
-        if (PropShowStackedZonesCheck != null) PropShowStackedZonesCheck.IsChecked = _showZones;
-        if (PropShowAbsorptionCheck != null) PropShowAbsorptionCheck.IsChecked = _showAbsorption;
-        if (PropShowBarPocCheck != null) PropShowBarPocCheck.IsChecked = _showPocLine;
-        if (PropShowDevelopingPocCheck != null) PropShowDevelopingPocCheck.IsChecked = _showPocLine;
-        if (PropShowVwapCheck != null) PropShowVwapCheck.IsChecked = _showVwap;
-        if (PropShowProfileCheck != null) PropShowProfileCheck.IsChecked = _showProfile;
-        if (PropShowCvdCheck != null) PropShowCvdCheck.IsChecked = _showCvd;
-        if (PropShowBarDeltaCheck != null) PropShowBarDeltaCheck.IsChecked = _showBarDelta;
-
-        if (PropImbalanceRatioCombo != null)
+        if (PropWindowTitleText != null)
         {
-            if (Math.Abs(_engine.ImbalanceRatio - 2.0) < 0.1) PropImbalanceRatioCombo.SelectedIndex = 2; // 200%
-            else if (Math.Abs(_engine.ImbalanceRatio - 3.0) < 0.1) PropImbalanceRatioCombo.SelectedIndex = 1; // 300%
-            else if (Math.Abs(_engine.ImbalanceRatio - 5.0) < 0.1) PropImbalanceRatioCombo.SelectedIndex = 3; // 500%
-            else PropImbalanceRatioCombo.SelectedIndex = 0; // 400%
+            PropWindowTitleText.Text = $"MZpack.NT8.mzFootprint 3.14.21 beta({_engine.ActiveContract.Symbol})";
         }
+
+        // 1. Left Footprint
+        if (PropLeftValuesShow != null) PropLeftValuesShow.IsChecked = _settings.LeftValuesShow;
+        if (PropLeftValuesDivider != null) PropLeftValuesDivider.Text = _settings.LeftValuesDivider.ToString();
+        if (PropLeftValuesDecimalPlaces != null) PropLeftValuesDecimalPlaces.Text = _settings.LeftValuesDecimalPlaces.ToString();
+        if (PropLeftValuesAbsDelta != null) PropLeftValuesAbsDelta.IsChecked = _settings.LeftValuesAbsDelta;
+        if (PropLeftClusterZonesEnable != null) PropLeftClusterZonesEnable.IsChecked = _settings.LeftClusterZonesEnable;
+
+        // 2. Right Footprint
+        if (PropRightValuesShow != null) PropRightValuesShow.IsChecked = _settings.RightValuesShow;
+        if (PropRightValuesDivider != null) PropRightValuesDivider.Text = _settings.RightValuesDivider.ToString();
+        if (PropRightValuesDecimalPlaces != null) PropRightValuesDecimalPlaces.Text = _settings.RightValuesDecimalPlaces.ToString();
+        if (PropRightValuesAbsDelta != null) PropRightValuesAbsDelta.IsChecked = _settings.RightValuesAbsDelta;
+        if (PropRightClusterZonesEnable != null) PropRightClusterZonesEnable.IsChecked = _settings.RightClusterZonesEnable;
+
+        // 3. Filters
+        if (PropTicksPerLevel != null) PropTicksPerLevel.Text = _engine.TicksPerLevel.ToString();
+        if (PropTradeMin != null) PropTradeMin.Text = _settings.TradeMin.ToString();
+        if (PropTradeMax != null) PropTradeMax.Text = _settings.TradeMax.ToString();
+
+        // 4. Presentation
+        if (PropDisplayVolumeFilter != null) PropDisplayVolumeFilter.Text = _settings.DisplayVolumeFilter.ToString();
+        if (PropAutoScaleValues != null) PropAutoScaleValues.IsChecked = _settings.AutoScaleValues;
+        if (PropBarBorder != null) PropBarBorder.IsChecked = _settings.BarBorder;
+        if (PropBarMarker != null) PropBarMarker.IsChecked = _settings.BarMarker;
+        if (PropBarSpacePx != null) PropBarSpacePx.Text = _settings.BarSpacePx.ToString("0.000000");
+        if (PropBarWidthPx != null) PropBarWidthPx.Text = _settings.BarWidthPx.ToString("0.000000");
+        if (PropBarOuterMarginPx != null) PropBarOuterMarginPx.Text = _settings.BarOuterMarginPx.ToString();
+        if (PropControlRightMargin != null) PropControlRightMargin.IsChecked = _settings.ControlRightMargin;
+        if (PropChartRightMarginPx != null) PropChartRightMarginPx.Text = _settings.ChartRightMarginPx.ToString();
+
+        // 5. Bar Statistic
+        if (PropBarStatVolume != null) PropBarStatVolume.IsChecked = _settings.BarStatVolume;
+        if (PropBarStatDelta != null) PropBarStatDelta.IsChecked = _settings.BarStatDelta;
+        if (PropBarStatAbsDeltaAvg != null) PropBarStatAbsDeltaAvg.IsChecked = _settings.BarStatAbsDeltaAvg;
+        if (PropBarStatMinMaxDelta != null) PropBarStatMinMaxDelta.IsChecked = _settings.BarStatMinMaxDelta;
+        if (PropBarStatDeltaPercent != null) PropBarStatDeltaPercent.IsChecked = _settings.BarStatDeltaPercent;
+        if (PropBarStatCot != null) PropBarStatCot.IsChecked = _settings.BarStatCot;
+        if (PropBarStatRatioNumbers != null) PropBarStatRatioNumbers.IsChecked = _settings.BarStatRatioNumbers;
+        if (PropBarStatValuesDivider != null) PropBarStatValuesDivider.Text = _settings.BarStatValuesDivider.ToString();
+
+        // 6. Statistic Grid
+        if (PropGridShow != null) PropGridShow.IsChecked = _settings.GridShow;
+        if (PropGridShowLegend != null) PropGridShowLegend.IsChecked = _settings.GridShowLegend;
+        if (PropGridTrades != null) PropGridTrades.IsChecked = _settings.GridTrades;
+        if (PropGridVolume != null) PropGridVolume.IsChecked = _settings.GridVolume;
+        if (PropGridBuyVolume != null) PropGridBuyVolume.IsChecked = _settings.GridBuyVolume;
+        if (PropGridSellVolume != null) PropGridSellVolume.IsChecked = _settings.GridSellVolume;
+        if (PropGridDelta != null) PropGridDelta.IsChecked = _settings.GridDelta;
+        if (PropGridDeltaPercent != null) PropGridDeltaPercent.IsChecked = _settings.GridDeltaPercent;
+        if (PropGridAbsDeltaAvg != null) PropGridAbsDeltaAvg.IsChecked = _settings.GridAbsDeltaAvg;
+        if (PropGridDeltaCumulative != null) PropGridDeltaCumulative.IsChecked = _settings.GridDeltaCumulative;
+        if (PropGridMinDelta != null) PropGridMinDelta.IsChecked = _settings.GridMinDelta;
+        if (PropGridMaxDelta != null) PropGridMaxDelta.IsChecked = _settings.GridMaxDelta;
+        if (PropGridDeltaChange != null) PropGridDeltaChange.IsChecked = _settings.GridDeltaChange;
+        if (PropGridDeltaRate != null) PropGridDeltaRate.IsChecked = _settings.GridDeltaRate;
+        if (PropGridCotHigh != null) PropGridCotHigh.IsChecked = _settings.GridCotHigh;
+        if (PropGridCotLow != null) PropGridCotLow.IsChecked = _settings.GridCotLow;
+        if (PropGridVolPerSec != null) PropGridVolPerSec.IsChecked = _settings.GridVolPerSec;
+        if (PropGridPredictedValues != null) PropGridPredictedValues.IsChecked = _settings.GridPredictedValues;
+        if (PropGridValuesDivider != null) PropGridValuesDivider.Text = _settings.GridValuesDivider.ToString();
+        if (PropGridCellHeightPx != null) PropGridCellHeightPx.Text = _settings.GridCellHeightPx.ToString();
+        if (PropGridCellBorder != null) PropGridCellBorder.IsChecked = _settings.GridCellBorder;
+        if (PropGridAutoScaleValues != null) PropGridAutoScaleValues.IsChecked = _settings.GridAutoScaleValues;
+        if (PropGridAutoScaleBars != null) PropGridAutoScaleBars.IsChecked = _settings.GridAutoScaleBars;
+
+        // 7. Imbalance
+        if (PropImbalanceShow != null) PropImbalanceShow.IsChecked = _settings.ImbalanceShow;
+        if (PropImbalanceOnly != null) PropImbalanceOnly.IsChecked = _settings.ImbalanceOnly;
+        if (PropImbalancePercent != null) PropImbalancePercent.Text = _settings.ImbalancePercent.ToString();
+        if (PropImbalanceFilter != null) PropImbalanceFilter.Text = _settings.ImbalanceFilter.ToString();
+        if (PropImbalanceHighlightValues != null) PropImbalanceHighlightValues.IsChecked = _settings.ImbalanceHighlightValues;
+        if (PropImbalanceSrZonesEnable != null) PropImbalanceSrZonesEnable.IsChecked = _settings.ImbalanceSrZonesEnable;
+        if (PropImbalanceSrConsecutiveLevels != null) PropImbalanceSrConsecutiveLevels.Text = _settings.ImbalanceSrConsecutiveLevels.ToString();
+        if (PropImbalanceSrVolumeFilter != null) PropImbalanceSrVolumeFilter.Text = _settings.ImbalanceSrVolumeFilter.ToString();
+        if (PropImbalanceSrApproaching != null) PropImbalanceSrApproaching.Text = _settings.ImbalanceSrApproaching.ToString();
+        if (PropImbalanceSrBreakOnSession != null) PropImbalanceSrBreakOnSession.IsChecked = _settings.ImbalanceSrBreakOnSession;
+        if (PropImbalanceSrOpacityPercent != null) PropImbalanceSrOpacityPercent.Text = _settings.ImbalanceSrOpacityPercent.ToString();
+        if (PropImbalanceSrAlert != null) PropImbalanceSrAlert.IsChecked = _settings.ImbalanceSrAlert;
+        if (PropImbalanceSupportZoneSound != null) PropImbalanceSupportZoneSound.Text = _settings.ImbalanceSupportZoneSound;
+        if (PropImbalanceResistanceZoneSound != null) PropImbalanceResistanceZoneSound.Text = _settings.ImbalanceResistanceZoneSound;
+
+        // 8. Absorption
+        if (PropAbsorptionShow != null) PropAbsorptionShow.IsChecked = _settings.AbsorptionShow;
+        if (PropAbsorptionOnly != null) PropAbsorptionOnly.IsChecked = _settings.AbsorptionOnly;
+        if (PropAbsorptionPercent != null) PropAbsorptionPercent.Text = _settings.AbsorptionPercent.ToString();
+        if (PropAbsorptionDepth != null) PropAbsorptionDepth.Text = _settings.AbsorptionDepth.ToString();
+        if (PropAbsorptionFilter != null) PropAbsorptionFilter.Text = _settings.AbsorptionFilter.ToString();
+        if (PropAbsorptionSrZonesEnable != null) PropAbsorptionSrZonesEnable.IsChecked = _settings.AbsorptionSrZonesEnable;
+        if (PropAbsorptionSrApproaching != null) PropAbsorptionSrApproaching.Text = _settings.AbsorptionSrApproaching.ToString();
+
+        // 9. Unfinished Auction
+        if (PropUnfinishedAuctionShow != null) PropUnfinishedAuctionShow.IsChecked = _settings.UnfinishedAuctionShow;
+        SelectComboItemByText(PropUnfinishedAuctionColor, _settings.UnfinishedAuctionColor);
+        if (PropUnfinishedAuctionOpacity != null) PropUnfinishedAuctionOpacity.Text = _settings.UnfinishedAuctionOpacity.ToString();
+
+        // 10. Bar Volume Profile
+        if (PropBarPocsShow != null) PropBarPocsShow.IsChecked = _settings.BarPocsShow;
+        if (PropBarPocsCount != null) PropBarPocsCount.Text = _settings.BarPocsCount.ToString();
+        if (PropBarVaShow != null) PropBarVaShow.IsChecked = _settings.BarVaShow;
+        if (PropBarVaPercent != null) PropBarVaPercent.Text = _settings.BarVaPercent.ToString();
+        SelectComboItemByText(PropBarVaColor, _settings.BarVaColor);
+        if (PropBarVaOpacity != null) PropBarVaOpacity.Text = _settings.BarVaOpacity.ToString();
+
+        // 11. Volume Profile Levels
+        SelectComboItemByText(PropVpMode, _settings.VpMode);
+        if (PropVpPocEnable != null) PropVpPocEnable.IsChecked = _settings.VpPocEnable;
+        if (PropVpPocDeveloping != null) PropVpPocDeveloping.IsChecked = _settings.VpPocDeveloping;
+        if (PropVpVaEnable != null) PropVpVaEnable.IsChecked = _settings.VpVaEnable;
+        if (PropVpVaDeveloping != null) PropVpVaDeveloping.IsChecked = _settings.VpVaDeveloping;
+        if (PropVpVaPercent != null) PropVpVaPercent.Text = _settings.VpVaPercent.ToString();
+        if (PropVpSessionProfileShow != null) PropVpSessionProfileShow.IsChecked = _settings.ShowSessionProfile;
+
+        // 13. Levels
+        if (PropLevelsEnable != null) PropLevelsEnable.IsChecked = _settings.LevelsEnable;
+        SelectComboItemByText(PropLevelsValuePosition, _settings.LevelsValuePosition);
+        SelectComboItemByText(PropLevelsValueColor, _settings.LevelsValueColor);
+        if (PropLevelsAlert != null) PropLevelsAlert.IsChecked = _settings.LevelsAlert;
+        SelectComboItemByText(PropLevelsAlertOn, _settings.LevelsAlertOn);
+        if (PropLevelsRearm != null) PropLevelsRearm.IsChecked = _settings.LevelsRearm;
+        if (PropLevelsRearmInterval != null) PropLevelsRearmInterval.Text = _settings.LevelsRearmInterval.ToString();
+        if (PropLevelsSound != null) PropLevelsSound.Text = _settings.LevelsSound;
+        SelectComboItemByText(PropLevelsAddRemoveKey, _settings.LevelsAddRemoveKey);
+        SelectComboItemByText(PropLevelsModifyKey, _settings.LevelsModifyKey);
+        if (PropLevelsDragWithMouse != null) PropLevelsDragWithMouse.IsChecked = _settings.LevelsDragWithMouse;
+
+        // 14. Orderflow
+        SelectComboItemByText(PropOrderflowFootprintMode, _settings.FootprintMode);
+        if (PropOrderflowCandleLine != null) PropOrderflowCandleLine.IsChecked = _settings.ShowCandleLine;
+        if (PropOrderflowVwap != null) PropOrderflowVwap.IsChecked = _settings.ShowVwap;
+        if (PropOrderflowCvd != null) PropOrderflowCvd.IsChecked = _settings.ShowCvd;
+        SelectComboItemByText(PropOrderflowCalculationMode, _settings.CalculationMode);
+        SelectComboItemByText(PropOrderflowSpreadTrades, _settings.SpreadTrades);
+        if (PropOrderflowReconstructTape != null) PropOrderflowReconstructTape.IsChecked = _settings.ReconstructTape;
+
+        // 15. General
+        if (PropGeneralShowPriceLine != null) PropGeneralShowPriceLine.IsChecked = _settings.GeneralShowPriceLine;
+        if (PropGeneralNonCryptoDivider != null) PropGeneralNonCryptoDivider.Text = _settings.GeneralNonCryptoDivider.ToString();
+        if (PropGeneralCryptoForce != null) PropGeneralCryptoForce.IsChecked = _settings.GeneralCryptoForce;
+        if (PropGeneralCryptoDecimals != null) PropGeneralCryptoDecimals.Text = _settings.GeneralCryptoDecimals.ToString();
+        if (PropGeneralWorkingTime != null) PropGeneralWorkingTime.IsChecked = _settings.GeneralWorkingTime;
+        if (PropGeneralSmoothRender != null) PropGeneralSmoothRender.IsChecked = _settings.GeneralSmoothRender;
+        if (PropGeneralHint != null) PropGeneralHint.IsChecked = _settings.GeneralHint;
+        if (PropGeneralWarning != null) PropGeneralWarning.IsChecked = _settings.GeneralWarning;
+        if (PropGeneralVersion != null) PropGeneralVersion.IsChecked = _settings.GeneralVersion;
+        if (PropGeneralLog != null) PropGeneralLog.IsChecked = _settings.GeneralLog;
+
+        // 17. Data Series
+        if (PropDataSeriesInput != null) PropDataSeriesInput.Text = $"{_engine.ActiveContract.Symbol} (5 Minute)";
+
+        // 18. Visual
+        if (PropVisualAutoScale != null) PropVisualAutoScale.IsChecked = _settings.VisualAutoScale;
+        if (PropVisualDisplacement != null) PropVisualDisplacement.Text = _settings.VisualDisplacement.ToString();
+        if (PropVisualDisplayInDataBox != null) PropVisualDisplayInDataBox.IsChecked = _settings.VisualDisplayInDataBox;
+        if (PropVisualPriceMarkers != null) PropVisualPriceMarkers.IsChecked = _settings.VisualPriceMarkers;
+        SelectComboItemByText(PropVisualScaleJustification, _settings.VisualScaleJustification);
+        if (PropVisualVisible != null) PropVisualVisible.IsChecked = _settings.VisualVisible;
+
+        // 19. Setup
+        SelectComboItemByText(PropSetupCalculate, _settings.SetupCalculate);
+        if (PropSetupLabel != null) PropSetupLabel.Text = _settings.SetupLabel;
+        SelectComboItemByText(PropSetupMaxBarsLookBack, _settings.SetupMaxBarsLookBack.ToString());
 
         if (PropertiesModal != null) PropertiesModal.Visibility = Visibility.Visible;
     }
@@ -1740,87 +2108,300 @@ public partial class NinjaOrderFlowView : UserControl
         if (PropertiesModal != null) PropertiesModal.Visibility = Visibility.Collapsed;
     }
 
-    private void ApplyProperties_Click(object sender, RoutedEventArgs e)
+    private static void SelectComboItemByText(ComboBox? combo, string? text)
     {
-        if (PropImbalanceRatioCombo?.SelectedItem is ComboBoxItem imbItem)
+        if (combo == null || string.IsNullOrEmpty(text)) return;
+        foreach (var item in combo.Items)
         {
-            string s = imbItem.Content.ToString() ?? "";
-            double ratio = 4.0;
-            if (s.Contains("200%")) ratio = 2.0;
-            else if (s.Contains("300%")) ratio = 3.0;
-            else if (s.Contains("400%")) ratio = 4.0;
-            else if (s.Contains("500%")) ratio = 5.0;
-            _engine.ImbalanceRatio = ratio;
-            _engine.RecalculateAllBars(ratio);
-
-            if (ImbalanceCombo != null)
+            if (item is ComboBoxItem cbi)
             {
-                if (Math.Abs(ratio - 2.0) < 0.1) ImbalanceCombo.SelectedIndex = 1; // 200%
-                else if (Math.Abs(ratio - 3.0) < 0.1) ImbalanceCombo.SelectedIndex = 0; // 300%
-                else if (Math.Abs(ratio - 4.0) < 0.1) ImbalanceCombo.SelectedIndex = 2; // 400%
+                string? str = cbi.Content as string;
+                if (str == null && cbi.Content is StackPanel sp)
+                {
+                    str = sp.Children.OfType<TextBlock>().FirstOrDefault()?.Text;
+                }
+                if (string.Equals(str, text, StringComparison.OrdinalIgnoreCase))
+                {
+                    combo.SelectedItem = cbi;
+                    return;
+                }
             }
         }
+    }
 
-        if (PropShowCandleCheck != null) _showCandleLine = PropShowCandleCheck.IsChecked == true;
-        if (PropShowStackedZonesCheck != null) _showZones = PropShowStackedZonesCheck.IsChecked == true;
-        if (PropShowAbsorptionCheck != null) _showAbsorption = PropShowAbsorptionCheck.IsChecked == true;
-        _showPatterns = _showAbsorption;
-        if (PropShowBarPocCheck != null) _showPocLine = PropShowBarPocCheck.IsChecked == true;
-        if (PropShowVwapCheck != null) _showVwap = PropShowVwapCheck.IsChecked == true;
-        if (PropShowProfileCheck != null) _showProfile = PropShowProfileCheck.IsChecked == true;
-        if (PropShowCvdCheck != null) _showCvd = PropShowCvdCheck.IsChecked == true;
-        if (PropShowBarDeltaCheck != null) _showBarDelta = PropShowBarDeltaCheck.IsChecked == true;
+    private static string GetComboSelectedText(ComboBox? combo, string defaultVal)
+    {
+        if (combo?.SelectedItem is ComboBoxItem item)
+        {
+            if (item.Content is string s) return s;
+            if (item.Content is StackPanel sp)
+            {
+                var tb = sp.Children.OfType<TextBlock>().FirstOrDefault();
+                if (tb != null) return tb.Text;
+            }
+            return item.Content?.ToString() ?? defaultVal;
+        }
+        return defaultVal;
+    }
 
-        // Synchronize toolbar checkboxes
-        if (ShowCandleCheck != null) ShowCandleCheck.IsChecked = _showCandleLine;
-        if (ShowZonesCheck != null) ShowZonesCheck.IsChecked = _showZones;
-        if (ShowAbsCheck != null) ShowAbsCheck.IsChecked = _showAbsorption;
-        if (ShowPocLineCheck != null) ShowPocLineCheck.IsChecked = _showPocLine;
-        if (ShowVwapCheck != null) ShowVwapCheck.IsChecked = _showVwap;
-        if (ShowProfileCheck != null) ShowProfileCheck.IsChecked = _showProfile;
-        if (ShowCvdCheck != null) ShowCvdCheck.IsChecked = _showCvd;
+    private void ApplyProperties_Click(object sender, RoutedEventArgs e)
+    {
+        // 1. Left Footprint
+        if (PropLeftValuesShow != null) _settings.LeftValuesShow = PropLeftValuesShow.IsChecked == true;
+        if (double.TryParse(PropLeftValuesDivider?.Text, out double lvd)) _settings.LeftValuesDivider = lvd;
+        if (int.TryParse(PropLeftValuesDecimalPlaces?.Text, out int ldp)) _settings.LeftValuesDecimalPlaces = ldp;
+        if (PropLeftValuesAbsDelta != null) _settings.LeftValuesAbsDelta = PropLeftValuesAbsDelta.IsChecked == true;
+        if (PropLeftClusterZonesEnable != null) _settings.LeftClusterZonesEnable = PropLeftClusterZonesEnable.IsChecked == true;
 
+        // 2. Right Footprint
+        if (PropRightValuesShow != null) _settings.RightValuesShow = PropRightValuesShow.IsChecked == true;
+        if (double.TryParse(PropRightValuesDivider?.Text, out double rvd)) _settings.RightValuesDivider = rvd;
+        if (int.TryParse(PropRightValuesDecimalPlaces?.Text, out int rdp)) _settings.RightValuesDecimalPlaces = rdp;
+        if (PropRightValuesAbsDelta != null) _settings.RightValuesAbsDelta = PropRightValuesAbsDelta.IsChecked == true;
+        if (PropRightClusterZonesEnable != null) _settings.RightClusterZonesEnable = PropRightClusterZonesEnable.IsChecked == true;
+
+        // 3. Filters
+        if (int.TryParse(PropTicksPerLevel?.Text, out int tpl) && tpl > 0)
+        {
+            _settings.TicksPerLevel = tpl;
+            _engine.TicksPerLevel = tpl;
+        }
+
+        // 4. Presentation
+        if (double.TryParse(PropDisplayVolumeFilter?.Text, out double dvf)) _settings.DisplayVolumeFilter = dvf;
+        if (PropAutoScaleValues != null) _settings.AutoScaleValues = PropAutoScaleValues.IsChecked == true;
+        if (PropBarBorder != null) _settings.BarBorder = PropBarBorder.IsChecked == true;
+        if (PropBarMarker != null) _settings.BarMarker = PropBarMarker.IsChecked == true;
+        if (double.TryParse(PropBarSpacePx?.Text, out double bsp)) _settings.BarSpacePx = bsp;
+        if (double.TryParse(PropBarWidthPx?.Text, out double bwp)) _settings.BarWidthPx = bwp;
+        if (double.TryParse(PropBarOuterMarginPx?.Text, out double bom)) _settings.BarOuterMarginPx = bom;
+        if (PropControlRightMargin != null) _settings.ControlRightMargin = PropControlRightMargin.IsChecked == true;
+        if (double.TryParse(PropChartRightMarginPx?.Text, out double crm)) _settings.ChartRightMarginPx = crm;
+
+        // 5. Bar Statistic
+        if (PropBarStatVolume != null) _settings.BarStatVolume = PropBarStatVolume.IsChecked == true;
+        if (PropBarStatDelta != null) _settings.BarStatDelta = PropBarStatDelta.IsChecked == true;
+        if (PropBarStatAbsDeltaAvg != null) _settings.BarStatAbsDeltaAvg = PropBarStatAbsDeltaAvg.IsChecked == true;
+        if (PropBarStatMinMaxDelta != null) _settings.BarStatMinMaxDelta = PropBarStatMinMaxDelta.IsChecked == true;
+        if (PropBarStatDeltaPercent != null) _settings.BarStatDeltaPercent = PropBarStatDeltaPercent.IsChecked == true;
+        if (PropBarStatCot != null) _settings.BarStatCot = PropBarStatCot.IsChecked == true;
+        if (PropBarStatRatioNumbers != null) _settings.BarStatRatioNumbers = PropBarStatRatioNumbers.IsChecked == true;
+        _showBarDelta = _settings.BarStatDelta;
+
+        // 6. Statistic Grid
+        if (PropGridShow != null) _settings.GridShow = PropGridShow.IsChecked == true;
+        if (PropGridShowLegend != null) _settings.GridShowLegend = PropGridShowLegend.IsChecked == true;
+        if (PropGridLegendPosition?.SelectedItem is ComboBoxItem lpItem) _settings.GridLegendPosition = lpItem.Content?.ToString() ?? "Left";
+        if (PropGridTrades != null) _settings.GridTrades = PropGridTrades.IsChecked == true;
+        if (PropGridVolume != null) _settings.GridVolume = PropGridVolume.IsChecked == true;
+        if (PropGridBuyVolume != null) _settings.GridBuyVolume = PropGridBuyVolume.IsChecked == true;
+        if (PropGridSellVolume != null) _settings.GridSellVolume = PropGridSellVolume.IsChecked == true;
+        if (PropGridDelta != null) _settings.GridDelta = PropGridDelta.IsChecked == true;
+        if (PropGridDeltaPercent != null) _settings.GridDeltaPercent = PropGridDeltaPercent.IsChecked == true;
+        if (PropGridAbsDeltaAvg != null) _settings.GridAbsDeltaAvg = PropGridAbsDeltaAvg.IsChecked == true;
+        if (PropGridDeltaCumulative != null) _settings.GridDeltaCumulative = PropGridDeltaCumulative.IsChecked == true;
+        if (PropGridMinDelta != null) _settings.GridMinDelta = PropGridMinDelta.IsChecked == true;
+        if (PropGridMaxDelta != null) _settings.GridMaxDelta = PropGridMaxDelta.IsChecked == true;
+        if (PropGridDeltaChange != null) _settings.GridDeltaChange = PropGridDeltaChange.IsChecked == true;
+        if (PropGridDeltaRate != null) _settings.GridDeltaRate = PropGridDeltaRate.IsChecked == true;
+        if (PropGridCotHigh != null) _settings.GridCotHigh = PropGridCotHigh.IsChecked == true;
+        if (PropGridCotLow != null) _settings.GridCotLow = PropGridCotLow.IsChecked == true;
+        if (PropGridVolPerSec != null) _settings.GridVolPerSec = PropGridVolPerSec.IsChecked == true;
+        if (PropGridPredictedValues != null) _settings.GridPredictedValues = PropGridPredictedValues.IsChecked == true;
+        if (double.TryParse(PropGridCellHeightPx?.Text, out double gch)) _settings.GridCellHeightPx = gch;
+        if (PropGridCellBorder != null) _settings.GridCellBorder = PropGridCellBorder.IsChecked == true;
+        if (PropGridAutoScaleValues != null) _settings.GridAutoScaleValues = PropGridAutoScaleValues.IsChecked == true;
+        if (PropGridAutoScaleBars != null) _settings.GridAutoScaleBars = PropGridAutoScaleBars.IsChecked == true;
+        if (PropGridAlign?.SelectedItem is ComboBoxItem alItem) _settings.GridAlign = alItem.Content?.ToString() ?? "Right";
+
+        // 7. Imbalance
+        if (PropImbalanceShow != null) _settings.ImbalanceShow = PropImbalanceShow.IsChecked == true;
+        if (PropImbalanceOnly != null) _settings.ImbalanceOnly = PropImbalanceOnly.IsChecked == true;
+        if (double.TryParse(PropImbalancePercent?.Text, out double imp) && imp > 0)
+        {
+            _settings.ImbalancePercent = imp;
+            _engine.ImbalanceRatio = imp / 100.0;
+        }
+        if (double.TryParse(PropImbalanceFilter?.Text, out double imf)) _settings.ImbalanceFilter = imf;
+        if (PropImbalanceHighlightValues != null) _settings.ImbalanceHighlightValues = PropImbalanceHighlightValues.IsChecked == true;
+        if (PropImbalanceSrZonesEnable != null)
+        {
+            _settings.ImbalanceSrZonesEnable = PropImbalanceSrZonesEnable.IsChecked == true;
+            _showZones = _settings.ImbalanceSrZonesEnable;
+        }
+        if (int.TryParse(PropImbalanceSrConsecutiveLevels?.Text, out int scl) && scl > 0)
+        {
+            _settings.ImbalanceSrConsecutiveLevels = scl;
+            _engine.ConsecutiveLevels = scl;
+        }
+        if (double.TryParse(PropImbalanceSrVolumeFilter?.Text, out double svf)) _settings.ImbalanceSrVolumeFilter = svf;
+        if (PropImbalanceSrEndedBy?.SelectedItem is ComboBoxItem ebItem)
+        {
+            _settings.ImbalanceSrEndedBy = ebItem.Content?.ToString() ?? "ByBarHighLow";
+            _engine.ZoneEndingMode = _settings.ImbalanceSrEndedBy;
+        }
+        if (double.TryParse(PropImbalanceSrApproaching?.Text, out double sap)) _settings.ImbalanceSrApproaching = sap;
+        if (PropImbalanceSrBreakOnSession != null) _settings.ImbalanceSrBreakOnSession = PropImbalanceSrBreakOnSession.IsChecked == true;
+        if (double.TryParse(PropImbalanceSrOpacityPercent?.Text, out double sop)) _settings.ImbalanceSrOpacityPercent = sop;
+        if (PropImbalanceSrAlert != null) _settings.ImbalanceSrAlert = PropImbalanceSrAlert.IsChecked == true;
+
+        // 8. Absorption
+        if (PropAbsorptionShow != null)
+        {
+            _settings.AbsorptionShow = PropAbsorptionShow.IsChecked == true;
+            _showAbsorption = _settings.AbsorptionShow;
+            _showPatterns = _showAbsorption;
+        }
+        if (PropAbsorptionOnly != null) _settings.AbsorptionOnly = PropAbsorptionOnly.IsChecked == true;
+        if (double.TryParse(PropAbsorptionPercent?.Text, out double abp)) _settings.AbsorptionPercent = abp;
+        if (int.TryParse(PropAbsorptionDepth?.Text, out int adp)) _settings.AbsorptionDepth = adp;
+        if (double.TryParse(PropAbsorptionFilter?.Text, out double abf)) _settings.AbsorptionFilter = abf;
+        if (PropAbsorptionSrZonesEnable != null) _settings.AbsorptionSrZonesEnable = PropAbsorptionSrZonesEnable.IsChecked == true;
+        if (double.TryParse(PropAbsorptionSrApproaching?.Text, out double aapp)) _settings.AbsorptionSrApproaching = aapp;
+
+        // 9. Unfinished Auction
+        if (PropUnfinishedAuctionShow != null) _settings.UnfinishedAuctionShow = PropUnfinishedAuctionShow.IsChecked == true;
+        _settings.UnfinishedAuctionColor = GetComboSelectedText(PropUnfinishedAuctionColor, _settings.UnfinishedAuctionColor);
+        if (double.TryParse(PropUnfinishedAuctionOpacity?.Text, out double uao)) _settings.UnfinishedAuctionOpacity = uao;
+
+        // 10. Bar Volume Profile
+        if (PropBarPocsShow != null)
+        {
+            _settings.BarPocsShow = PropBarPocsShow.IsChecked == true;
+            _showPocLine = _settings.BarPocsShow;
+        }
+        if (int.TryParse(PropBarPocsCount?.Text, out int pocCnt)) _settings.BarPocsCount = pocCnt;
+        if (PropBarVaShow != null) _settings.BarVaShow = PropBarVaShow.IsChecked == true;
+        if (double.TryParse(PropBarVaPercent?.Text, out double vap)) _settings.BarVaPercent = vap;
+        _settings.BarVaColor = GetComboSelectedText(PropBarVaColor, _settings.BarVaColor);
+        if (double.TryParse(PropBarVaOpacity?.Text, out double vao)) _settings.BarVaOpacity = vao;
+
+        // 11. Volume Profile Levels
+        _settings.VpMode = GetComboSelectedText(PropVpMode, _settings.VpMode);
+        if (PropVpPocEnable != null) _settings.VpPocEnable = PropVpPocEnable.IsChecked == true;
+        if (PropVpPocDeveloping != null) _settings.VpPocDeveloping = PropVpPocDeveloping.IsChecked == true;
+        if (PropVpVaEnable != null) _settings.VpVaEnable = PropVpVaEnable.IsChecked == true;
+        if (PropVpVaDeveloping != null) _settings.VpVaDeveloping = PropVpVaDeveloping.IsChecked == true;
+        if (double.TryParse(PropVpVaPercent?.Text, out double vpvap)) _settings.VpVaPercent = vpvap;
+        if (PropVpSessionProfileShow != null)
+        {
+            _settings.ShowSessionProfile = PropVpSessionProfileShow.IsChecked == true;
+            _showProfile = _settings.ShowSessionProfile;
+        }
+
+        // 13. Levels
+        if (PropLevelsEnable != null) _settings.LevelsEnable = PropLevelsEnable.IsChecked == true;
+        _settings.LevelsValuePosition = GetComboSelectedText(PropLevelsValuePosition, _settings.LevelsValuePosition);
+        _settings.LevelsValueColor = GetComboSelectedText(PropLevelsValueColor, _settings.LevelsValueColor);
+        if (PropLevelsAlert != null) _settings.LevelsAlert = PropLevelsAlert.IsChecked == true;
+        _settings.LevelsAlertOn = GetComboSelectedText(PropLevelsAlertOn, _settings.LevelsAlertOn);
+        if (PropLevelsRearm != null) _settings.LevelsRearm = PropLevelsRearm.IsChecked == true;
+        if (double.TryParse(PropLevelsRearmInterval?.Text, out double rint)) _settings.LevelsRearmInterval = rint;
+        if (PropLevelsSound != null) _settings.LevelsSound = PropLevelsSound.Text;
+        _settings.LevelsAddRemoveKey = GetComboSelectedText(PropLevelsAddRemoveKey, _settings.LevelsAddRemoveKey);
+        _settings.LevelsModifyKey = GetComboSelectedText(PropLevelsModifyKey, _settings.LevelsModifyKey);
+        if (PropLevelsDragWithMouse != null) _settings.LevelsDragWithMouse = PropLevelsDragWithMouse.IsChecked == true;
+
+        // 14. Orderflow
+        _settings.FootprintMode = GetComboSelectedText(PropOrderflowFootprintMode, _settings.FootprintMode);
+        if (PropOrderflowCandleLine != null)
+        {
+            _settings.ShowCandleLine = PropOrderflowCandleLine.IsChecked == true;
+            _showCandleLine = _settings.ShowCandleLine;
+        }
+        if (PropOrderflowVwap != null)
+        {
+            _settings.ShowVwap = PropOrderflowVwap.IsChecked == true;
+            _showVwap = _settings.ShowVwap;
+        }
+        if (PropOrderflowCvd != null)
+        {
+            _settings.ShowCvd = PropOrderflowCvd.IsChecked == true;
+            _showCvd = _settings.ShowCvd;
+        }
+        _settings.CalculationMode = GetComboSelectedText(PropOrderflowCalculationMode, _settings.CalculationMode);
+        _engine.CalculationMode = _settings.CalculationMode;
+        _settings.SpreadTrades = GetComboSelectedText(PropOrderflowSpreadTrades, _settings.SpreadTrades);
+        _engine.SpreadTrades = _settings.SpreadTrades;
+        if (PropOrderflowReconstructTape != null) _settings.ReconstructTape = PropOrderflowReconstructTape.IsChecked == true;
+
+        // 15. General
+        if (PropGeneralShowPriceLine != null) _settings.GeneralShowPriceLine = PropGeneralShowPriceLine.IsChecked == true;
+        if (double.TryParse(PropGeneralNonCryptoDivider?.Text, out double ncd)) _settings.GeneralNonCryptoDivider = ncd;
+        if (PropGeneralCryptoForce != null) _settings.GeneralCryptoForce = PropGeneralCryptoForce.IsChecked == true;
+        if (int.TryParse(PropGeneralCryptoDecimals?.Text, out int gcd)) _settings.GeneralCryptoDecimals = gcd;
+        if (PropGeneralWorkingTime != null) _settings.GeneralWorkingTime = PropGeneralWorkingTime.IsChecked == true;
+        if (PropGeneralSmoothRender != null) _settings.GeneralSmoothRender = PropGeneralSmoothRender.IsChecked == true;
+        if (PropGeneralHint != null) _settings.GeneralHint = PropGeneralHint.IsChecked == true;
+        if (PropGeneralWarning != null) _settings.GeneralWarning = PropGeneralWarning.IsChecked == true;
+        if (PropGeneralVersion != null) _settings.GeneralVersion = PropGeneralVersion.IsChecked == true;
+        if (PropGeneralLog != null) _settings.GeneralLog = PropGeneralLog.IsChecked == true;
+
+        // 18. Visual
+        if (PropVisualAutoScale != null) _settings.VisualAutoScale = PropVisualAutoScale.IsChecked == true;
+        if (int.TryParse(PropVisualDisplacement?.Text, out int vdisp)) _settings.VisualDisplacement = vdisp;
+        if (PropVisualDisplayInDataBox != null) _settings.VisualDisplayInDataBox = PropVisualDisplayInDataBox.IsChecked == true;
+        if (PropVisualPriceMarkers != null) _settings.VisualPriceMarkers = PropVisualPriceMarkers.IsChecked == true;
+        _settings.VisualScaleJustification = GetComboSelectedText(PropVisualScaleJustification, _settings.VisualScaleJustification);
+        if (PropVisualVisible != null) _settings.VisualVisible = PropVisualVisible.IsChecked == true;
+
+        // 19. Setup
+        _settings.SetupCalculate = GetComboSelectedText(PropSetupCalculate, _settings.SetupCalculate);
+        if (int.TryParse(GetComboSelectedText(PropSetupMaxBarsLookBack, "256"), out int mbl)) _settings.SetupMaxBarsLookBack = mbl;
+
+        // Update colors & brushes
+        _buyImbalanceBrush = GetBrushFromName(_settings.ImbalanceBuyZoneColor);
+        _sellImbalanceBrush = GetBrushFromName(_settings.ImbalanceSellZoneColor);
+        byte opByte = (byte)Math.Clamp((int)(255 * _settings.ImbalanceSrOpacityPercent / 100.0), 10, 255);
+        _demandZoneBrush = GetBrushFromName(_settings.ImbalanceBuyZoneColor, opByte);
+        _supplyZoneBrush = GetBrushFromName(_settings.ImbalanceSellZoneColor, opByte);
+
+        // Recalculate bars and redraw chart
+        _engine.RecalculateAllBars(_engine.ImbalanceRatio, _engine.ConsecutiveLevels, _settings.BarVaPercent);
         RedrawAll();
+    }
+
+    private void OkProperties_Click(object sender, RoutedEventArgs e)
+    {
+        ApplyProperties_Click(sender, e);
         CloseProperties_Click(sender, e);
     }
 
     private void ResetPropertiesToNt8_Click(object sender, RoutedEventArgs e)
     {
-        if (PropClusterTypeCombo != null) PropClusterTypeCombo.SelectedIndex = 0;
-        if (PropTicksPerLevelText != null) PropTicksPerLevelText.Text = "100 (5 pts for Nifty)";
-        if (PropShowCandleCheck != null) PropShowCandleCheck.IsChecked = true;
-        if (PropShowBarDeltaCheck != null) PropShowBarDeltaCheck.IsChecked = true;
-        if (PropShowImbalancesCheck != null) PropShowImbalancesCheck.IsChecked = true;
-        if (PropImbalanceRatioCombo != null) PropImbalanceRatioCombo.SelectedIndex = 0;
-        if (PropShowStackedZonesCheck != null) PropShowStackedZonesCheck.IsChecked = true;
-        if (PropShowAbsorptionCheck != null) PropShowAbsorptionCheck.IsChecked = true;
-        if (PropShowBarPocCheck != null) PropShowBarPocCheck.IsChecked = true;
-        if (PropShowBarVaCheck != null) PropShowBarVaCheck.IsChecked = true;
-        if (PropShowDevelopingPocCheck != null) PropShowDevelopingPocCheck.IsChecked = true;
-        if (PropShowVwapCheck != null) PropShowVwapCheck.IsChecked = true;
-        if (PropShowProfileCheck != null) PropShowProfileCheck.IsChecked = true;
-        if (PropShowCvdCheck != null) PropShowCvdCheck.IsChecked = true;
+        _settings = new MzFootprintSettings();
+        string sym = _engine.ActiveContract.Symbol;
+        if (sym.Contains("TATASTEEL")) _settings.TicksPerLevel = 1;
+        else if (sym.Contains("NIFTY")) _settings.TicksPerLevel = 100;
+        else if (sym.Contains("BANKNIFTY")) _settings.TicksPerLevel = 200;
+        else if (sym.Contains("HDFCLIFE")) _settings.TicksPerLevel = 5;
+        else if (sym.Contains("RELIANCE")) _settings.TicksPerLevel = 20;
+        else if (sym == "ES") _settings.TicksPerLevel = 4;
+        else _settings.TicksPerLevel = 20;
 
-        _showCandleLine = true;
-        _showZones = true;
-        _showAbsorption = true;
-        _showPatterns = true;
-        _showPocLine = true;
-        _showVwap = true;
-        _showProfile = true;
-        _showCvd = true;
-        _showBarDelta = true;
-
-        if (ShowCandleCheck != null) ShowCandleCheck.IsChecked = true;
-        if (ShowZonesCheck != null) ShowZonesCheck.IsChecked = true;
-        if (ShowAbsCheck != null) ShowAbsCheck.IsChecked = true;
-        if (ShowPocLineCheck != null) ShowPocLineCheck.IsChecked = true;
-        if (ShowVwapCheck != null) ShowVwapCheck.IsChecked = true;
-        if (ShowProfileCheck != null) ShowProfileCheck.IsChecked = true;
-        if (ShowCvdCheck != null) ShowCvdCheck.IsChecked = true;
-
+        _engine.TicksPerLevel = _settings.TicksPerLevel;
         _engine.ImbalanceRatio = 4.0;
-        _engine.RecalculateAllBars(4.0);
+        _engine.ConsecutiveLevels = 2;
+        _engine.ZoneEndingMode = "ByBarHighLow";
+
+        _buyImbalanceBrush = GetBrushFromName(_settings.ImbalanceBuyZoneColor);
+        _sellImbalanceBrush = GetBrushFromName(_settings.ImbalanceSellZoneColor);
+        byte opByte = (byte)Math.Clamp((int)(255 * _settings.ImbalanceSrOpacityPercent / 100.0), 10, 255);
+        _demandZoneBrush = GetBrushFromName(_settings.ImbalanceBuyZoneColor, opByte);
+        _supplyZoneBrush = GetBrushFromName(_settings.ImbalanceSellZoneColor, opByte);
+
+        _showCandleLine = _settings.ShowCandleLine;
+        _showZones = _settings.ImbalanceSrZonesEnable;
+        _showAbsorption = _settings.AbsorptionShow;
+        _showPatterns = false;
+        _showBarDelta = _settings.BarStatDelta;
+        _showPocLine = _settings.BarPocsShow;
+        _showVwap = _settings.ShowVwap;
+        _showProfile = _settings.ShowSessionProfile;
+        _showCvd = _settings.ShowCvd;
+
+        OpenProperties_Click(sender, e);
+        _engine.RecalculateAllBars(4.0, 2, _settings.BarVaPercent);
         RedrawAll();
     }
 

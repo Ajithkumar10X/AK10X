@@ -225,6 +225,16 @@ public partial class MainWindow : Window
             UpdateLayout();
             SaveVisualToPng(Path.Combine(outputDir, "orderflow_footprint_tatasteel.png"));
 
+            // 3c. Snapshot OrderFlowView with Mode = Bid
+            OrderFlowView.SetFootprintMode("Bid");
+            OrderFlowView.RedrawAll();
+            UpdateLayout();
+            SaveVisualToPng(Path.Combine(outputDir, "orderflow_footprint_bid_mode.png"));
+
+            // Restore Mode = Bid x Ask
+            OrderFlowView.SetFootprintMode("Bid x Ask");
+            OrderFlowView.RedrawAll();
+
             // 4. Snapshot NinjaTrader 8 mzFootprint Properties Modal
             OrderFlowView.OpenProperties_Click(this, new RoutedEventArgs());
             UpdateLayout();

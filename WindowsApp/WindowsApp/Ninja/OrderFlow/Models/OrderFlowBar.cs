@@ -24,6 +24,8 @@ public class OrderFlowBar
     public long MaxDelta { get; set; }
 
     public double PocPrice { get; set; }
+    public double VaHighPrice { get; set; }
+    public double VaLowPrice { get; set; }
     public bool IsBullish => Close >= Open;
 
     // Advanced MZ Footprint patterns
@@ -35,7 +37,7 @@ public class OrderFlowBar
 
     public ObservableCollection<OrderFlowPriceLevel> Levels { get; } = new();
 
-    public void RecalculatePocAndImbalances(double imbalanceRatio = 3.0, long minImbalanceVolume = 15)
+    public void RecalculatePocAndImbalances(double imbalanceRatio = 4.0, long minImbalanceVolume = 10, int consecutiveLevels = 2, double vaPercent = 70.0)
     {
         if (Levels.Count == 0) return;
 
@@ -101,12 +103,12 @@ public class OrderFlowBar
                 }
             }
 
-            if (consecutiveBuy >= 3)
+            if (consecutiveBuy >= consecutiveLevels)
             {
                 HasStackedBuyImbalance = true;
                 current.IsStackedImbalance = true;
             }
-            if (consecutiveSell >= 3)
+            if (consecutiveSell >= consecutiveLevels)
             {
                 HasStackedSellImbalance = true;
                 current.IsStackedImbalance = true;
@@ -138,6 +140,63 @@ public class OrderFlowBar
             var lowest = sortedDesc.Last();
             IsUnfinishedAuctionHigh = highest.BidVolume > 0 && highest.AskVolume > 0;
             IsUnfinishedAuctionLow = lowest.BidVolume > 0 && lowest.AskVolume > 0;
+        }
+
+        // 3. Value Area (VA) Calculation (typically 70% of total bar volume centered on POC)
+        long totalBarVol = Levels.Sum(l => l.TotalVolume);
+        long targetVaVol = (long)(totalBarVol * Math.Clamp(vaPercent / 100.0, 0.1, 1.0));
+        long runningVaVol = 0;
+
+        int pocIndex = sortedDesc.FindIndex(l => Math.Abs(l.Price - PocPrice) < 0.0001);
+        if (pocIndex >= 0)
+        {
+            sortedDesc[pocIndex].IsValueArea = true;
+            runningVaVol += sortedDesc[pocIndex].TotalVolume;
+            int upIdx = pocIndex - 1;
+            int downIdx = pocIndex + 1;
+
+            while (runningVaVol < targetVaVol && (upIdx >= 0 || downIdx < sortedDesc.Count))
+            {
+                long upVol = upIdx >= 0 ? sortedDesc[upIdx].TotalVolume : -1;
+                long downVol = downIdx < sortedDesc.Count ? sortedDesc[downIdx].TotalVolume : -1;
+
+                if (upVol >= downVol && upIdx >= 0)
+                {
+                    sortedDesc[upIdx].IsValueArea = true;
+                    runningVaVol += upVol;
+                    upIdx--;
+                }
+                else if (downIdx < sortedDesc.Count)
+                {
+                    sortedDesc[downIdx].IsValueArea = true;
+                    runningVaVol += downVol;
+                    downIdx++;
+                }
+                else if (upIdx >= 0)
+                {
+                    sortedDesc[upIdx].IsValueArea = true;
+                    runningVaVol += upVol;
+                    upIdx--;
+                }
+                else break;
+            }
+
+            var vaLevels = sortedDesc.Where(l => l.IsValueArea).ToList();
+            if (vaLevels.Count > 0)
+            {
+                VaHighPrice = vaLevels.First().Price;
+                VaLowPrice = vaLevels.Last().Price;
+            }
+            else
+            {
+                VaHighPrice = PocPrice;
+                VaLowPrice = PocPrice;
+            }
+        }
+        else
+        {
+            VaHighPrice = High;
+            VaLowPrice = Low;
         }
     }
 }

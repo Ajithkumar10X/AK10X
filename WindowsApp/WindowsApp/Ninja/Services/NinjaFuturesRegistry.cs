@@ -237,8 +237,8 @@ public class NinjaFuturesRegistry
                 PointValue = 5500.0,
                 DayMargin = 300m,
                 InitialMargin = 2200m,
-                CurrentPrice = 154.50,
-                PreviousClose = 153.80,
+                CurrentPrice = 171.74,
+                PreviousClose = 171.25,
                 FrontMonth = "OCT-26"
             },
             new()

@@ -18,4 +18,5 @@ public class OrderFlowPriceLevel
     public bool IsStackedImbalance { get; set; }
     public bool IsAbsorption { get; set; }
     public bool IsExhaustion { get; set; }
+    public bool IsValueArea { get; set; }
 }
