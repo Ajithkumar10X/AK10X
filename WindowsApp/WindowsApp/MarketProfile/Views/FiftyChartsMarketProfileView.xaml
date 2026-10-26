@@ -25,112 +25,13 @@
             <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
 
-        <!-- High Contrast Custom ComboBox Template & Styles -->
-        <ControlTemplate x:Key="FiftyChartsComboBoxToggleButton" TargetType="ToggleButton">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition />
-                    <ColumnDefinition Width="22" />
-                </Grid.ColumnDefinitions>
-                <Border x:Name="Border" Grid.ColumnSpan="2" CornerRadius="4" 
-                        Background="#122229" BorderBrush="#254250" BorderThickness="1" />
-                <Border Grid.Column="0" Margin="1" Background="#0E1A20" CornerRadius="3,0,0,3" />
-                <Path x:Name="Arrow" Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center"
-                      Data="M 0 0 L 4 4 L 8 0 Z" Fill="#38BDF8" SnapsToDevicePixels="True"/>
-            </Grid>
-            <ControlTemplate.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter TargetName="Border" Property="BorderBrush" Value="#38BDF8" />
-                    <Setter TargetName="Arrow" Property="Fill" Value="#FFFFFF" />
-                </Trigger>
-            </ControlTemplate.Triggers>
-        </ControlTemplate>
-
-        <Style x:Key="FiftyChartsComboBoxItem" TargetType="ComboBoxItem">
-            <Setter Property="SnapsToDevicePixels" Value="True"/>
-            <Setter Property="Padding" Value="10,6"/>
-            <Setter Property="Background" Value="#0A141A"/>
-            <Setter Property="Foreground" Value="#F8FAFC"/>
-            <Setter Property="FontSize" Value="11"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="ComboBoxItem">
-                        <Border x:Name="ItemBorder" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}" CornerRadius="3" Margin="1">
-                            <ContentPresenter VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="ItemBorder" Property="Background" Value="#1D3845"/>
-                                <Setter Property="Foreground" Value="#38BDF8"/>
-                            </Trigger>
-                            <Trigger Property="IsSelected" Value="True">
-                                <Setter TargetName="ItemBorder" Property="Background" Value="#1E3A8A"/>
-                                <Setter Property="Foreground" Value="#FFFFFF"/>
-                                <Setter Property="FontWeight" Value="Bold"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <Style x:Key="FiftyChartsComboBox" TargetType="ComboBox">
-            <Setter Property="SnapsToDevicePixels" Value="True"/>
-            <Setter Property="OverridesDefaultStyle" Value="True"/>
-            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Auto"/>
-            <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto"/>
-            <Setter Property="ScrollViewer.CanContentScroll" Value="True"/>
-            <Setter Property="MinWidth" Value="90"/>
-            <Setter Property="MinHeight" Value="26"/>
-            <Setter Property="Foreground" Value="#FFFFFF"/>
-            <Setter Property="FontSize" Value="11"/>
-            <Setter Property="FontWeight" Value="Bold"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="ItemContainerStyle" Value="{StaticResource FiftyChartsComboBoxItem}"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="ComboBox">
-                        <Grid>
-                            <ToggleButton x:Name="ToggleButton" Template="{StaticResource FiftyChartsComboBoxToggleButton}" 
-                                          Focusable="False" IsChecked="{Binding Path=IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}" 
-                                          ClickMode="Press"/>
-                            <ContentPresenter x:Name="ContentSite" IsHitTestVisible="False" 
-                                              Content="{TemplateBinding SelectionBoxItem}" 
-                                              ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}" 
-                                              ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}" 
-                                              Margin="10,3,24,3" VerticalAlignment="Center" HorizontalAlignment="Left">
-                                <ContentPresenter.Resources>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="Foreground" Value="#FFFFFF"/>
-                                        <Setter Property="FontWeight" Value="Bold"/>
-                                        <Setter Property="FontSize" Value="11"/>
-                                    </Style>
-                                </ContentPresenter.Resources>
-                            </ContentPresenter>
-                            <Popup x:Name="Popup" Placement="Bottom" IsOpen="{TemplateBinding IsDropDownOpen}" 
-                                   AllowsTransparency="True" Focusable="False" PopupAnimation="Slide">
-                                <Grid x:Name="DropDown" SnapsToDevicePixels="True" MinWidth="{TemplateBinding ActualWidth}" MaxHeight="{TemplateBinding MaxDropDownHeight}">
-                                    <Border x:Name="DropDownBorder" Background="#0A141A" BorderBrush="#254250" BorderThickness="1" CornerRadius="4" Margin="0,2,0,0"/>
-                                    <ScrollViewer Margin="2,4" SnapsToDevicePixels="True">
-                                        <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained" />
-                                    </ScrollViewer>
-                                </Grid>
-                            </Popup>
-                        </Grid>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
         <Style x:Key="FiftyChartsButton" TargetType="Button">
             <Setter Property="Background" Value="#122229"/>
             <Setter Property="Foreground" Value="#E2E8F0"/>
             <Setter Property="BorderBrush" Value="#254250"/>
             <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Padding" Value="10,5"/>
-            <Setter Property="Margin" Value="3,0"/>
+            <Setter Property="Padding" Value="10,4"/>
+            <Setter Property="Margin" Value="2,0"/>
             <Setter Property="FontSize" Value="11"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Cursor" Value="Hand"/>
@@ -148,9 +49,10 @@
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter Property="Background" Value="#1D3845"/>
                                 <Setter Property="BorderBrush" Value="#38BDF8"/>
+                                <Setter Property="Foreground" Value="#FFFFFF"/>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter Property="Background" Value="#0A161C"/>
+                                <Setter Property="Background" Value="#0E1A20"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -162,118 +64,100 @@
             <Setter Property="Foreground" Value="#94A3B8"/>
             <Setter Property="FontSize" Value="11"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Margin" Value="8,0"/>
+            <Setter Property="Margin" Value="5,0"/>
             <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Border x:Name="border" Background="#0E1A20" BorderBrush="#1D3845" BorderThickness="1" 
+                                CornerRadius="4" Padding="7,3">
+                            <StackPanel Orientation="Horizontal">
+                                <Border x:Name="checkIndicator" Width="10" Height="10" CornerRadius="2" 
+                                        Background="#162730" BorderBrush="#334155" BorderThickness="1" Margin="0,0,5,0">
+                                    <Path x:Name="checkMark" Data="M 1 4 L 4 7 L 9 1" Stroke="#38BDF8" StrokeThickness="1.5" 
+                                          Visibility="Collapsed"/>
+                                </Border>
+                                <ContentPresenter VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="border" Property="BorderBrush" Value="#0284C7"/>
+                                <Setter TargetName="border" Property="Background" Value="#0C2433"/>
+                                <Setter TargetName="checkIndicator" Property="Background" Value="#0284C7"/>
+                                <Setter TargetName="checkMark" Property="Visibility" Value="Visible"/>
+                                <Setter Property="Foreground" Value="#F0F9FF"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="BorderBrush" Value="#38BDF8"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
     </UserControl.Resources>
 
     <Grid>
         <Grid.RowDefinitions>
-            <!-- Top 50Charts Header Banner -->
+            <!-- Row 0: AmiBroker-style Multi-Chart Tab Bar (N number of charts) -->
             <RowDefinition Height="Auto"/>
-            <!-- Secondary Toolbar (Split/Merge, TPO Size, Toggles) -->
+            <!-- Row 1: 50Charts Settings & Merge/Unmerge Toolbar -->
             <RowDefinition Height="Auto"/>
-            <!-- Main Chart Area (TPO Canvas + Price Ladder) -->
+            <!-- Row 2: Main Profile Chart Surface -->
             <RowDefinition Height="*"/>
-            <!-- Bottom 50Charts Summary / Stats Panel -->
+            <!-- Row 3: AmiBroker Sheet Tabs & Timeline Bar -->
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- Row 0: Top 50Charts Title & Live Stats Bar -->
-        <Border Grid.Row="0" Background="#0A141A" BorderBrush="#162730" BorderThickness="0,0,0,1" Padding="14,8">
+        <!-- Row 0: AmiBroker-style Multi-Chart Tab Bar -->
+        <Border Grid.Row="0" Background="#050B0E" BorderBrush="#162730" BorderThickness="0,0,0,1" Padding="6,3">
             <Grid>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- 50Charts Logo & Title -->
-                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Border Background="#CA8A29" CornerRadius="4" Padding="6,2" Margin="0,0,10,0">
-                        <TextBlock Text="50C" FontWeight="Bold" FontSize="11" Foreground="#070D10"/>
-                    </Border>
-                    <TextBlock Text="50Charts - Market Profile (Dark Theme)" FontSize="13" FontWeight="Bold" Foreground="#CA8A29" VerticalAlignment="Center"/>
-                    <Border Background="#122229" BorderBrush="#254250" BorderThickness="1" CornerRadius="4" Padding="6,2" Margin="8,0,0,0" VerticalAlignment="Center">
-                        <TextBlock Text="v8.1 REA Ported" Foreground="#38BDF8" FontSize="10" FontWeight="Bold"/>
-                    </Border>
-                    <Border Background="#064E3B" BorderBrush="#059669" BorderThickness="1" CornerRadius="4" Padding="6,2" Margin="6,0,0,0" VerticalAlignment="Center">
-                        <TextBlock Text="AccelPix Connected" Foreground="#34D399" FontSize="10" FontWeight="Bold"/>
-                    </Border>
-                </StackPanel>
+                <!-- Dynamic Chart Tabs List -->
+                <ScrollViewer Grid.Column="0" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled">
+                    <StackPanel x:Name="ChartTabsPanel" Orientation="Horizontal" VerticalAlignment="Center">
+                        <!-- Chart Tabs populated dynamically in code-behind -->
+                    </StackPanel>
+                </ScrollViewer>
 
-                <!-- Current Profile Metrics (50Charts style) -->
-                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-                    <TextBlock Text="Symbol:" Style="{StaticResource HeaderLabel}"/>
-                    <ComboBox x:Name="SymbolCombo" Width="150" Height="26" Margin="0,0,12,0" 
-                              Style="{StaticResource FiftyChartsComboBox}"
-                              SelectionChanged="SymbolCombo_SelectionChanged">
-                        <ComboBoxItem Content="NIFTY_I (NSE)" IsSelected="True"/>
-                        <ComboBoxItem Content="BANKNIFTY_I (NSE)"/>
-                        <ComboBoxItem Content="TATASTEEL_I (NSE)"/>
-                        <ComboBoxItem Content="HDFCBANK_I (NSE)"/>
-                        <ComboBoxItem Content="ES (CME Futures)"/>
-                        <ComboBoxItem Content="GC (COMEX Gold)"/>
-                    </ComboBox>
+                <!-- Add New Chart Button & AccelPix Status -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="AddChartBtn" Content="➕ Add Chart" Style="{StaticResource FiftyChartsButton}" 
+                            Background="#1E3A8A" BorderBrush="#3B82F6" Foreground="#FFFFFF"
+                            Click="AddChartBtn_Click" Margin="0,0,8,0" ToolTip="Open a new symbol chart tab"/>
+                    
+                    <Popup x:Name="AddChartPopup" Placement="Bottom" PlacementTarget="{Binding ElementName=AddChartBtn}" 
+                           StaysOpen="False" AllowsTransparency="True">
+                        <Border Background="#0A141A" BorderBrush="#254250" BorderThickness="1" CornerRadius="6" Padding="6" Margin="0,4,0,0">
+                            <StackPanel x:Name="SymbolPopupList" Width="180">
+                                <!-- Populated dynamically with symbols -->
+                            </StackPanel>
+                        </Border>
+                    </Popup>
 
-                    <TextBlock Text="TPO TF:" Style="{StaticResource HeaderLabel}"/>
-                    <ComboBox x:Name="TpoTfCombo" Width="90" Height="26" Margin="0,0,12,0" 
-                              Style="{StaticResource FiftyChartsComboBox}"
-                              SelectionChanged="TpoTfCombo_SelectionChanged">
-                        <ComboBoxItem Content="30 min" IsSelected="True"/>
-                        <ComboBoxItem Content="15 min"/>
-                        <ComboBoxItem Content="5 min"/>
-                    </ComboBox>
-
-                    <TextBlock Text="Period:" Style="{StaticResource HeaderLabel}"/>
-                    <TextBlock x:Name="PeriodText" Text="Daily" Style="{StaticResource HeaderValue}"/>
-
-                    <TextBlock Text="TPO Size:" Style="{StaticResource HeaderLabel}"/>
-                    <TextBlock x:Name="TpoSizeText" Text="3.0 pts" Style="{StaticResource HeaderValue}"/>
-
-                    <TextBlock Text="Today POC:" Style="{StaticResource HeaderLabel}"/>
-                    <TextBlock x:Name="TodayPocText" Text="24,375.00" Style="{StaticResource HeaderValue}" Foreground="#FFFF00"/>
-
-                    <TextBlock Text="VAH:" Style="{StaticResource HeaderLabel}"/>
-                    <TextBlock x:Name="TodayVahText" Text="24,402.00" Style="{StaticResource HeaderValue}" Foreground="#38BDF8"/>
-
-                    <TextBlock Text="VAL:" Style="{StaticResource HeaderLabel}"/>
-                    <TextBlock x:Name="TodayValText" Text="24,352.00" Style="{StaticResource HeaderValue}" Foreground="#38BDF8"/>
-
-                    <TextBlock Text="IB Range:" Style="{StaticResource HeaderLabel}"/>
-                    <TextBlock x:Name="IbRangeText" Text="45.0 pts" Style="{StaticResource HeaderValue}" Foreground="#00FF00"/>
-                </StackPanel>
-
-                <!-- AccelPix Live Feeder Controls & Status -->
-                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                    <!-- Live Feed Toggle Button -->
-                    <Border x:Name="LiveStreamBadge" Background="#064E3B" BorderBrush="#059669" BorderThickness="1" CornerRadius="4" 
-                            Padding="8,4" Margin="0,0,8,0" Cursor="Hand" MouseLeftButtonDown="LiveStreamBadge_Click">
+                    <!-- Market Status Badge (Closed / Open / Replay) -->
+                    <Border x:Name="MarketStatusBadge" Background="#1E293B" BorderBrush="#334155" BorderThickness="1" CornerRadius="4" 
+                            Padding="8,3" Margin="0,0,6,0">
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <Ellipse x:Name="LiveStreamDot" Width="7" Height="7" Fill="#10B981" Margin="0,0,6,0" VerticalAlignment="Center"/>
-                            <TextBlock x:Name="LiveLtpText" Text="LTP: 24,374.50" Foreground="#D1FAE5" FontSize="11" FontWeight="Bold"/>
+                            <Ellipse x:Name="MarketStatusDot" Width="7" Height="7" Fill="#64748B" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="MarketStatusText" Text="Market Closed (NSE)" Foreground="#94A3B8" FontSize="10" FontWeight="Bold"/>
                         </StackPanel>
                     </Border>
 
-                    <!-- Stream Speed Multiplier -->
-                    <ComboBox x:Name="StreamSpeedCombo" Width="65" Height="26" Margin="0,0,8,0" 
-                              Style="{StaticResource FiftyChartsComboBox}" 
-                              SelectionChanged="StreamSpeedCombo_SelectionChanged">
-                        <ComboBoxItem Content="1x" IsSelected="True"/>
-                        <ComboBoxItem Content="2x"/>
-                        <ComboBoxItem Content="5x"/>
-                        <ComboBoxItem Content="10x"/>
-                    </ComboBox>
-
-                    <Button x:Name="LaunchPixBtn" Content="⚡ PixConnect" Style="{StaticResource FiftyChartsButton}" 
-                            ToolTip="Check or launch AccelPix PixConnect application" Click="LaunchPixBtn_Click"/>
+                    <!-- Replay / Simulate Live Toggle -->
+                    <Button x:Name="SimulateReplayBtn" Content="▶ Test Replay" Style="{StaticResource FiftyChartsButton}" 
+                            Click="SimulateReplayBtn_Click" ToolTip="Simulate live AccelPix tick feed after market hours"/>
                 </StackPanel>
             </Grid>
         </Border>
 
-        <!-- Row 1: Interactive Toolbars & Toggles -->
-        <Border Grid.Row="1" Background="#070D10" BorderBrush="#162730" BorderThickness="0,0,0,1" Padding="14,6">
+        <!-- Row 1: 50Charts Settings & Merge/Unmerge Toolbar -->
+        <Border Grid.Row="1" Background="#0A1217" BorderBrush="#162730" BorderThickness="0,0,0,1" Padding="8,4">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
@@ -281,11 +165,15 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- Left Profile View Mode (Split vs Merged) -->
+                <!-- Left: View Mode (Dual vs Merged vs Split) & Multi-Day Merge/Unmerge -->
                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Border Background="#122229" BorderBrush="#254250" BorderThickness="1" CornerRadius="4" Padding="2" Margin="0,0,10,0">
+                    <!-- Mode Radio Buttons -->
+                    <Border Background="#122229" BorderBrush="#254250" BorderThickness="1" CornerRadius="4" Padding="2" Margin="0,0,6,0">
                         <StackPanel Orientation="Horizontal">
-                            <RadioButton x:Name="MergedRadio" Content="📊 Merged Profile" IsChecked="True" 
+                            <RadioButton x:Name="DualRadio" Content="🌟 50Charts Mode" IsChecked="True" 
+                                         Foreground="#E2E8F0" FontSize="11" FontWeight="Bold" Margin="4,2" 
+                                         Cursor="Hand" Checked="ProfileMode_Changed"/>
+                            <RadioButton x:Name="MergedRadio" Content="📊 Merged" 
                                          Foreground="#E2E8F0" FontSize="11" FontWeight="Bold" Margin="4,2" 
                                          Cursor="Hand" Checked="ProfileMode_Changed"/>
                             <RadioButton x:Name="SplitRadio" Content="🔀 Split (A-M)" 
@@ -294,21 +182,44 @@
                         </StackPanel>
                     </Border>
 
+                    <!-- Multi-Day Merge / Unmerge Actions -->
+                    <Border Background="#122229" BorderBrush="#254250" BorderThickness="1" CornerRadius="4" Padding="2" Margin="0,0,6,0">
+                        <StackPanel Orientation="Horizontal">
+                            <Button x:Name="MergeDaysBtn" Content="🔗 Merge Days" Style="{StaticResource FiftyChartsButton}" 
+                                    Click="MergeDaysBtn_Click" ToolTip="Merge visible daily profiles into a single composite profile"/>
+                            <Button x:Name="UnmergeDaysBtn" Content="✂️ Unmerge All" Style="{StaticResource FiftyChartsButton}" 
+                                    Click="UnmergeDaysBtn_Click" ToolTip="Restore separate daily market profiles"/>
+                        </StackPanel>
+                    </Border>
+
                     <!-- Feature Toggles -->
-                    <CheckBox x:Name="ToggleVa" Content="Value Area (70%)" IsChecked="True" Style="{StaticResource FiftyChartsToggleButton}" Click="Toggle_Click"/>
-                    <CheckBox x:Name="ToggleIb" Content="Initial Balance (IB)" IsChecked="True" Style="{StaticResource FiftyChartsToggleButton}" Click="Toggle_Click"/>
+                    <CheckBox x:Name="ToggleVa" Content="Value Area" IsChecked="True" Style="{StaticResource FiftyChartsToggleButton}" Click="Toggle_Click"/>
+                    <CheckBox x:Name="ToggleIb" Content="IB (A+B)" IsChecked="True" Style="{StaticResource FiftyChartsToggleButton}" Click="Toggle_Click"/>
                     <CheckBox x:Name="TogglePoc" Content="POC / VPOC" IsChecked="True" Style="{StaticResource FiftyChartsToggleButton}" Click="Toggle_Click"/>
-                    <CheckBox x:Name="ToggleSp" Content="Single Prints (SP)" IsChecked="True" Style="{StaticResource FiftyChartsToggleButton}" Click="Toggle_Click"/>
-                    <CheckBox x:Name="ToggleVp" Content="Volume Profile Overlay" IsChecked="True" Style="{StaticResource FiftyChartsToggleButton}" Click="Toggle_Click"/>
-                    <CheckBox x:Name="ToggleHalfback" Content="Halfback (50%)" IsChecked="True" Style="{StaticResource FiftyChartsToggleButton}" Click="Toggle_Click"/>
+                    <CheckBox x:Name="ToggleSp" Content="Single Prints" IsChecked="True" Style="{StaticResource FiftyChartsToggleButton}" Click="Toggle_Click"/>
+                    <CheckBox x:Name="ToggleVp" Content="Volume Profile" IsChecked="True" Style="{StaticResource FiftyChartsToggleButton}" Click="Toggle_Click"/>
                 </StackPanel>
 
-                <!-- Zoom and Reset Toolbar -->
+                <!-- Center Pill Summary (Clean, compact, no cutoffs) -->
+                <Border Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center"
+                        Background="#0D1A22" BorderBrush="#1E3845" BorderThickness="1" CornerRadius="4" Padding="10,3">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="Symbol: " Foreground="#808080" FontSize="11"/>
+                        <TextBlock x:Name="ActiveSymbolHeader" Text="HDFCLIFE_I" Foreground="#FFFFFF" FontSize="11" FontWeight="Bold" Margin="0,0,10,0"/>
+                        <TextBlock Text="POC: " Foreground="#808080" FontSize="11"/>
+                        <TextBlock x:Name="TodayPocText" Text="519.50" Foreground="#FACC15" FontSize="11" FontWeight="Bold" Margin="0,0,10,0"/>
+                        <TextBlock Text="VA: " Foreground="#808080" FontSize="11"/>
+                        <TextBlock x:Name="TodayVaSummaryText" Text="518 - 522" Foreground="#38BDF8" FontSize="11" FontWeight="Bold" Margin="0,0,10,0"/>
+                        <TextBlock Text="LTP: " Foreground="#808080" FontSize="11"/>
+                        <TextBlock x:Name="LiveLtpText" Text="521.00" Foreground="#60A5FA" FontSize="11" FontWeight="Bold"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- Right Toolbar -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Button x:Name="ZoomInBtn" Content="🔍 Zoom In (+)" Style="{StaticResource FiftyChartsButton}" Click="ZoomIn_Click"/>
-                    <Button x:Name="ZoomOutBtn" Content="🔍 Zoom Out (-)" Style="{StaticResource FiftyChartsButton}" Click="ZoomOut_Click"/>
+                    <Button x:Name="ZoomInBtn" Content="🔍 Zoom (+)" Style="{StaticResource FiftyChartsButton}" Click="ZoomIn_Click"/>
+                    <Button x:Name="ZoomOutBtn" Content="🔍 Zoom (-)" Style="{StaticResource FiftyChartsButton}" Click="ZoomOut_Click"/>
                     <Button x:Name="ResetZoomBtn" Content="⟲ Reset Zoom" Style="{StaticResource FiftyChartsButton}" Click="ResetZoom_Click"/>
-                    <Button x:Name="ExportRefBtn" Content="📤 Export RefLines" Style="{StaticResource FiftyChartsButton}" Click="ExportRefLines_Click"/>
                     <Button x:Name="RefreshDataBtn" Content="🔄 Refresh Data" Style="{StaticResource FiftyChartsButton}" Click="RefreshData_Click"/>
                 </StackPanel>
             </Grid>
@@ -323,10 +234,10 @@
                 <ColumnDefinition Width="90"/>
             </Grid.ColumnDefinitions>
 
-            <!-- Scrollable & Zoomable Chart Canvas -->
+            <!-- Scrollable Chart Canvas -->
             <ScrollViewer x:Name="ChartScrollViewer" Grid.Column="0" 
-                          HorizontalScrollBarVisibility="Auto" 
-                          VerticalScrollBarVisibility="Auto" 
+                          HorizontalScrollBarVisibility="Hidden" 
+                          VerticalScrollBarVisibility="Hidden" 
                           Background="#070D10"
                           PreviewMouseWheel="ChartScrollViewer_PreviewMouseWheel">
                 <Grid x:Name="ProfileContainerGrid" Background="#070D10" 
@@ -336,6 +247,30 @@
                       Cursor="Cross">
                     <!-- Custom WPF Canvas Rendering Target -->
                     <Canvas x:Name="ProfileDrawingCanvas" Background="#070D10"/>
+
+                    <!-- Transparent Floating HUD (Top-Left 4-Line exact 50Charts display) -->
+                    <Border Margin="10,6,0,0" HorizontalAlignment="Left" VerticalAlignment="Top" IsHitTestVisible="False"
+                            Background="#D9070D10" CornerRadius="3" Padding="6,3">
+                    <StackPanel>
+                        <TextBlock x:Name="HudLine1" Text="Market Profile: HDFCLIFE_I, TPOSize: 0.50 (Auto &amp; Real-time), Distribution: Daily, TPO Interval: 30 min" 
+                                   Foreground="#E69138" FontSize="11" FontWeight="SemiBold" FontFamily="Segoe UI"/>
+                        <TextBlock x:Name="HudLine2" Text="30 min OneTime framing Down (3)" 
+                                   Foreground="#D4A017" FontSize="11" FontWeight="SemiBold" FontFamily="Segoe UI" Margin="0,1,0,0"/>
+                        <TextBlock x:Name="HudLine3" Text="30 min Inside Bar (L)" 
+                                   Foreground="#D4A017" FontSize="11" FontWeight="SemiBold" FontFamily="Segoe UI" Margin="0,1,0,0"/>
+                        <TextBlock x:Name="HudLine4" Margin="0,1,0,0" FontSize="11" FontWeight="Bold" FontFamily="Segoe UI">
+                            <Run x:Name="HudOhlcPrefix" Text="O: 523.90, H: 527.50, L: 512.30, C: 521.00 " Foreground="#D4A017"/>
+                            <Run x:Name="HudChangeText" Text="(-5.15 : -0.99%)" Foreground="#FF3333"/>
+                            <Run x:Name="HudVolText" Text=", V: 32,450K" Foreground="#D4A017"/>
+                        </TextBlock>
+                    </StackPanel>
+                    </Border>
+
+                    <!-- Top-Right 50CHARTS Logo -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,10,16,0" IsHitTestVisible="False">
+                        <Path Data="M0,0 L6,0 L9,5 L6,10 L0,10 L3,5 Z" Fill="#FFFFFF" Width="10" Height="10" Stretch="Fill" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="50CHARTS" FontSize="11" FontWeight="ExtraBold" Foreground="#FFFFFF" FontFamily="Segoe UI"/>
+                    </StackPanel>
                 </Grid>
             </ScrollViewer>
 
@@ -343,9 +278,6 @@
             <Border Grid.Column="1" Background="#0A141A" BorderBrush="#162730" BorderThickness="1,0,0,0">
                 <Grid>
                     <Canvas x:Name="PriceAxisCanvas" Background="Transparent" ClipToBounds="True"/>
-                    <Border VerticalAlignment="Top" HorizontalAlignment="Right" Margin="0,4,4,0">
-                        <TextBlock Text="Price (INR)" FontSize="10" Foreground="#64748B" FontFamily="Consolas"/>
-                    </Border>
                 </Grid>
             </Border>
 
@@ -355,17 +287,17 @@
                     CornerRadius="6" Padding="10,6" IsHitTestVisible="False"
                     HorizontalAlignment="Left" VerticalAlignment="Top">
                 <StackPanel>
-                    <TextBlock x:Name="HoverPriceText" Text="Price: 25,860.00" FontWeight="Bold" Foreground="#FFFF00" FontSize="11"/>
+                    <TextBlock x:Name="HoverPriceText" Text="Price: 521.00" FontWeight="Bold" Foreground="#FFFF00" FontSize="11"/>
                     <TextBlock x:Name="HoverTpoCountText" Text="TPO Count: 11" Foreground="#E2E8F0" FontSize="10"/>
                     <TextBlock x:Name="HoverPeriodsText" Text="Periods: A B C D E F G H I J K" Foreground="#38BDF8" FontSize="10"/>
-                    <TextBlock x:Name="HoverVolumeText" Text="Volume: 42,850 (Buy: 24,100 | Sell: 18,750)" Foreground="#94A3B8" FontSize="10"/>
+                    <TextBlock x:Name="HoverVolumeText" Text="Volume: 42,850" Foreground="#94A3B8" FontSize="10"/>
                     <TextBlock x:Name="HoverStatusText" Text="Status: POC (Point of Control) | Value Area" Foreground="#10B981" FontSize="10" FontWeight="SemiBold"/>
                 </StackPanel>
             </Border>
         </Grid>
 
-        <!-- Row 3: 50Charts Summary Bar / Statistics Table -->
-        <Border Grid.Row="3" Background="#0A141A" BorderBrush="#162730" BorderThickness="0,1,0,0" Padding="14,10">
+        <!-- Row 3: AmiBroker Style Sheet Tabs & Timeline Bar -->
+        <Border Grid.Row="3" Background="#0A141A" BorderBrush="#162730" BorderThickness="0,1,0,0" Padding="8,4">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
@@ -373,69 +305,82 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- Left: 50Charts Legend -->
+                <!-- Left: Sheet Tabs & Navigation -->
                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="50Charts Legend:" FontSize="11" FontWeight="Bold" Foreground="#808080" Margin="0,0,10,0"/>
-                    
-                    <Border Background="#FFFF00" Width="10" Height="10" CornerRadius="2" Margin="0,0,4,0"/>
-                    <TextBlock Text="POC" FontSize="10" Foreground="#CBD5E1" Margin="0,0,8,0"/>
+                    <Border Background="#122229" BorderBrush="#254250" BorderThickness="1" CornerRadius="3" Padding="4,2" Margin="0,0,2,0" Cursor="Hand">
+                        <TextBlock Text="|&lt;&lt;" Foreground="#94A3B8" FontSize="10" FontWeight="Bold"/>
+                    </Border>
+                    <Border Background="#122229" BorderBrush="#254250" BorderThickness="1" CornerRadius="3" Padding="4,2" Margin="0,0,2,0" Cursor="Hand">
+                        <TextBlock Text="&lt;&lt;" Foreground="#94A3B8" FontSize="10" FontWeight="Bold"/>
+                    </Border>
+                    <Border Background="#122229" BorderBrush="#254250" BorderThickness="1" CornerRadius="3" Padding="4,2" Margin="0,0,2,0" Cursor="Hand">
+                        <TextBlock Text="&gt;&gt;" Foreground="#94A3B8" FontSize="10" FontWeight="Bold"/>
+                    </Border>
+                    <Border Background="#122229" BorderBrush="#254250" BorderThickness="1" CornerRadius="3" Padding="4,2" Margin="0,0,8,0" Cursor="Hand">
+                        <TextBlock Text="&gt;&gt;|" Foreground="#94A3B8" FontSize="10" FontWeight="Bold"/>
+                    </Border>
 
-                    <Border Background="#8C8C00" Width="10" Height="10" CornerRadius="2" Margin="0,0,4,0"/>
-                    <TextBlock Text="VPOC" FontSize="10" Foreground="#CBD5E1" Margin="0,0,8,0"/>
-
-                    <Border Background="#122229" BorderBrush="#38BDF8" BorderThickness="1" Width="10" Height="10" CornerRadius="2" Margin="0,0,4,0"/>
-                    <TextBlock Text="VA 70%" FontSize="10" Foreground="#CBD5E1" Margin="0,0,8,0"/>
-
-                    <Border Background="#00FF00" Width="10" Height="10" CornerRadius="2" Margin="0,0,4,0"/>
-                    <TextBlock Text="IB (A+B)" FontSize="10" Foreground="#CBD5E1" Margin="0,0,8,0"/>
-
-                    <Border Background="#00783C" Width="10" Height="10" CornerRadius="2" Margin="0,0,4,0"/>
-                    <TextBlock Text="Buy SP" FontSize="10" Foreground="#CBD5E1" Margin="0,0,8,0"/>
-
-                    <Border Background="#960000" Width="10" Height="10" CornerRadius="2" Margin="0,0,4,0"/>
-                    <TextBlock Text="Sell SP" FontSize="10" Foreground="#CBD5E1" Margin="0,0,8,0"/>
-
-                    <Border Background="#464691" Width="10" Height="10" CornerRadius="2" Margin="0,0,4,0"/>
-                    <TextBlock Text="Poor H/L" FontSize="10" Foreground="#CBD5E1" Margin="0,0,8,0"/>
-
-                    <Border Background="#47B2B2" Width="10" Height="10" CornerRadius="2" Margin="0,0,4,0"/>
-                    <TextBlock Text="Volume Profile" FontSize="10" Foreground="#CBD5E1" Margin="0,0,8,0"/>
+                    <!-- Sheet 1 to Sheet 8 Tabs -->
+                    <Border Background="#1E3A8A" BorderBrush="#3B82F6" BorderThickness="1" CornerRadius="3" Padding="8,3" Margin="0,0,2,0" Cursor="Hand">
+                        <TextBlock Text="Sheet 1" Foreground="#FFFFFF" FontSize="10" FontWeight="Bold"/>
+                    </Border>
+                    <Border Background="#122229" BorderBrush="#254250" BorderThickness="1" CornerRadius="3" Padding="8,3" Margin="0,0,2,0" Cursor="Hand">
+                        <TextBlock Text="Sheet 2" Foreground="#94A3B8" FontSize="10"/>
+                    </Border>
+                    <Border Background="#122229" BorderBrush="#254250" BorderThickness="1" CornerRadius="3" Padding="8,3" Margin="0,0,2,0" Cursor="Hand">
+                        <TextBlock Text="Sheet 3" Foreground="#94A3B8" FontSize="10"/>
+                    </Border>
+                    <Border Background="#122229" BorderBrush="#254250" BorderThickness="1" CornerRadius="3" Padding="8,3" Margin="0,0,2,0" Cursor="Hand">
+                        <TextBlock Text="Sheet 4" Foreground="#94A3B8" FontSize="10"/>
+                    </Border>
+                    <Border Background="#122229" BorderBrush="#254250" BorderThickness="1" CornerRadius="3" Padding="8,3" Margin="0,0,2,0" Cursor="Hand">
+                        <TextBlock Text="Sheet 5" Foreground="#94A3B8" FontSize="10"/>
+                    </Border>
+                    <Border Background="#122229" BorderBrush="#254250" BorderThickness="1" CornerRadius="3" Padding="8,3" Margin="0,0,2,0" Cursor="Hand">
+                        <TextBlock Text="Sheet 6" Foreground="#94A3B8" FontSize="10"/>
+                    </Border>
+                    <Border Background="#122229" BorderBrush="#254250" BorderThickness="1" CornerRadius="3" Padding="8,3" Margin="0,0,2,0" Cursor="Hand">
+                        <TextBlock Text="Sheet 7" Foreground="#94A3B8" FontSize="10"/>
+                    </Border>
+                    <Border Background="#122229" BorderBrush="#254250" BorderThickness="1" CornerRadius="3" Padding="8,3" Margin="0,0,2,0" Cursor="Hand">
+                        <TextBlock Text="Sheet 8" Foreground="#94A3B8" FontSize="10"/>
+                    </Border>
                 </StackPanel>
 
                 <!-- Center: Session Metrics Cards -->
                 <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-                    <Border Background="#122229" CornerRadius="4" Padding="8,4" Margin="4,0">
+                    <Border Background="#122229" CornerRadius="4" Padding="6,2" Margin="3,0">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="Open Type: " Foreground="#808080" FontSize="10"/>
-                            <TextBlock x:Name="SummaryOpenType" Text="Open Test-Drive" Foreground="#F8FAFC" FontSize="10" FontWeight="Bold"/>
+                            <TextBlock x:Name="SummaryOpenType" Text="Open Below PDVA (OAOR)" Foreground="#F8FAFC" FontSize="10" FontWeight="Bold"/>
                         </StackPanel>
                     </Border>
-                    <Border Background="#122229" CornerRadius="4" Padding="8,4" Margin="4,0">
+                    <Border Background="#122229" CornerRadius="4" Padding="6,2" Margin="3,0">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="Rotational Factor: " Foreground="#808080" FontSize="10"/>
-                            <TextBlock x:Name="SummaryRotFactor" Text="+4 (Bullish)" Foreground="#34D399" FontSize="10" FontWeight="Bold"/>
+                            <TextBlock x:Name="SummaryRotFactor" Text="-4 (Bearish)" Foreground="#EF4444" FontSize="10" FontWeight="Bold"/>
                         </StackPanel>
                     </Border>
-                    <Border Background="#122229" CornerRadius="4" Padding="8,4" Margin="4,0">
+                    <Border Background="#122229" CornerRadius="4" Padding="6,2" Margin="3,0">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="IB Status: " Foreground="#808080" FontSize="10"/>
-                            <TextBlock x:Name="SummaryIbStatus" Text="Price Above IB (Breakout)" Foreground="#38BDF8" FontSize="10" FontWeight="Bold"/>
+                            <TextBlock x:Name="SummaryIbStatus" Text="Breakout Down" Foreground="#38BDF8" FontSize="10" FontWeight="Bold"/>
                         </StackPanel>
                     </Border>
-                    <Border Background="#122229" CornerRadius="4" Padding="8,4" Margin="4,0">
+                    <Border Background="#122229" CornerRadius="4" Padding="6,2" Margin="3,0">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="Poor Extremes: " Foreground="#808080" FontSize="10"/>
-                            <TextBlock x:Name="SummaryPoorStatus" Text="None (Clean Taper)" Foreground="#A855F7" FontSize="10" FontWeight="Bold"/>
+                            <TextBlock Text="Extremes: " Foreground="#808080" FontSize="10"/>
+                            <TextBlock x:Name="SummaryPoorStatus" Text="Clean Taper" Foreground="#A855F7" FontSize="10" FontWeight="Bold"/>
                         </StackPanel>
                     </Border>
                 </StackPanel>
 
                 <!-- Right: Profile Range & Total TPOs -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="Day Range: " Foreground="#808080" FontSize="11"/>
-                    <TextBlock x:Name="SummaryRangeText" Text="128.5 pts" Foreground="#CA8A29" FontSize="11" FontWeight="Bold" Margin="0,0,12,0"/>
-                    <TextBlock Text="Total TPOs: " Foreground="#808080" FontSize="11"/>
-                    <TextBlock x:Name="SummaryTotalTpos" Text="142" Foreground="#38BDF8" FontSize="11" FontWeight="Bold"/>
+                    <TextBlock Text="Day Range: " Foreground="#808080" FontSize="10"/>
+                    <TextBlock x:Name="SummaryRangeText" Text="15.2 pts" Foreground="#CA8A29" FontSize="10" FontWeight="Bold" Margin="0,0,10,0"/>
+                    <TextBlock Text="Total TPOs: " Foreground="#808080" FontSize="10"/>
+                    <TextBlock x:Name="SummaryTotalTpos" Text="176" Foreground="#38BDF8" FontSize="10" FontWeight="Bold"/>
                 </StackPanel>
             </Grid>
         </Border>

@@ -30,15 +30,16 @@ public partial class App : Application
                     var mw = Current.Windows.OfType<MainWindow>().FirstOrDefault() ?? (MainWindow as MainWindow);
                     if (mw != null)
                     {
-                        string destDir = @"C:\Users\AK\.gemini\antigravity-ide\brain\603eb494-c65c-4022-b9e5-e29e07d4613c";
+                        string destDir = @"C:\Users\AK\.gemini\antigravity-ide\brain\1c36b6e1-ff50-4c1c-ae71-ef37130ccb3c";
                         for (int i = 0; i < e.Args.Length - 1; i++)
                         {
                             if (e.Args[i] == "--output-dir")
                             {
-                                destDir = e.Args[i + 1];
+                                destDir = e.Args[i + 1].Trim().Trim('"', '\'');
                                 break;
                             }
                         }
+                        Directory.CreateDirectory(destDir);
                         mw.ExportViewSnapshots(destDir);
                         File.WriteAllText(@"D:\AK10X\snapshot.log", $"Snapshot export completed at {DateTime.Now} to {destDir}");
                     }

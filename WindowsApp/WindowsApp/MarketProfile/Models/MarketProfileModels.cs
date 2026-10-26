@@ -82,7 +82,10 @@ public class MarketProfileSession
     public string OpenType { get; set; } = "Open Auction";
     public string OpenRelation { get; set; } = "Open Inside PDVA";
     public string IbStatus { get; set; } = "Price Within IB";
+    public string DayType { get; set; } = "Normal Variation";
     public int RotationalFactor { get; set; }
+    public double PriorClose { get; set; } = 0;
+    public long VolMA { get; set; } = 0;
 
     public double TpoSize { get; set; } = 3.0;
     public List<PriceBucket> Buckets { get; set; } = new();
@@ -206,4 +209,16 @@ public class FiftyChartsPalette
             b.Freeze();
         }
     }
+}
+
+public class FiftyChartsRefLine
+{
+    public double Price { get; set; }
+    public double Price2 { get; set; }
+    public DateTime Date { get; set; }
+    public DateTime? ClearedDate { get; set; }
+    public int State { get; set; } // 0 = Virgin/Active, 2 = Cleared/Broken
+    public string Tag { get; set; } = string.Empty;
+    public string Label { get; set; } = string.Empty;
+    public bool IsRibbon { get; set; }
 }

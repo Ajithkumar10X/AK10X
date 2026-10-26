@@ -194,13 +194,20 @@ public partial class MainWindow : Window
         {
             Directory.CreateDirectory(outputDir);
 
-            // 1. Snapshot MarketProfileView - Merged Mode
+            // 1. Snapshot MarketProfileView - 50Charts Dual Mode (Default)
             if (MarketProfileTab != null) MarketProfileTab.IsChecked = true;
             Tab_Checked(this, new RoutedEventArgs());
-            if (MarketProfileView.MergedRadio != null) MarketProfileView.MergedRadio.IsChecked = true;
+            if (MarketProfileView.DualRadio != null) MarketProfileView.DualRadio.IsChecked = true;
             MarketProfileView.RenderProfileChart();
             UpdateLayout();
+            SaveVisualToPng(Path.Combine(outputDir, "market_profile_50charts_dual.png"));
+
+            // 1b. Snapshot Merged Multi-Day Mode
+            MarketProfileView.MergeDays();
+            UpdateLayout();
             SaveVisualToPng(Path.Combine(outputDir, "market_profile_50charts_merged.png"));
+            MarketProfileView.UnmergeDays();
+            UpdateLayout();
 
             // 2. Snapshot MarketProfileView - Split Mode
             if (MarketProfileView.SplitRadio != null) MarketProfileView.SplitRadio.IsChecked = true;
@@ -208,8 +215,8 @@ public partial class MainWindow : Window
             UpdateLayout();
             SaveVisualToPng(Path.Combine(outputDir, "market_profile_50charts_split.png"));
 
-            // Restore Merged Mode
-            if (MarketProfileView.MergedRadio != null) MarketProfileView.MergedRadio.IsChecked = true;
+            // Restore Dual Mode
+            if (MarketProfileView.DualRadio != null) MarketProfileView.DualRadio.IsChecked = true;
             MarketProfileView.RenderProfileChart();
 
             // 3. Snapshot OrderFlowView with Accelpix NIFTY_I Footprint
