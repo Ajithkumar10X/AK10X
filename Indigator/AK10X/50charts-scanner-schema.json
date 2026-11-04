@@ -1,0 +1,550 @@
+﻿{
+    "Module":  "MarketProfileScanner_50Charts",
+    "ExtractedAt":  "2026-11-04T21:55:45.0353240+05:30",
+    "Extractor":  "REA (Reverse Engineer Anything)",
+    "TargetAmiBroker":  "C:\\Program Files (x86)\\AmiBroker",
+    "ScannerAflFile":  "C:\\Program Files (x86)\\AmiBroker\\Formulas\\50Charts\\50ChartsScanner\\50ChartsMarketProfileScanner.afl",
+    "ScannerCalcFile":  "C:\\Program Files (x86)\\AmiBroker\\Formulas\\Include\\50Charts\\50ChartsScanner\\50Charts_mpscanner_calc.afl",
+    "ScannerValidateFile":  "C:\\Program Files (x86)\\AmiBroker\\Formulas\\Include\\50Charts\\50ChartsScanner\\50ChartsScannerCommon\\50Charts_scanner_validate.afl",
+    "PluginDll":  "C:\\Program Files (x86)\\AmiBroker\\Plugins\\50chartsMP.dll",
+    "NativeExports":  [
+                          {
+                              "Name":  "FC_50Charts_MP_MPScanner",
+                              "Address":  "0x1001A788"
+                          },
+                          {
+                              "Name":  "FC_50Charts_MP_MPScanner_Old",
+                              "Address":  "0x10044578"
+                          }
+                      ],
+    "Version":  "50Charts MP Scanner v8.1",
+    "BasePeriodicity":  "30 minutes (1800 seconds)",
+    "Parameters":  {
+                       "DisplayPrevDayValues":  false,
+                       "DisplayTodayValues":  false,
+                       "DisplayDailySMA":  false,
+                       "SmaNumberOfDays":  21,
+                       "DisplayPrevDayMPLevels":  false,
+                       "DisplayIBValues":  false,
+                       "DisplayCurrentDayMPLevels":  false,
+                       "AtrNumberOfDays":  10,
+                       "ProfileDistributionOneSigma":  70,
+                       "MinTickSize":  0.05,
+                       "InitialBalanceCandleCount":  2,
+                       "DisplayErrorDescription":  true
+                   },
+    "ColorScheme":  {
+                        "BgGreen":  "#00A629",
+                        "BgRedOrange":  "#FF6600",
+                        "BgYellow":  "#FFFF3E",
+                        "BgGrey":  "#E6E6E6",
+                        "FgGreen":  "#008000",
+                        "FgRed":  "#CC0000",
+                        "FgWhite":  "#FFFFFF",
+                        "FgBlack":  "#000000"
+                    },
+    "Thresholds":  {
+                       "IbVeryWideAtrRatio":  0.8,
+                       "IbWideAtrRatio":  0.5,
+                       "IbSmallAtrRatio":  0.333333,
+                       "ValueAreaPercent":  70,
+                       "NeutralExtremeCloseRatioHigh":  0.72,
+                       "NeutralExtremeCloseRatioLow":  0.28,
+                       "TrendDayIbMultiplier":  2
+                   },
+    "Columns":  [
+                    {
+                        "Order":  1,
+                        "Name":  "Ticker",
+                        "Group":  "Core",
+                        "DefaultVisible":  true,
+                        "Values":  [
+                                       "Symbol Name"
+                                   ]
+                    },
+                    {
+                        "Order":  2,
+                        "Name":  "Date/Time",
+                        "Group":  "Core",
+                        "DefaultVisible":  true,
+                        "Values":  [
+                                       "dd-MM-yyyy HH:mm"
+                                   ]
+                    },
+                    {
+                        "Order":  3,
+                        "Name":  "PrevDay High",
+                        "Group":  "PrevDayValues",
+                        "DefaultVisible":  false,
+                        "Values":  [
+                                       "Numeric"
+                                   ]
+                    },
+                    {
+                        "Order":  4,
+                        "Name":  "PrevDay Low",
+                        "Group":  "PrevDayValues",
+                        "DefaultVisible":  false,
+                        "Values":  [
+                                       "Numeric"
+                                   ]
+                    },
+                    {
+                        "Order":  5,
+                        "Name":  "PrevDay Close",
+                        "Group":  "PrevDayValues",
+                        "DefaultVisible":  false,
+                        "Values":  [
+                                       "Numeric"
+                                   ]
+                    },
+                    {
+                        "Order":  6,
+                        "Name":  "PrevDay Volume",
+                        "Group":  "PrevDayValues",
+                        "DefaultVisible":  false,
+                        "Values":  [
+                                       "Numeric"
+                                   ]
+                    },
+                    {
+                        "Order":  7,
+                        "Name":  "Volume",
+                        "Group":  "TodayValues",
+                        "DefaultVisible":  false,
+                        "Values":  [
+                                       "Numeric"
+                                   ]
+                    },
+                    {
+                        "Order":  8,
+                        "Name":  "Open",
+                        "Group":  "TodayValues",
+                        "DefaultVisible":  false,
+                        "Values":  [
+                                       "Numeric"
+                                   ]
+                    },
+                    {
+                        "Order":  9,
+                        "Name":  "High",
+                        "Group":  "TodayValues",
+                        "DefaultVisible":  false,
+                        "Values":  [
+                                       "Numeric"
+                                   ]
+                    },
+                    {
+                        "Order":  10,
+                        "Name":  "Low",
+                        "Group":  "TodayValues",
+                        "DefaultVisible":  false,
+                        "Values":  [
+                                       "Numeric"
+                                   ]
+                    },
+                    {
+                        "Order":  11,
+                        "Name":  "Open=H/L",
+                        "Group":  "Core",
+                        "DefaultVisible":  true,
+                        "Values":  [
+                                       "Open = Low",
+                                       "Open = High",
+                                       ""
+                                   ]
+                    },
+                    {
+                        "Order":  12,
+                        "Name":  "Price",
+                        "Group":  "Core",
+                        "DefaultVisible":  true,
+                        "Values":  [
+                                       "Live Last Price"
+                                   ]
+                    },
+                    {
+                        "Order":  13,
+                        "Name":  "%Change",
+                        "Group":  "Core",
+                        "DefaultVisible":  true,
+                        "Values":  [
+                                       "Percentage Change vs PrevDay Close"
+                                   ]
+                    },
+                    {
+                        "Order":  14,
+                        "Name":  "SMA(21) - Daily",
+                        "Group":  "DailySMA",
+                        "DefaultVisible":  false,
+                        "Values":  [
+                                       "Numeric"
+                                   ]
+                    },
+                    {
+                        "Order":  15,
+                        "Name":  "Price - SMA(21)",
+                        "Group":  "Core",
+                        "DefaultVisible":  true,
+                        "Values":  [
+                                       "Price Above SMA(21)",
+                                       "Price Below SMA(21)"
+                                   ]
+                    },
+                    {
+                        "Order":  16,
+                        "Name":  "PD-TPOSize",
+                        "Group":  "PrevDayMPLevels",
+                        "DefaultVisible":  false,
+                        "Values":  [
+                                       "Numeric"
+                                   ]
+                    },
+                    {
+                        "Order":  17,
+                        "Name":  "PD-VAH",
+                        "Group":  "PrevDayMPLevels",
+                        "DefaultVisible":  false,
+                        "Values":  [
+                                       "Numeric"
+                                   ]
+                    },
+                    {
+                        "Order":  18,
+                        "Name":  "PD-POC",
+                        "Group":  "PrevDayMPLevels",
+                        "DefaultVisible":  false,
+                        "Values":  [
+                                       "Numeric"
+                                   ]
+                    },
+                    {
+                        "Order":  19,
+                        "Name":  "PD-VAL",
+                        "Group":  "PrevDayMPLevels",
+                        "DefaultVisible":  false,
+                        "Values":  [
+                                       "Numeric"
+                                   ]
+                    },
+                    {
+                        "Order":  20,
+                        "Name":  "PD-POC TPOCount",
+                        "Group":  "PrevDayMPLevels",
+                        "DefaultVisible":  false,
+                        "Values":  [
+                                       "Numeric"
+                                   ]
+                    },
+                    {
+                        "Order":  21,
+                        "Name":  "PrevDay Type",
+                        "Group":  "Core",
+                        "DefaultVisible":  true,
+                        "Values":  [
+                                       "Normal day - Up",
+                                       "Normal day - Down",
+                                       "Normal Variation day - Up",
+                                       "Normal Variation day - Down",
+                                       "Trend day - Up",
+                                       "Trend day - Down",
+                                       "Neutral - Centre day",
+                                       "Neutral - Extreme day - Up",
+                                       "Neutral - Extreme day - Down",
+                                       "Non-Trend day"
+                                   ]
+                    },
+                    {
+                        "Order":  22,
+                        "Name":  "PD-SingleP",
+                        "Group":  "Core",
+                        "DefaultVisible":  true,
+                        "Values":  [
+                                       "Single Print - Up",
+                                       "Single Print - Down",
+                                       ""
+                                   ]
+                    },
+                    {
+                        "Order":  23,
+                        "Name":  "Open (vs PDVA)",
+                        "Header":  "Open",
+                        "Group":  "Core",
+                        "DefaultVisible":  true,
+                        "Values":  [
+                                       "Open Above PDVA",
+                                       "Open Below PDVA",
+                                       "Open Inside PDVA"
+                                   ]
+                    },
+                    {
+                        "Order":  24,
+                        "Name":  "Open (vs PDHL)",
+                        "Header":  "Open",
+                        "Group":  "Core",
+                        "DefaultVisible":  true,
+                        "Values":  [
+                                       "Open Above PDHL",
+                                       "Open Below PDHL",
+                                       "Open Inside PDHL"
+                                   ]
+                    },
+                    {
+                        "Order":  25,
+                        "Name":  "OpenType",
+                        "Group":  "Core",
+                        "DefaultVisible":  true,
+                        "Values":  [
+                                       "Open Drive",
+                                       "OpenTest Drive",
+                                       "OAOR",
+                                       "OAIR",
+                                       "ORR"
+                                   ]
+                    },
+                    {
+                        "Order":  26,
+                        "Name":  "PrevDay Breakout",
+                        "Group":  "Core",
+                        "DefaultVisible":  true,
+                        "Values":  [
+                                       "Broken - Up",
+                                       "Broken - Down",
+                                       "Broken - BothSides",
+                                       ""
+                                   ]
+                    },
+                    {
+                        "Order":  27,
+                        "Name":  "ATR(10) - Daily",
+                        "Group":  "Core",
+                        "DefaultVisible":  true,
+                        "Values":  [
+                                       "Numeric"
+                                   ]
+                    },
+                    {
+                        "Order":  28,
+                        "Name":  "HL Range",
+                        "Group":  "Core",
+                        "DefaultVisible":  true,
+                        "Values":  [
+                                       "Numeric"
+                                   ]
+                    },
+                    {
+                        "Order":  29,
+                        "Name":  "IB - High",
+                        "Group":  "IBValues",
+                        "DefaultVisible":  false,
+                        "Values":  [
+                                       "Numeric"
+                                   ]
+                    },
+                    {
+                        "Order":  30,
+                        "Name":  "IB - Low",
+                        "Group":  "IBValues",
+                        "DefaultVisible":  false,
+                        "Values":  [
+                                       "Numeric"
+                                   ]
+                    },
+                    {
+                        "Order":  31,
+                        "Name":  "IB Range",
+                        "Group":  "IBValues",
+                        "DefaultVisible":  false,
+                        "Values":  [
+                                       "Numeric"
+                                   ]
+                    },
+                    {
+                        "Order":  32,
+                        "Name":  "IB Size",
+                        "Group":  "Core",
+                        "DefaultVisible":  true,
+                        "Values":  [
+                                       "Very Wide",
+                                       "Wide",
+                                       "Normal",
+                                       "Small"
+                                   ]
+                    },
+                    {
+                        "Order":  33,
+                        "Name":  "IB Breakout",
+                        "Group":  "Core",
+                        "DefaultVisible":  true,
+                        "Values":  [
+                                       "Broken - Up",
+                                       "Broken - Down",
+                                       "Broken - BothSides",
+                                       ""
+                                   ]
+                    },
+                    {
+                        "Order":  34,
+                        "Name":  "Price - IB",
+                        "Group":  "Core",
+                        "DefaultVisible":  true,
+                        "Values":  [
+                                       "Price Above IB",
+                                       "Price Below IB",
+                                       "Price Within IB"
+                                   ]
+                    },
+                    {
+                        "Order":  35,
+                        "Name":  "Today-TPOSize",
+                        "Group":  "CurrentDayMPLevels",
+                        "DefaultVisible":  false,
+                        "Values":  [
+                                       "Numeric"
+                                   ]
+                    },
+                    {
+                        "Order":  36,
+                        "Name":  "Today-VAH",
+                        "Group":  "CurrentDayMPLevels",
+                        "DefaultVisible":  false,
+                        "Values":  [
+                                       "Numeric"
+                                   ]
+                    },
+                    {
+                        "Order":  37,
+                        "Name":  "Today-POC",
+                        "Group":  "CurrentDayMPLevels",
+                        "DefaultVisible":  false,
+                        "Values":  [
+                                       "Numeric"
+                                   ]
+                    },
+                    {
+                        "Order":  38,
+                        "Name":  "Today-VAL",
+                        "Group":  "CurrentDayMPLevels",
+                        "DefaultVisible":  false,
+                        "Values":  [
+                                       "Numeric"
+                                   ]
+                    },
+                    {
+                        "Order":  39,
+                        "Name":  "Today-POC TPOCount",
+                        "Group":  "CurrentDayMPLevels",
+                        "DefaultVisible":  false,
+                        "Values":  [
+                                       "Numeric"
+                                   ]
+                    },
+                    {
+                        "Order":  40,
+                        "Name":  "Today VA",
+                        "Group":  "Core",
+                        "DefaultVisible":  true,
+                        "Values":  [
+                                       "Higher than PDVA",
+                                       "Lower than PDVA",
+                                       "Same VA",
+                                       "Inside PrevVA",
+                                       "Overlapping to PDVA H \u0026 L",
+                                       "Overlapping to PDVA High",
+                                       "Overlapping to PDVA low"
+                                   ]
+                    },
+                    {
+                        "Order":  41,
+                        "Name":  "30-min PreviousBar",
+                        "Group":  "Core",
+                        "DefaultVisible":  true,
+                        "Values":  [
+                                       "Inside Bar",
+                                       "Inside Bar - Broken Up",
+                                       "Inside Bar - Broken Down",
+                                       "Inside Bar - Broken BothSides",
+                                       "Outside Bar",
+                                       "Outside Bar - Broken Up",
+                                       "Outside Bar - Broken Down",
+                                       "Outside Bar - Broken BothSides",
+                                       ""
+                                   ]
+                    },
+                    {
+                        "Order":  42,
+                        "Name":  "SingleP",
+                        "Group":  "Core",
+                        "DefaultVisible":  true,
+                        "Values":  [
+                                       "Single Print - Up",
+                                       "Single Print - Down",
+                                       ""
+                                   ]
+                    },
+                    {
+                        "Order":  43,
+                        "Name":  "Day Type",
+                        "Group":  "Core",
+                        "DefaultVisible":  true,
+                        "Values":  [
+                                       "Trend day - Up",
+                                       "Trend day - Down",
+                                       "Normal Variation day - Up",
+                                       "Normal Variation day - Down",
+                                       "Normal day - Up",
+                                       "Normal day - Down",
+                                       "Neutral - Centre day",
+                                       "Neutral - Extreme day - Up",
+                                       "Neutral - Extreme day - Down",
+                                       "Non-Trend day"
+                                   ]
+                    }
+                ],
+    "DefaultWatchlistSymbols":  [
+                                    "ABB_I",
+                                    "ADANIPORTS_I",
+                                    "ASIANPAINT_I",
+                                    "AXISBANK_I",
+                                    "BAJAJ-AUTO_I",
+                                    "BAJAJFINSV_I",
+                                    "BAJFINANCE_I",
+                                    "BANKNIFTY_I",
+                                    "BRITANNIA_I",
+                                    "BHARTIARTL_I",
+                                    "BPCL_I",
+                                    "CIPLA_I",
+                                    "COALINDIA_I",
+                                    "DIVISLAB_I",
+                                    "EICHERMOT_I",
+                                    "DRREDDY_I",
+                                    "GAIL_I",
+                                    "GRASIM_I",
+                                    "HCLTECH_I",
+                                    "HDFCBANK_I",
+                                    "HDFCLIFE_I",
+                                    "HEROMOTOCO_I",
+                                    "HINDALCO_I",
+                                    "ICICIBANK_I",
+                                    "HINDUNILVR_I",
+                                    "INDUSINDBK_I",
+                                    "INFY_I",
+                                    "IOC_I",
+                                    "ITC_I",
+                                    "JSWSTEEL_I",
+                                    "KOTAKBANK_I",
+                                    "LT_I",
+                                    "M_M_I",
+                                    "MARUTI_I",
+                                    "NESTLEIND_I",
+                                    "NIFTY_I",
+                                    "NTPC_I",
+                                    "ONGC_I",
+                                    "PNB_I",
+                                    "POWERGRID_I",
+                                    "RELIANCE_I",
+                                    "SBILIFE_I",
+                                    "SBIN_I",
+                                    "TATASTEEL_I"
+                                ]
+}
