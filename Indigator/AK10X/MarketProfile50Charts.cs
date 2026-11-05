@@ -2091,7 +2091,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 						EndCap = CapStyle.Flat
 					};
 
-					using (var dashedStroke = new StrokeStyle(RenderTarget.Factory, dashProps, new float[] { 4f, 3f }))
+					using (var dashedStroke = new StrokeStyle(Core.Globals.D2DFactory, dashProps, new float[] { 4f, 3f }))
 					using (var whiteBrush = new DxBrush(RenderTarget, new SharpDX.Color(238, 242, 245)))
 					using (var textBrush = new DxBrush(RenderTarget, new SharpDX.Color(195, 204, 212)))
 					using (var orangeBrush = new DxBrush(RenderTarget, new SharpDX.Color(245, 155, 35)))
