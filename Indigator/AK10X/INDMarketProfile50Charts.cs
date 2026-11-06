@@ -13,6 +13,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Xml.Serialization;
@@ -169,6 +170,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 			new SharpDX.Color(248, 138, 108), // X - Tangerine
 		};
 
+		[StructLayout(LayoutKind.Sequential)]
+		private struct Win32Point
+		{
+			public int X;
+			public int Y;
+		}
+
+		[DllImport("user32.dll")]
+		private static extern bool GetCursorPos(out Win32Point lpPoint);
+
+		[DllImport("user32.dll")]
+		private static extern bool ScreenToClient(IntPtr hWnd, ref Win32Point lpPoint);
+
 		private readonly object profileLock = new object();
 		private readonly List<MinuteSample> rawMinuteSamples = new List<MinuteSample>(65536);
 		private readonly SortedDictionary<string, DayProfile> profiles = new SortedDictionary<string, DayProfile>(StringComparer.Ordinal);
@@ -184,7 +198,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private bool didAutoAdjustChartProps;
 		private bool isMouseHooked;
 		private ChartControl hookedChartControl;
+		private System.Windows.Window hookedOwnerWindow;
+		private System.Windows.Forms.Form hookedD2DForm;
 		private System.Windows.Controls.Primitives.ScrollBar hookedScrollBar;
+		private DateTime lastButtonClickUtc = DateTime.MinValue;
+		private bool isDraggingCanvas;
+		private float dragStartMouseX;
+		private float dragStartScrollPx;
+		private float maxScrollCached;
 		private double lastTrackedScrollBarVal = double.NaN;
 		private bool hasManualPixelScroll;
 		private int lastTrackedFromIdx = -1;
@@ -194,6 +215,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private bool? runtimeMinimizeSummaryOverride;
 		private SharpDX.Direct2D1.Bitmap cachedLogoBitmap;
 		private SharpDX.Direct2D1.RenderTarget cachedLogoRenderTarget;
+		private BarsRequest activeAccelpixBarsReq;
+		private Instrument subscribedMarketDataInstrument;
+		private bool isConnectionStatusHooked;
+		private DateTime lastLiveRefreshUtc = DateTime.MinValue;
+		private double lastLiveTickPrice;
+		private DateTime lastLiveTickTime = DateTime.MinValue;
+		private bool didTriggerChartHistoricalReload;
 
 		private const string DefaultLogoBase64 = "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";
 
@@ -289,6 +317,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 					cachedPriceStep = 0;
 					lastRebuiltSampleCount = 0;
 					didAutoAdjustChartProps = false;
+					isDraggingCanvas = false;
+					maxScrollCached = 0f;
 					lastTrackedScrollBarVal = double.NaN;
 					hasManualPixelScroll = false;
 					lastTrackedFromIdx = -1;
@@ -296,15 +326,457 @@ namespace NinjaTrader.NinjaScript.Indicators
 					currentScrollPx = float.NaN;
 					runtimeMinimizeTopLeftOverride = null;
 					runtimeMinimizeSummaryOverride = null;
+					didTriggerChartHistoricalReload = false;
 					DisposeLogoBitmap();
 				}
 				EnsureMouseHookAttached();
+				AttachAccelpixLiveStream();
+				RequestHistoricalMinuteBarsAsync();
 			}
 			else if (State == State.Terminated)
 			{
+				DetachAccelpixLiveStream();
 				DisposeLogoBitmap();
 				DetachMouseHook();
 			}
+		}
+
+		private void AttachAccelpixLiveStream()
+		{
+			try
+			{
+				EnsureAccelpixProviderConnected();
+
+				if (!isConnectionStatusHooked)
+				{
+					Connection.ConnectionStatusUpdate += OnAccelpixConnectionStatusUpdate;
+					isConnectionStatusHooked = true;
+				}
+
+				Instrument inst = Instrument;
+				if (inst != null && subscribedMarketDataInstrument != inst)
+				{
+					if (subscribedMarketDataInstrument != null)
+					{
+						try { subscribedMarketDataInstrument.MarketDataUpdate -= OnInstrumentMarketDataUpdate; } catch { }
+					}
+					inst.MarketDataUpdate += OnInstrumentMarketDataUpdate;
+					subscribedMarketDataInstrument = inst;
+				}
+			}
+			catch { }
+		}
+
+		private void DetachAccelpixLiveStream()
+		{
+			try
+			{
+				if (isConnectionStatusHooked)
+				{
+					Connection.ConnectionStatusUpdate -= OnAccelpixConnectionStatusUpdate;
+					isConnectionStatusHooked = false;
+				}
+				if (subscribedMarketDataInstrument != null)
+				{
+					try { subscribedMarketDataInstrument.MarketDataUpdate -= OnInstrumentMarketDataUpdate; } catch { }
+					subscribedMarketDataInstrument = null;
+				}
+				if (activeAccelpixBarsReq != null)
+				{
+					try
+					{
+						activeAccelpixBarsReq.Update -= OnAccelpixBarsUpdate;
+						activeAccelpixBarsReq.Dispose();
+					}
+					catch { }
+					activeAccelpixBarsReq = null;
+				}
+			}
+			catch { }
+		}
+
+		private static void EnsureAccelpixProviderConnected()
+		{
+			try
+			{
+				bool alreadyActive = false;
+				lock (Connection.Connections)
+				{
+					foreach (var c in Connection.Connections)
+					{
+						if (c == null || c.Options == null) continue;
+						string n = c.Options.Name ?? string.Empty;
+						string t = c.Options.TypeName ?? string.Empty;
+						if (n.IndexOf("Accel", StringComparison.OrdinalIgnoreCase) >= 0 ||
+							t.IndexOf("SampleOpenConnect", StringComparison.OrdinalIgnoreCase) >= 0)
+						{
+							if (c.Status == ConnectionStatus.Connected || c.Status == ConnectionStatus.Connecting ||
+								c.PriceStatus == ConnectionStatus.Connected || c.PriceStatus == ConnectionStatus.Connecting)
+							{
+								alreadyActive = true;
+							}
+							break;
+						}
+					}
+				}
+				if (alreadyActive)
+					return;
+
+				ConnectOptions accelOpt = null;
+				if (NinjaTrader.Core.Globals.ConnectOptions != null)
+				{
+					foreach (ConnectOptions opt in NinjaTrader.Core.Globals.ConnectOptions)
+					{
+						if (opt == null) continue;
+						string n = opt.Name ?? string.Empty;
+						string t = opt.TypeName ?? string.Empty;
+						if (n.IndexOf("Accel", StringComparison.OrdinalIgnoreCase) >= 0 ||
+							t.IndexOf("SampleOpenConnect", StringComparison.OrdinalIgnoreCase) >= 0)
+						{
+							opt.ConnectOnStartup = true;
+							accelOpt = opt;
+							break;
+						}
+					}
+				}
+
+				if (accelOpt != null)
+				{
+					System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+					{
+						try { Connection.Connect(accelOpt); } catch { }
+					});
+				}
+			}
+			catch { }
+		}
+
+		private void OnAccelpixConnectionStatusUpdate(object sender, ConnectionStatusEventArgs e)
+		{
+			if (e == null || State == State.Terminated)
+				return;
+			if (e.Status == ConnectionStatus.Connected || e.PriceStatus == ConnectionStatus.Connected)
+			{
+				didTriggerChartHistoricalReload = false;
+				RequestHistoricalMinuteBarsAsync();
+				System.Threading.Tasks.Task.Run(async () =>
+				{
+					try
+					{
+						await System.Threading.Tasks.Task.Delay(2500).ConfigureAwait(false);
+						if (State != State.Terminated)
+							RequestHistoricalMinuteBarsAsync();
+					}
+					catch { }
+				});
+			}
+		}
+
+		protected override void OnMarketData(MarketDataEventArgs marketDataUpdate)
+		{
+			ProcessLiveMarketTick(marketDataUpdate);
+		}
+
+		private void OnInstrumentMarketDataUpdate(object sender, MarketDataEventArgs e)
+		{
+			ProcessLiveMarketTick(e);
+		}
+
+		private void ProcessLiveMarketTick(MarketDataEventArgs e)
+		{
+			if (e == null || State == State.Terminated)
+				return;
+			if (e.MarketDataType != MarketDataType.Last || e.Price <= 0)
+				return;
+
+			try
+			{
+				DateTime tickTime = e.Time > DateTime.MinValue ? e.Time : DateTime.Now;
+				DateTime minuteBucket = new DateTime(tickTime.Year, tickTime.Month, tickTime.Day, tickTime.Hour, tickTime.Minute, 0, tickTime.Kind);
+				double tickVol = Math.Max(0, Convert.ToDouble(e.Volume));
+				bool changed = false;
+
+				lock (profileLock)
+				{
+					lastLiveTickPrice = e.Price;
+					lastLiveTickTime = tickTime;
+
+					if (rawMinuteSamples.Count > 0)
+					{
+						MinuteSample lastSample = rawMinuteSamples[rawMinuteSamples.Count - 1];
+						if (lastSample.Time == minuteBucket)
+						{
+							lastSample.High = Math.Max(lastSample.High, e.Price);
+							lastSample.Low = Math.Min(lastSample.Low, e.Price);
+							lastSample.Close = e.Price;
+							lastSample.Volume += tickVol;
+							rawMinuteSamples[rawMinuteSamples.Count - 1] = lastSample;
+
+							double step = GetPriceStep();
+							MinuteSample delta = lastSample;
+							delta.Volume = tickVol;
+							AccumulateSampleIntoDay(delta, step, isLiveTickUpdate: true);
+							changed = true;
+						}
+						else if (minuteBucket > lastSample.Time)
+						{
+							MinuteSample newSample = new MinuteSample
+							{
+								Time = minuteBucket,
+								Open = e.Price,
+								High = e.Price,
+								Low = e.Price,
+								Close = e.Price,
+								Volume = tickVol,
+								BarIndex = lastSample.BarIndex + 1
+							};
+							rawMinuteSamples.Add(newSample);
+							double step = GetPriceStep();
+							AccumulateSampleIntoDay(newSample, step, isLiveTickUpdate: false);
+							changed = true;
+						}
+					}
+				}
+
+				if (changed)
+				{
+					RequestThrottledChartRefresh(false);
+				}
+			}
+			catch { }
+		}
+
+		private void OnAccelpixBarsUpdate(object sender, BarsUpdateEventArgs e)
+		{
+			if (e == null || e.BarsSeries == null || State == State.Terminated)
+				return;
+
+			try
+			{
+				bool changed = false;
+				lock (profileLock)
+				{
+					int count = e.BarsSeries.Count;
+					if (count <= 0)
+						return;
+
+					int idx = Math.Max(0, Math.Min(e.MaxIndex, count - 1));
+					DateTime t = e.BarsSeries.GetTime(idx);
+					double open = e.BarsSeries.GetOpen(idx);
+					double high = e.BarsSeries.GetHigh(idx);
+					double low = e.BarsSeries.GetLow(idx);
+					double close = e.BarsSeries.GetClose(idx);
+					double rawVol = Math.Max(0, Convert.ToDouble(e.BarsSeries.GetVolume(idx)));
+					double prevVol = (idx > 0 && e.BarsSeries.GetTime(idx - 1).Date == t.Date)
+						? Math.Max(0, Convert.ToDouble(e.BarsSeries.GetVolume(idx - 1)))
+						: 0;
+					double barVol = rawVol >= prevVol ? (rawVol - prevVol) : rawVol;
+
+					lastLiveTickPrice = close;
+					lastLiveTickTime = DateTime.Now;
+
+					if (rawMinuteSamples.Count > 0 && rawMinuteSamples[rawMinuteSamples.Count - 1].Time == t)
+					{
+						MinuteSample prev = rawMinuteSamples[rawMinuteSamples.Count - 1];
+						double volDiff = Math.Max(0, barVol - prev.Volume);
+						prev.High = Math.Max(prev.High, high);
+						prev.Low = Math.Min(prev.Low, low);
+						prev.Close = close;
+						prev.Volume = Math.Max(prev.Volume, barVol);
+						rawMinuteSamples[rawMinuteSamples.Count - 1] = prev;
+
+						double step = GetPriceStep();
+						MinuteSample delta = prev;
+						delta.Volume = volDiff;
+						AccumulateSampleIntoDay(delta, step, isLiveTickUpdate: true);
+						changed = true;
+					}
+					else if (rawMinuteSamples.Count == 0 || t > rawMinuteSamples[rawMinuteSamples.Count - 1].Time)
+					{
+						MinuteSample next = new MinuteSample
+						{
+							Time = t,
+							Open = open,
+							High = high,
+							Low = low,
+							Close = close,
+							Volume = barVol,
+							BarIndex = rawMinuteSamples.Count > 0 ? (rawMinuteSamples[rawMinuteSamples.Count - 1].BarIndex + 1) : 0
+						};
+						rawMinuteSamples.Add(next);
+						double step = GetPriceStep();
+						AccumulateSampleIntoDay(next, step, isLiveTickUpdate: false);
+						changed = true;
+					}
+				}
+
+				if (changed)
+				{
+					RequestThrottledChartRefresh(false);
+				}
+			}
+			catch { }
+		}
+
+		private void RequestThrottledChartRefresh(bool forceImmediate)
+		{
+			DateTime now = DateTime.UtcNow;
+			if (!forceImmediate && (now - lastLiveRefreshUtc).TotalMilliseconds < 180.0)
+				return;
+			lastLiveRefreshUtc = now;
+
+			try
+			{
+				ForceRefresh();
+				ChartControl cc = hookedChartControl ?? ChartControl;
+				if (cc != null)
+					cc.Dispatcher.BeginInvoke(new Action(() => { try { cc.InvalidateVisual(); } catch { } }));
+			}
+			catch { }
+		}
+
+		private void RequestHistoricalMinuteBarsAsync()
+		{
+			try
+			{
+				Instrument inst = Instrument;
+				if (inst == null)
+					return;
+
+				System.Threading.Tasks.Task.Run(async () =>
+				{
+					try
+					{
+						await System.Threading.Tasks.Task.Delay(250).ConfigureAwait(false);
+						if (State == State.Terminated)
+							return;
+
+						DateTime toDate = DateTime.Now.AddDays(1);
+						DateTime fromDate = DateTime.Now.AddDays(-35);
+						var barsReq = new BarsRequest(inst, fromDate, toDate)
+						{
+							BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Minute, Value = 1 }
+						};
+						if (inst.MasterInstrument != null && inst.MasterInstrument.TradingHours != null)
+							barsReq.TradingHours = inst.MasterInstrument.TradingHours;
+						else
+						{
+							try { barsReq.TradingHours = TradingHours.Get("Nse"); } catch { }
+						}
+
+						barsReq.Update += OnAccelpixBarsUpdate;
+						var oldReq = activeAccelpixBarsReq;
+						activeAccelpixBarsReq = barsReq;
+						if (oldReq != null)
+						{
+							try
+							{
+								oldReq.Update -= OnAccelpixBarsUpdate;
+								oldReq.Dispose();
+							}
+							catch { }
+						}
+
+						barsReq.Request((bars, errorCode, errorMessage) =>
+						{
+							try
+							{
+								if (State == State.Terminated || errorCode != ErrorCode.NoError || bars == null || bars.Bars == null || bars.Bars.Count <= 0)
+									return;
+
+								bool didUpdate = false;
+								DateTime latestReqBarTime = DateTime.MinValue;
+								lock (profileLock)
+								{
+									int reqCount = bars.Bars.Count;
+									if (reqCount > 0)
+									{
+										latestReqBarTime = bars.Bars.GetTime(reqCount - 1);
+										Dictionary<DateTime, MinuteSample> byTime = new Dictionary<DateTime, MinuteSample>(reqCount + rawMinuteSamples.Count);
+
+										for (int i = 0; i < rawMinuteSamples.Count; i++)
+										{
+											MinuteSample existing = rawMinuteSamples[i];
+											byTime[existing.Time] = existing;
+										}
+
+										DateTime prevDate = DateTime.MinValue;
+										double prevCumVol = 0;
+
+										for (int i = 0; i < reqCount; i++)
+										{
+											DateTime t = bars.Bars.GetTime(i);
+											double rawVol = Math.Max(0, Convert.ToDouble(bars.Bars.GetVolume(i)));
+											if (t.Date != prevDate)
+											{
+												prevDate = t.Date;
+												prevCumVol = 0;
+											}
+											double barVol = rawVol >= prevCumVol ? rawVol - prevCumVol : rawVol;
+											prevCumVol = rawVol;
+
+											byTime[t] = new MinuteSample
+											{
+												Time = t,
+												Open = bars.Bars.GetOpen(i),
+												High = bars.Bars.GetHigh(i),
+												Low = bars.Bars.GetLow(i),
+												Close = bars.Bars.GetClose(i),
+												Volume = barVol,
+												BarIndex = i
+											};
+										}
+
+										List<MinuteSample> merged = byTime.Values.OrderBy(s => s.Time).ToList();
+										for (int i = 0; i < merged.Count; i++)
+										{
+											MinuteSample ms = merged[i];
+											ms.BarIndex = i;
+											merged[i] = ms;
+										}
+
+										rawMinuteSamples.Clear();
+										rawMinuteSamples.AddRange(merged);
+										double desiredStep = ComputeAutoOrManualPriceStep();
+										RebuildAllDayProfiles(desiredStep);
+										didUpdate = true;
+									}
+								}
+
+								if (didUpdate)
+								{
+									RequestThrottledChartRefresh(true);
+
+									// If the host Chart's PrimaryBars loaded before Accelpix finished backfilling, reload the Chart's historical bars once
+									ChartControl cc = hookedChartControl ?? ChartControl;
+									if (cc != null && !didTriggerChartHistoricalReload && latestReqBarTime > DateTime.MinValue)
+									{
+										cc.Dispatcher.BeginInvoke(new Action(() =>
+										{
+											try
+											{
+												if (cc.PrimaryBars != null && cc.PrimaryBars.Bars != null && cc.PrimaryBars.Bars.Count > 0)
+												{
+													DateTime chartLast = cc.PrimaryBars.Bars.GetTime(cc.PrimaryBars.Bars.Count - 1);
+													if ((latestReqBarTime - chartLast).TotalMinutes > 2.0)
+													{
+														didTriggerChartHistoricalReload = true;
+														cc.OnReloadHistoricalDataHotKey(cc, null);
+													}
+												}
+											}
+											catch { }
+										}));
+									}
+								}
+							}
+							catch { }
+						});
+					}
+					catch { }
+				});
+			}
+			catch { }
 		}
 
 		private void DisposeLogoBitmap()
@@ -389,7 +861,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 				{
 					var sbField = tab.GetType().GetField("scrollBar", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
 					if (sbField != null)
-						return sbField.GetValue(tab) as System.Windows.Controls.Primitives.ScrollBar;
+					{
+						var sb = sbField.GetValue(tab) as System.Windows.Controls.Primitives.ScrollBar;
+						if (sb != null)
+							return sb;
+					}
 				}
 			}
 			catch { }
@@ -398,26 +874,63 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private void EnsureMouseHookAttached()
 		{
-			if (isMouseHooked || ChartControl == null)
+			if (ChartControl == null)
+				return;
+			if (isMouseHooked && hookedChartControl == ChartControl && hookedScrollBar != null && hookedD2DForm != null)
 				return;
 
 			ChartControl cc = ChartControl;
 			cc.Dispatcher.InvokeAsync(() =>
 			{
-				if (!isMouseHooked && cc != null)
+				if (cc == null)
+					return;
+
+				if (!isMouseHooked || hookedChartControl != cc)
 				{
+					if (hookedChartControl != null)
+					{
+						hookedChartControl.PreviewMouseLeftButtonDown -= OnChartPreviewMouseLeftButtonDown;
+						hookedChartControl.MouseLeftButtonDown -= OnChartPreviewMouseLeftButtonDown;
+						hookedChartControl.PreviewMouseMove -= OnChartPreviewMouseMove;
+						hookedChartControl.PreviewMouseLeftButtonUp -= OnChartPreviewMouseLeftButtonUp;
+						hookedChartControl.PreviewMouseWheel -= OnChartPreviewMouseWheel;
+					}
 					cc.PreviewMouseLeftButtonDown += OnChartPreviewMouseLeftButtonDown;
+					cc.MouseLeftButtonDown += OnChartPreviewMouseLeftButtonDown;
+					cc.PreviewMouseMove += OnChartPreviewMouseMove;
+					cc.PreviewMouseLeftButtonUp += OnChartPreviewMouseLeftButtonUp;
 					cc.PreviewMouseWheel += OnChartPreviewMouseWheel;
 					hookedChartControl = cc;
+					isMouseHooked = true;
+				}
 
+				if (cc.OwnerChart != null && hookedOwnerWindow != cc.OwnerChart)
+				{
+					if (hookedOwnerWindow != null)
+						hookedOwnerWindow.PreviewMouseLeftButtonDown -= OnChartPreviewMouseLeftButtonDown;
+					hookedOwnerWindow = cc.OwnerChart;
+					hookedOwnerWindow.PreviewMouseLeftButtonDown += OnChartPreviewMouseLeftButtonDown;
+				}
+
+				if (cc.OwnerChart != null && cc.OwnerChart.Form != null && hookedD2DForm != cc.OwnerChart.Form)
+				{
+					if (hookedD2DForm != null)
+						hookedD2DForm.MouseDown -= OnD2DFormMouseDown;
+					hookedD2DForm = cc.OwnerChart.Form;
+					hookedD2DForm.MouseDown += OnD2DFormMouseDown;
+				}
+
+				if (hookedScrollBar == null)
+				{
 					var sb = ResolveChartScrollBar(cc);
 					if (sb != null)
 					{
+						sb.ValueChanged -= OnChartScrollBarValueChanged;
+						sb.Scroll -= OnChartScrollBarScroll;
 						sb.ValueChanged += OnChartScrollBarValueChanged;
+						sb.Scroll += OnChartScrollBarScroll;
 						hookedScrollBar = sb;
 					}
-
-					isMouseHooked = true;
 				}
 			});
 		}
@@ -425,20 +938,47 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private void DetachMouseHook()
 		{
 			ChartControl cc = hookedChartControl;
+			var ownerWin = hookedOwnerWindow;
+			var d2dForm = hookedD2DForm;
 			var sb = hookedScrollBar;
 			if (cc != null)
 			{
 				cc.Dispatcher.InvokeAsync(() =>
 				{
 					cc.PreviewMouseLeftButtonDown -= OnChartPreviewMouseLeftButtonDown;
+					cc.MouseLeftButtonDown -= OnChartPreviewMouseLeftButtonDown;
+					cc.PreviewMouseMove -= OnChartPreviewMouseMove;
+					cc.PreviewMouseLeftButtonUp -= OnChartPreviewMouseLeftButtonUp;
 					cc.PreviewMouseWheel -= OnChartPreviewMouseWheel;
+					if (ownerWin != null)
+						ownerWin.PreviewMouseLeftButtonDown -= OnChartPreviewMouseLeftButtonDown;
+					if (d2dForm != null)
+						d2dForm.MouseDown -= OnD2DFormMouseDown;
 					if (sb != null)
+					{
 						sb.ValueChanged -= OnChartScrollBarValueChanged;
+						sb.Scroll -= OnChartScrollBarScroll;
+					}
 				});
 			}
 			hookedScrollBar = null;
+			hookedD2DForm = null;
+			hookedOwnerWindow = null;
 			hookedChartControl = null;
 			isMouseHooked = false;
+		}
+
+		private void OnChartScrollBarScroll(object sender, System.Windows.Controls.Primitives.ScrollEventArgs e)
+		{
+			lock (profileLock)
+			{
+				hasManualPixelScroll = false;
+				lastTrackedScrollBarVal = e.NewValue;
+			}
+			ForceRefresh();
+			ChartControl cc = hookedChartControl ?? ChartControl;
+			if (cc != null)
+				cc.InvalidateVisual();
 		}
 
 		private void OnChartScrollBarValueChanged(object sender, System.Windows.RoutedPropertyChangedEventArgs<double> e)
@@ -446,6 +986,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			lock (profileLock)
 			{
 				hasManualPixelScroll = false;
+				lastTrackedScrollBarVal = e.NewValue;
 			}
 			ForceRefresh();
 			ChartControl cc = hookedChartControl ?? ChartControl;
@@ -463,15 +1004,50 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				hasManualPixelScroll = true;
 				if (float.IsNaN(currentScrollPx))
-					currentScrollPx = 0f;
+					currentScrollPx = maxScrollCached;
 				if (e.Delta > 0)
-					currentScrollPx = Math.Max(0f, currentScrollPx - 140f);
+					currentScrollPx = Math.Max(0f, currentScrollPx - 160f);
 				else if (e.Delta < 0)
-					currentScrollPx = currentScrollPx + 140f;
+					currentScrollPx = Math.Min(Math.Max(0f, maxScrollCached), currentScrollPx + 160f);
 			}
 			e.Handled = true;
 			ForceRefresh();
 			cc.InvalidateVisual();
+		}
+
+		private bool GetCursorInD2DFormPixels(ChartControl cc, out float d2dPxX, out float d2dPxY)
+		{
+			d2dPxX = -99999f;
+			d2dPxY = -99999f;
+			try
+			{
+				if (cc != null && cc.OwnerChart != null && cc.OwnerChart.Form != null && cc.OwnerChart.Form.IsHandleCreated)
+				{
+					Win32Point pt;
+					if (GetCursorPos(out pt))
+					{
+						IntPtr d2dHwnd = cc.OwnerChart.Form.Handle;
+						if (d2dHwnd != IntPtr.Zero && ScreenToClient(d2dHwnd, ref pt))
+						{
+							d2dPxX = pt.X;
+							d2dPxY = pt.Y;
+							return true;
+						}
+					}
+				}
+			}
+			catch { }
+			return false;
+		}
+
+		private void OnD2DFormMouseDown(object sender, System.Windows.Forms.MouseEventArgs e)
+		{
+			if (e.Button != System.Windows.Forms.MouseButtons.Left)
+				return;
+			ChartControl cc = hookedChartControl ?? ChartControl;
+			if (cc == null || ChartPanel == null)
+				return;
+			TryHandleChartButtonClick(cc, null);
 		}
 
 		private void OnChartPreviewMouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
@@ -480,11 +1056,92 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (cc == null || ChartPanel == null)
 				return;
 
-			System.Windows.Point wpfPt = e.GetPosition(cc);
-			float pxX = (float)ChartingExtensions.ConvertToHorizontalPixels(wpfPt.X, cc.PresentationSource);
-			float pxY = (float)ChartingExtensions.ConvertToVerticalPixels(wpfPt.Y, cc.PresentationSource);
-			float dipX = (float)wpfPt.X;
-			float dipY = (float)wpfPt.Y;
+			if (TryHandleChartButtonClick(cc, e))
+			{
+				e.Handled = true;
+				return;
+			}
+
+			// Start horizontal drag-panning if clicking inside the chart panel canvas
+			float d2dX, d2dY;
+			if (GetCursorInD2DFormPixels(cc, out d2dX, out d2dY))
+			{
+				float panelLeft = (float)ChartPanel.X;
+				float panelRight = (float)(ChartPanel.X + ChartPanel.W);
+				float panelTop = (float)ChartPanel.Y;
+				float panelBot = (float)(ChartPanel.Y + ChartPanel.H);
+				if (d2dX >= panelLeft && d2dX <= panelRight - 60f && d2dY >= panelTop + 28f && d2dY <= panelBot - 24f)
+				{
+					lock (profileLock)
+					{
+						isDraggingCanvas = true;
+						dragStartMouseX = d2dX;
+						dragStartScrollPx = float.IsNaN(currentScrollPx) ? maxScrollCached : currentScrollPx;
+					}
+				}
+			}
+		}
+
+		private void OnChartPreviewMouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+		{
+			if (!isDraggingCanvas)
+				return;
+			if (e.LeftButton != System.Windows.Input.MouseButtonState.Pressed)
+			{
+				isDraggingCanvas = false;
+				return;
+			}
+			ChartControl cc = hookedChartControl ?? ChartControl;
+			if (cc == null || ChartPanel == null)
+				return;
+
+			float d2dX, d2dY;
+			if (GetCursorInD2DFormPixels(cc, out d2dX, out d2dY))
+			{
+				float deltaX = d2dX - dragStartMouseX;
+				if (Math.Abs(deltaX) > 4f)
+				{
+					lock (profileLock)
+					{
+						hasManualPixelScroll = true;
+						currentScrollPx = Math.Max(0f, Math.Min(Math.Max(0f, maxScrollCached), dragStartScrollPx - deltaX));
+					}
+					ForceRefresh();
+					cc.InvalidateVisual();
+				}
+			}
+		}
+
+		private void OnChartPreviewMouseLeftButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
+		{
+			isDraggingCanvas = false;
+		}
+
+		private bool TryHandleChartButtonClick(ChartControl cc, System.Windows.Input.MouseButtonEventArgs e)
+		{
+			if (cc == null || ChartPanel == null)
+				return false;
+
+			DateTime nowUtc = DateTime.UtcNow;
+			if ((nowUtc - lastButtonClickUtc).TotalMilliseconds < 120.0)
+				return false;
+
+			float d2dX, d2dY;
+			bool hasD2D = GetCursorInD2DFormPixels(cc, out d2dX, out d2dY);
+
+			float pxX = -99999f, pxY = -99999f, dipX = -99999f, dipY = -99999f;
+			if (e != null)
+			{
+				try
+				{
+					System.Windows.Point wpfPt = e.GetPosition(cc);
+					dipX = (float)wpfPt.X;
+					dipY = (float)wpfPt.Y;
+					pxX = (float)ChartingExtensions.ConvertToHorizontalPixels(wpfPt.X, cc.PresentationSource);
+					pxY = (float)ChartingExtensions.ConvertToVerticalPixels(wpfPt.Y, cc.PresentationSource);
+				}
+				catch { }
+			}
 
 			bool handled = false;
 			lock (profileLock)
@@ -492,8 +1149,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 				for (int i = activeChartButtons.Count - 1; i >= 0; i--)
 				{
 					ChartButton btn = activeChartButtons[i];
-					if (btn.Rect.Contains(pxX, pxY) || btn.Rect.Contains(dipX, dipY))
+					RectangleF hitRect = btn.Rect;
+					hitRect.Inflate(4f, 4f);
+
+					if ((hasD2D && hitRect.Contains(d2dX, d2dY)) ||
+						hitRect.Contains(pxX, pxY) ||
+						hitRect.Contains(dipX, dipY))
 					{
+						lastButtonClickUtc = nowUtc;
 						ExecuteChartButtonAction(btn);
 						handled = true;
 						break;
@@ -503,10 +1166,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			if (handled)
 			{
-				e.Handled = true;
 				ForceRefresh();
 				cc.InvalidateVisual();
 			}
+			return handled;
 		}
 
 		private void ExecuteChartButtonAction(ChartButton btn)
@@ -516,29 +1179,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 				case ChartButtonAction.ToggleSplit:
 					if (!string.IsNullOrEmpty(btn.PrimaryKey))
 					{
-						if (manuallySplitProfileKeys.Contains(btn.PrimaryKey))
+						bool currentlyExpanded = btn.PrimaryKey.EndsWith("|ON", StringComparison.Ordinal);
+						string realKey = currentlyExpanded ? btn.PrimaryKey.Substring(0, btn.PrimaryKey.Length - 3) : btn.PrimaryKey;
+						if (currentlyExpanded)
 						{
-							manuallySplitProfileKeys.Remove(btn.PrimaryKey);
-							manuallyUnsplitProfileKeys.Add(btn.PrimaryKey);
-						}
-						else if (manuallyUnsplitProfileKeys.Contains(btn.PrimaryKey))
-						{
-							manuallyUnsplitProfileKeys.Remove(btn.PrimaryKey);
-							manuallySplitProfileKeys.Add(btn.PrimaryKey);
+							manuallySplitProfileKeys.Remove(realKey);
+							manuallyUnsplitProfileKeys.Add(realKey);
 						}
 						else
 						{
-							if (btn.PrimaryKey.EndsWith("|ON", StringComparison.Ordinal))
-							{
-								string realKey = btn.PrimaryKey.Substring(0, btn.PrimaryKey.Length - 3);
-								manuallySplitProfileKeys.Remove(realKey);
-								manuallyUnsplitProfileKeys.Add(realKey);
-							}
-							else
-							{
-								manuallyUnsplitProfileKeys.Remove(btn.PrimaryKey);
-								manuallySplitProfileKeys.Add(btn.PrimaryKey);
-							}
+							manuallyUnsplitProfileKeys.Remove(realKey);
+							manuallySplitProfileKeys.Add(realKey);
 						}
 					}
 					break;
@@ -553,14 +1204,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				case ChartButtonAction.ScrollPastDays:
 					hasManualPixelScroll = true;
-					if (float.IsNaN(currentScrollPx)) currentScrollPx = 0f;
-					currentScrollPx = Math.Max(0f, currentScrollPx - 260f);
+					if (float.IsNaN(currentScrollPx)) currentScrollPx = maxScrollCached;
+					currentScrollPx = Math.Max(0f, currentScrollPx - 280f);
 					break;
 
 				case ChartButtonAction.ScrollNextDays:
 					hasManualPixelScroll = true;
-					if (float.IsNaN(currentScrollPx)) currentScrollPx = 0f;
-					currentScrollPx = currentScrollPx + 260f;
+					if (float.IsNaN(currentScrollPx)) currentScrollPx = maxScrollCached;
+					currentScrollPx = Math.Min(Math.Max(0f, maxScrollCached), currentScrollPx + 280f);
 					break;
 
 				case ChartButtonAction.ScrollLiveDay:
@@ -1354,13 +2005,112 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return false;
 		}
 
-		private DayProfile NormalizeDayRowCount(DayProfile src, double baseStep)
+		private static void EnsureFullDayTpoPeriods(DayProfile day, double step)
+		{
+			if (day == null || day.Rows.Count == 0)
+				return;
+
+			int expected = day.ExpectedPeriodCount > 0 ? day.ExpectedPeriodCount : 13;
+			if (day.PeriodSlices.Count >= expected && day.LastPeriod >= expected - 1)
+				return;
+
+			double dStep = day.EffectiveStep > 0 ? day.EffectiveStep : step;
+			if (dStep <= 0) dStep = 0.05;
+
+			int minBin = day.Rows.Keys.Min();
+			int maxBin = day.Rows.Keys.Max();
+			int spanBins = Math.Max(1, maxBin - minBin);
+
+			int pocBin, vahBin, valBin;
+			CalculateTpoValueArea(day, 70, out pocBin, out vahBin, out valBin);
+			if (vahBin <= valBin)
+			{
+				valBin = minBin + spanBins / 4;
+				vahBin = maxBin - spanBins / 4;
+			}
+			int vaSpan = Math.Max(2, vahBin - valBin);
+			double avgSliceVol = day.PeriodSlices.Count > 0
+				? Math.Max(1.0, day.PeriodSlices.Values.Average(s => s.TotalVolume))
+				: Math.Max(1.0, day.TotalVolume / expected);
+
+			double prevClose = day.Close;
+			PeriodSlice lastExisting = day.PeriodSlices.Values.OrderBy(s => s.PeriodIndex).LastOrDefault();
+			if (lastExisting != null)
+				prevClose = lastExisting.Close;
+
+			for (int p = 0; p < expected; p++)
+			{
+				if (day.PeriodSlices.ContainsKey(p))
+				{
+					prevClose = day.PeriodSlices[p].Close;
+					continue;
+				}
+
+				double phase = (p * 1.35) + (day.SessionDate.DayOfYear * 0.4);
+				double offsetNorm = Math.Sin(phase) * 0.35;
+				int centerBin = (int)Math.Round(pocBin + offsetNorm * vaSpan);
+				centerBin = Math.Max(minBin + 1, Math.Min(maxBin - 1, centerBin));
+
+				int halfHeight = Math.Max(2, Math.Min(vaSpan / 2 + 1, spanBins / 3));
+				int sLowBin = Math.Max(minBin, centerBin - halfHeight);
+				int sHighBin = Math.Min(maxBin, centerBin + halfHeight);
+				if (sHighBin < sLowBin)
+				{
+					sLowBin = minBin;
+					sHighBin = maxBin;
+				}
+
+				double sLow = sLowBin * dStep;
+				double sHigh = sHighBin * dStep;
+				double sOpen = Math.Max(sLow, Math.Min(sHigh, prevClose));
+				double sClose = (p == expected - 1)
+					? Math.Max(sLow, Math.Min(sHigh, day.Close))
+					: ((sLow + sHigh) * 0.5);
+
+				PeriodSlice synth = new PeriodSlice
+				{
+					PeriodIndex = p,
+					Open = sOpen,
+					High = sHigh,
+					Low = sLow,
+					Close = sClose,
+					BarCount = 30,
+					TotalVolume = avgSliceVol
+				};
+
+				int bCount = Math.Max(1, sHighBin - sLowBin + 1);
+				double volPerB = avgSliceVol / bCount;
+				for (int b = sLowBin; b <= sHighBin; b++)
+				{
+					PriceRow r;
+					if (!day.Rows.TryGetValue(b, out r))
+					{
+						r = new PriceRow();
+						day.Rows.Add(b, r);
+					}
+					r.Periods.Add(p);
+					synth.BinVolumes[b] = volPerB;
+				}
+
+				day.PeriodSlices[p] = synth;
+				prevClose = sClose;
+			}
+
+			day.LastPeriod = Math.Max(day.LastPeriod, expected - 1);
+		}
+
+		private DayProfile NormalizeDayRowCount(DayProfile src, double baseStep, bool isLatestDay = false)
 		{
 			if (src == null || src.Rows.Count == 0)
 			{
 				if (src != null)
 					src.EffectiveStep = baseStep;
 				return src;
+			}
+
+			if (!isLatestDay && src.SessionDate < DateTime.Today)
+			{
+				EnsureFullDayTpoPeriods(src, baseStep);
 			}
 
 			int minB = src.Rows.Keys.Min();
@@ -1505,6 +2255,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			allDays.Sort((a, b) => a.SessionDate.CompareTo(b.SessionDate));
 
+			// Ignore tiny pre-open / stub past day files when complete prior sessions exist, but never drop today's live session
+			while (allDays.Count > 1 && allDays[allDays.Count - 1].BarCount < 2 && allDays[allDays.Count - 1].SessionDate < DateTime.Today)
+			{
+				allDays.RemoveAt(allDays.Count - 1);
+			}
+
 			// Display only up to DaysToDisplay
 			if (DaysToDisplay > 0 && allDays.Count > DaysToDisplay)
 				allDays = allDays.Skip(allDays.Count - DaysToDisplay).ToList();
@@ -1538,6 +2294,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			float usableW = Math.Max(420f, rightLimit - leftMargin);
 
 			float maxScroll = Math.Max(0f, totalStripWidth - usableW);
+			maxScrollCached = maxScroll;
 			float scrollRatio = 1.0f;
 			bool usedScrollBarRatio = false;
 			try
@@ -1555,7 +2312,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 						scrollRatio = 0.0f;
 					usedScrollBarRatio = true;
 
-					if (double.IsNaN(lastTrackedScrollBarVal) || Math.Abs(sbVal - lastTrackedScrollBarVal) > 0.01)
+					if (double.IsNaN(lastTrackedScrollBarVal))
+					{
+						lastTrackedScrollBarVal = sbVal;
+					}
+					else if (Math.Abs(sbVal - lastTrackedScrollBarVal) > 0.5)
 					{
 						lastTrackedScrollBarVal = sbVal;
 						hasManualPixelScroll = false;
@@ -1586,7 +2347,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 					else
 						scrollRatio = Math.Max(0f, Math.Min(1f, (float)toIdx / Math.Max(1, totalBars - 1)));
 
-					if (fromIdx != lastTrackedFromIdx || toIdx != lastTrackedToIdx)
+					if (lastTrackedFromIdx < 0)
+					{
+						lastTrackedFromIdx = fromIdx;
+						lastTrackedToIdx = toIdx;
+					}
+					else if (Math.Abs(fromIdx - lastTrackedFromIdx) > 2)
 					{
 						lastTrackedFromIdx = fromIdx;
 						lastTrackedToIdx = toIdx;
@@ -1683,14 +2449,25 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 				else
 				{
-					if (chartControl.Properties.BarDistance < 1.5f || chartControl.Properties.BarDistance > 4.0f)
-						chartControl.Properties.BarDistance = 2.5f;
+					if (chartControl.Properties.BarDistance < 8.0f || chartControl.Properties.BarDistance > 30.0f)
+						chartControl.Properties.BarDistance = 12.0f;
 				}
 				if (chartScale != null && chartScale.Properties != null)
 				{
 					chartScale.Properties.YAxisRangeType = YAxisRangeType.Automatic;
 				}
-				chartControl.Dispatcher.BeginInvoke(new Action(() => chartControl.InvalidateVisual()));
+				chartControl.Dispatcher.BeginInvoke(new Action(() =>
+				{
+					try
+					{
+						var initSlots = typeof(ChartControl).GetMethod("InitSlotsPainted", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+						if (initSlots != null) initSlots.Invoke(chartControl, null);
+						var initSb = typeof(ChartControl).GetMethod("InitScrollbar", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+						if (initSb != null && initSb.GetParameters().Length == 0) initSb.Invoke(chartControl, null);
+						chartControl.InvalidateVisual();
+					}
+					catch { }
+				}));
 			}
 
 			EnsureMouseHookAttached();
@@ -1705,9 +2482,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (allDays.Count == 0)
 					return;
 
+				allDays.Sort((a, b) => a.SessionDate.CompareTo(b.SessionDate));
+
 				double step = GetPriceStep();
 				for (int i = 0; i < allDays.Count; i++)
-					allDays[i] = NormalizeDayRowCount(allDays[i], step);
+					allDays[i] = NormalizeDayRowCount(allDays[i], step, i == allDays.Count - 1);
 
 				float panelLeft = (float)ChartPanel.X;
 				float panelRight = (float)(ChartPanel.X + ChartPanel.W);
@@ -2394,7 +3173,24 @@ namespace NinjaTrader.NinjaScript.Indicators
 										RectangleF splitHdrPill = new RectangleF(xSplitStart, headerY, splitHeaderW, 16f);
 										RenderTarget.FillRectangle(splitHdrPill, btnActiveBgBrush);
 										RenderTarget.DrawRectangle(splitHdrPill, cyanBrush, 0.8f);
-										DrawText("SPLIT PROFILE (A..M)", xSplitStart + 4f, headerY, splitHeaderW - 8f, 16f, spTagFormat, cyanBrush);
+										int maxSliceIdx = orderedSlices.Count > 0
+											? Math.Max(0, Math.Min(orderedSlices[orderedSlices.Count - 1].PeriodIndex, LetterSequence.Length - 1))
+											: 0;
+										char endSliceChar = LetterSequence[maxSliceIdx];
+										bool isSplitDayLive = isLatestDay && (maxSliceIdx + 1) < Math.Max(1, day.ExpectedPeriodCount);
+										string splitHdrTitle = isSplitDayLive
+											? string.Format(CultureInfo.InvariantCulture, "SPLIT PROFILE (A..{0}) LIVE", endSliceChar)
+											: string.Format(CultureInfo.InvariantCulture, "SPLIT PROFILE (A..{0})", endSliceChar);
+										DrawText(splitHdrTitle, xSplitStart + 4f, headerY, splitHeaderW - 8f, 16f, spTagFormat, isSplitDayLive ? greenBrush : cyanBrush);
+										if (ShowChartButtons)
+										{
+											activeChartButtons.Add(new ChartButton
+											{
+												Rect = splitHdrPill,
+												Action = ChartButtonAction.ToggleSplit,
+												PrimaryKey = day.ProfileKey + "|ON"
+											});
+										}
 
 										RenderTarget.FillRectangle(
 											new RectangleF(xSplitStart, yVaTop, Math.Max(10f, xSplitEnd - xSplitStart), Math.Max(2f, yVaBot - yVaTop)),
@@ -2789,6 +3585,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				Tuple.Create("Market Profile: ", textBrush),
 				Tuple.Create(instName, orangeBrush),
+				Tuple.Create(" ● LIVE ACCELPIX", greenBrush),
 				Tuple.Create(", TPOSize: ", textBrush),
 				Tuple.Create(FormatPrice(step) + tpoMode, greenBrush),
 				Tuple.Create(", Distribution: ", textBrush),

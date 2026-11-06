@@ -907,14 +907,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		public void OnAccelpixConnected()
 		{
-			TriggerStaggeredResubscribe();
+			TriggerStaggeredResubscribe(true);
 		}
 
-		public void TriggerStaggeredResubscribe()
+		public void TriggerStaggeredResubscribe(bool forceResubscribe = false)
 		{
 			lock (subQueueLock)
 			{
-				if (isStaggeredSubRunning) return;
+				if (isStaggeredSubRunning && !forceResubscribe) return;
 				isStaggeredSubRunning = true;
 			}
 
@@ -926,7 +926,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					for (int i = 0; i < targets.Count; i++)
 					{
 						if (isDisposed) break;
-						EnsureSubscribedInternal(targets[i]);
+						EnsureSubscribedInternal(targets[i], forceResubscribe);
 						Thread.Sleep(30); // 30ms stagger to prevent collection modified in Accelpix NT8 adapter
 					}
 				}
@@ -976,10 +976,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 			EnsureSubscribedInternal(symbol);
 		}
 
-		private void EnsureSubscribedInternal(string symbol)
+		private void EnsureSubscribedInternal(string symbol, bool forceResubscribe = false)
 		{
 			SymbolSub sub = subscriptions.GetOrAdd(symbol, s => new SymbolSub { Symbol = s });
-			if (sub.IsMarketDataSubscribed)
+			if (sub.IsMarketDataSubscribed && !forceResubscribe)
 				return;
 
 			sub.OnTickReceived = sym =>
@@ -1009,8 +1009,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 					// 1. Subscribe to Live Market Data Stream (Ticks, Last, Bid, Ask, Daily High/Low/Vol)
 					try
 					{
-						inst.MarketDataUpdate += sub.OnMarketDataUpdate;
-						sub.IsMarketDataSubscribed = true;
+						if (!sub.IsMarketDataSubscribed)
+						{
+							inst.MarketDataUpdate += sub.OnMarketDataUpdate;
+							sub.IsMarketDataSubscribed = true;
+						}
 
 						if (inst.MarketData != null)
 						{
@@ -2400,6 +2403,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			try
 			{
+				NinjaTrader.NinjaScript.AddOns.AK10XChartStackerWindow.EnsureAccelpixConnected();
 				Connection.ConnectionStatusUpdate += OnConnectionStatusUpdate;
 			}
 			catch { }
@@ -2903,6 +2907,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			grid.ColumnHeaderStyle = headerStyle;
 
 			grid.Sorting += OnGridSorting;
+			grid.PreviewMouseLeftButtonUp += OnGridPreviewMouseLeftButtonUp;
 			grid.MouseDoubleClick += OnGridMouseDoubleClick;
 			grid.ItemsSource = observableRows;
 
@@ -3041,7 +3046,27 @@ namespace NinjaTrader.NinjaScript.Indicators
 			TriggerColumnSort(colId);
 		}
 
-				private void OnGridMouseDoubleClick(object sender, MouseButtonEventArgs e)
+		private void OnGridPreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+		{
+			try
+			{
+				DependencyObject dep = e.OriginalSource as DependencyObject;
+				while (dep != null)
+				{
+					if (dep is DataGridColumnHeader || dep is System.Windows.Controls.Primitives.ScrollBar)
+						return;
+					if (dep is DataGridRow row && row.Item is MpScannerRow rowItem && !string.IsNullOrWhiteSpace(rowItem.Ticker))
+					{
+						NinjaTrader.NinjaScript.AddOns.AK10XChartStackerWindow.LoadUnifiedInstrumentPair(rowItem.Ticker);
+						return;
+					}
+					dep = VisualTreeHelper.GetParent(dep);
+				}
+			}
+			catch { }
+		}
+
+		private void OnGridMouseDoubleClick(object sender, MouseButtonEventArgs e)
 		{
 			try
 			{
@@ -3049,6 +3074,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				DependencyObject dep = e.OriginalSource as DependencyObject;
 				while (dep != null && !(dep is DataGridRow))
 				{
+					if (dep is DataGridColumnHeader || dep is System.Windows.Controls.Primitives.ScrollBar)
+						return;
 					dep = VisualTreeHelper.GetParent(dep);
 				}
 				if (dep is DataGridRow row && row.Item is MpScannerRow rowItem)

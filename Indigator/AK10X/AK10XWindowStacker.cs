@@ -1,4 +1,4 @@
-﻿// AK10X 2-Screen Window Stacker for NinjaTrader 8
+// AK10X 2-Screen Window Stacker for NinjaTrader 8
 // Developed for AK10X Trading Systems.
 // Provides a unified multi-timeframe split-screen window stacker:
 //   - Screen 1 (Left / Primary): Chart with AK10X Market Profile (1M TPO / Dalton Profile)
@@ -249,6 +249,189 @@ namespace NinjaTrader.NinjaScript.AddOns
 		private Button btnMaxPane1;
 		private Button btnMaxPane2;
 		private bool isSuppressSymbolSelectionChanged = false;
+		private bool isUpdatingInstrumentProgrammatically = false;
+		private bool isWindowClosed = false;
+		private string currentLoadedSymbol = "";
+		private DateTime lastSymbolLoadTimestamp = DateTime.MinValue;
+		private Button btnAccelpixStatus;
+
+		public static void EnsureAccelpixConnected()
+		{
+			try
+			{
+				bool alreadyConnected = false;
+				lock (Connection.Connections)
+				{
+					foreach (Connection c in Connection.Connections)
+					{
+						if (c != null && c.Options != null &&
+							(c.Options.Name.IndexOf("Accel", StringComparison.OrdinalIgnoreCase) >= 0 ||
+							 c.Options.TypeName.IndexOf("SampleOpenConnect", StringComparison.OrdinalIgnoreCase) >= 0))
+						{
+							if (c.Status == ConnectionStatus.Connected || c.Status == ConnectionStatus.Connecting)
+								alreadyConnected = true;
+							break;
+						}
+					}
+				}
+				if (alreadyConnected)
+					return;
+
+				ConnectOptions accelOpt = null;
+				if (Globals.ConnectOptions != null)
+				{
+					foreach (ConnectOptions opt in Globals.ConnectOptions)
+					{
+						if (opt != null &&
+							(opt.Name != null && opt.Name.IndexOf("Accel", StringComparison.OrdinalIgnoreCase) >= 0 ||
+							 opt.TypeName != null && opt.TypeName.IndexOf("SampleOpenConnect", StringComparison.OrdinalIgnoreCase) >= 0))
+						{
+							accelOpt = opt;
+							opt.ConnectOnStartup = true;
+							break;
+						}
+					}
+				}
+				if (accelOpt != null)
+				{
+					System.Threading.Tasks.Task.Run(() =>
+					{
+						try { Connection.Connect(accelOpt); } catch { }
+					});
+				}
+			}
+			catch { }
+		}
+
+		private static bool IsAccelpixCurrentlyConnected()
+		{
+			try
+			{
+				lock (Connection.Connections)
+				{
+					foreach (Connection c in Connection.Connections)
+					{
+						if (c != null && c.Options != null &&
+							(c.Options.Name.IndexOf("Accel", StringComparison.OrdinalIgnoreCase) >= 0 ||
+							 c.Options.TypeName.IndexOf("SampleOpenConnect", StringComparison.OrdinalIgnoreCase) >= 0) &&
+							c.Status == ConnectionStatus.Connected)
+						{
+							return true;
+						}
+					}
+				}
+			}
+			catch { }
+			return false;
+		}
+
+		public void ReloadBothDockedChartsHistoricalData()
+		{
+			try
+			{
+				Dispatcher.BeginInvoke(new Action(() =>
+				{
+					try
+					{
+						if (dockedChart1Instance != null && dockedChart1Instance.ActiveChartControl != null)
+						{
+							ChartControl cc1 = dockedChart1Instance.ActiveChartControl;
+							cc1.Dispatcher.BeginInvoke(new Action(() =>
+							{
+								try { cc1.OnReloadHistoricalDataHotKey(cc1, null); } catch { }
+							}));
+						}
+						if (dockedChart2Instance != null && dockedChart2Instance.ActiveChartControl != null)
+						{
+							ChartControl cc2 = dockedChart2Instance.ActiveChartControl;
+							cc2.Dispatcher.BeginInvoke(new Action(() =>
+							{
+								try { cc2.OnReloadHistoricalDataHotKey(cc2, null); } catch { }
+							}));
+						}
+					}
+					catch { }
+				}));
+			}
+			catch { }
+		}
+
+		private void OnStackerConnectionStatusUpdate(object sender, ConnectionStatusEventArgs e)
+		{
+			try
+			{
+				if (e == null || isWindowClosed)
+					return;
+				Dispatcher.BeginInvoke(new Action(() =>
+				{
+					try
+					{
+						UpdateAccelpixStatusButton();
+						if (e.Status == ConnectionStatus.Connected)
+						{
+							var t1 = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(900) };
+							t1.Tick += (s, args) =>
+							{
+								t1.Stop();
+								ReloadBothDockedChartsHistoricalData();
+							};
+							t1.Start();
+
+							var t2 = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(3200) };
+							t2.Tick += (s, args) =>
+							{
+								t2.Stop();
+								ReloadBothDockedChartsHistoricalData();
+							};
+							t2.Start();
+						}
+					}
+					catch { }
+				}));
+			}
+			catch { }
+		}
+
+		private void UpdateAccelpixStatusButton()
+		{
+			if (btnAccelpixStatus == null)
+				return;
+			bool isConn = IsAccelpixCurrentlyConnected();
+			btnAccelpixStatus.Content = isConn ? "● LIVE ACCELPIX" : "⚡ CONNECT ACCELPIX";
+			btnAccelpixStatus.Foreground = new SolidColorBrush(isConn ? Color.FromRgb(0, 230, 118) : Color.FromRgb(255, 179, 0));
+			btnAccelpixStatus.BorderBrush = new SolidColorBrush(isConn ? Color.FromRgb(0, 200, 100) : Color.FromRgb(255, 179, 0));
+			btnAccelpixStatus.Background = new SolidColorBrush(isConn ? Color.FromRgb(8, 42, 22) : Color.FromRgb(42, 32, 8));
+		}
+
+		public static AK10XChartStackerWindow FindOrCreateActiveInstance()
+		{
+			if (Instance != null && !Instance.isWindowClosed)
+				return Instance;
+
+			try
+			{
+				var allWins = NinjaTrader.Core.Globals.AllWindows;
+				if (allWins != null)
+				{
+					for (int i = 0; i < allWins.Count; i++)
+					{
+						Window w = null;
+						try { w = allWins[i]; } catch { }
+						if (w is AK10XChartStackerWindow existing && !existing.isWindowClosed)
+						{
+							Instance = existing;
+							stackerDispatcher = existing.Dispatcher;
+							return existing;
+						}
+					}
+				}
+			}
+			catch { }
+
+			Instance = new AK10XChartStackerWindow();
+			Instance.Show();
+			return Instance;
+		}
 
 		// Cached bounds to eliminate redundant MoveWindow calls & prevent UI shaking / quota exhaustion
 		private int lastX1 = -1, lastY1 = -1, lastW1 = -1, lastH1 = -1;
@@ -279,7 +462,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			catch { }
 		}
 
-		private void SyncD2DForm(int paneIndex, bool visible)
+		private void SyncD2DForm(int paneIndex, bool visible, bool isResizing = false, bool isMoving = false)
 		{
 			try
 			{
@@ -293,7 +476,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 				if (!visible)
 				{
-					StackerWin32.ShowWindow(d2dHwnd, StackerWin32.SW_HIDE);
+					if (StackerWin32.IsWindowVisible(d2dHwnd))
+						StackerWin32.ShowWindow(d2dHwnd, StackerWin32.SW_HIDE);
 					return;
 				}
 
@@ -310,33 +494,41 @@ namespace NinjaTrader.NinjaScript.AddOns
 					if (curOwner != stackerHwnd)
 					{
 						StackerWin32.SetWindowLongPtr(d2dHwnd, StackerWin32.GWLP_HWNDPARENT, stackerHwnd);
+						isMoving = true;
 					}
 				}
 
 				if (!StackerWin32.IsWindowVisible(d2dHwnd))
+				{
 					StackerWin32.ShowWindow(d2dHwnd, StackerWin32.SW_SHOWNOACTIVATE);
+					isResizing = true;
+					isMoving = true;
+				}
 
 				StackerWin32.SetWindowPos(d2dHwnd, IntPtr.Zero, 0, 0, 0, 0,
 					StackerWin32.SWP_NOMOVE | StackerWin32.SWP_NOSIZE | StackerWin32.SWP_NOACTIVATE | StackerWin32.SWP_SHOWWINDOW);
 
-				var moveResize = chart.Form.GetType().GetMethod("MoveResizeForm", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
-				if (moveResize != null)
-					moveResize.Invoke(chart.Form, new object[] { true, true });
+				if (isResizing || isMoving)
+				{
+					var moveResize = chart.Form.GetType().GetMethod("MoveResizeForm", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+					if (moveResize != null)
+						moveResize.Invoke(chart.Form, new object[] { isResizing, isMoving });
 
-				if (chart.ActiveChartControl != null)
-					chart.ActiveChartControl.InvalidateVisual();
+					if (isResizing && chart.ActiveChartControl != null)
+						chart.ActiveChartControl.InvalidateVisual();
+				}
 			}
 			catch { }
 		}
 
-		private void RefreshDockedChartVisuals(int paneIndex = 0)
+		private void RefreshDockedChartVisuals(int paneIndex = 0, bool isResizing = false, bool isMoving = false)
 		{
 			try
 			{
 				if (paneIndex == 0 || paneIndex == 1)
-					SyncD2DForm(1, !isPane2Maximized && WindowState != WindowState.Minimized);
+					SyncD2DForm(1, !isPane2Maximized && WindowState != WindowState.Minimized, isResizing, isMoving);
 				if (paneIndex == 0 || paneIndex == 2)
-					SyncD2DForm(2, !isPane1Maximized && WindowState != WindowState.Minimized);
+					SyncD2DForm(2, !isPane1Maximized && WindowState != WindowState.Minimized, isResizing, isMoving);
 			}
 			catch { }
 		}
@@ -365,17 +557,14 @@ namespace NinjaTrader.NinjaScript.AddOns
 				UpdateLayout();
 				if (mainSplitGrid != null) mainSplitGrid.UpdateLayout();
 				SyncBothPanes();
-				RefreshDockedChartVisuals();
 
 				Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
 				{
 					try
 					{
-						InvalidatePaneBoundsCache();
 						UpdateLayout();
 						if (mainSplitGrid != null) mainSplitGrid.UpdateLayout();
 						SyncBothPanes();
-						RefreshDockedChartVisuals();
 					}
 					catch { }
 				}));
@@ -389,8 +578,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 			Instance = this;
 			stackerDispatcher = this.Dispatcher;
 
-			Caption = "AK10X 2-Screen Stacker | Screen 1: Market Profile | Screen 2: 5-Min Candles";
-			Title = "AK10X 2-Screen Stacker | Screen 1: Market Profile | Screen 2: 5-Min Candles";
+			Caption = "AK10X 2-Screen Stacker | Screen 1: Market Profile (1M) | Screen 2: Orderflow (5M)";
+			Title = "AK10X 2-Screen Stacker | Screen 1: Market Profile (1M) | Screen 2: Orderflow (5M)";
 			Rect wa = SystemParameters.WorkArea;
 			WindowStartupLocation = WindowStartupLocation.Manual;
 			Left = wa.Left;
@@ -402,11 +591,15 @@ namespace NinjaTrader.NinjaScript.AddOns
 			Background = new SolidColorBrush(Color.FromRgb(14, 17, 23)); // #0E1117
 
 			BuildUI();
+			EnsureAccelpixConnected();
+			Connection.ConnectionStatusUpdate += OnStackerConnectionStatusUpdate;
 
 			SourceInitialized += (s, e) =>
 			{
 				try
 				{
+					Instance = this;
+					stackerDispatcher = this.Dispatcher;
 					stackerHwnd = new WindowInteropHelper(this).Handle;
 					HwndSource src = HwndSource.FromHwnd(stackerHwnd);
 					if (src != null)
@@ -419,16 +612,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 			{
 				try
 				{
-					RefreshDockedChartVisuals();
-				}
-				catch { }
-			};
-
-			PreviewMouseDown += (s, e) =>
-			{
-				try
-				{
-					Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Render, new Action(() => RefreshDockedChartVisuals()));
+					Instance = this;
+					stackerDispatcher = this.Dispatcher;
+					RefreshDockedChartVisuals(0, false, false);
 				}
 				catch { }
 			};
@@ -449,7 +635,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			{
 				try
 				{
-					RefreshDockedChartVisuals();
+					RefreshDockedChartVisuals(0, false, true);
 				}
 				catch { }
 			};
@@ -491,18 +677,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		private IntPtr OnStackerWndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
 		{
-			if (msg == StackerWin32.WM_PARENTNOTIFY ||
-				msg == StackerWin32.WM_MOUSEACTIVATE ||
-				(msg == StackerWin32.WM_ACTIVATE && wParam != IntPtr.Zero) ||
+			if ((msg == StackerWin32.WM_ACTIVATE && wParam != IntPtr.Zero) ||
 				(msg == StackerWin32.WM_NCACTIVATE && wParam != IntPtr.Zero))
 			{
 				try
 				{
-					RefreshDockedChartVisuals();
-					Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Render, new Action(() =>
-					{
-						try { RefreshDockedChartVisuals(); } catch { }
-					}));
+					RefreshDockedChartVisuals(0, false, false);
 				}
 				catch { }
 			}
@@ -554,12 +734,23 @@ namespace NinjaTrader.NinjaScript.AddOns
 				Margin = new Thickness(0, 0, 12, 0)
 			};
 			Border badgeProfile = CreateBadge("SCREEN 1: MARKET PROFILE (1M)", Color.FromRgb(0, 229, 255), Color.FromRgb(6, 36, 46));
-			Border badgeCandles = CreateBadge("SCREEN 2: 5-MIN CANDLES", Color.FromRgb(0, 230, 118), Color.FromRgb(8, 42, 22));
+			Border badgeCandles = CreateBadge("SCREEN 2: ORDERFLOW (5M FOOTPRINT)", Color.FromRgb(0, 230, 118), Color.FromRgb(8, 42, 22));
 			badgeCandles.Margin = new Thickness(8, 0, 0, 0);
+
+			btnAccelpixStatus = CreateHeaderButton("● LIVE ACCELPIX", (s, e) =>
+			{
+				EnsureAccelpixConnected();
+				UpdateAccelpixStatusButton();
+				ReloadBothDockedChartsHistoricalData();
+			});
+			btnAccelpixStatus.FontWeight = FontWeights.Bold;
+			btnAccelpixStatus.Margin = new Thickness(8, 0, 0, 0);
+			UpdateAccelpixStatusButton();
 
 			brandPanel.Children.Add(txtBrand);
 			brandPanel.Children.Add(badgeProfile);
 			brandPanel.Children.Add(badgeCandles);
+			brandPanel.Children.Add(btnAccelpixStatus);
 			Grid.SetColumn(brandPanel, 0);
 			headerGrid.Children.Add(brandPanel);
 
@@ -606,16 +797,32 @@ namespace NinjaTrader.NinjaScript.AddOns
 			cmbSymbol.SelectionChanged += (s, e) =>
 			{
 				if (isSuppressSymbolSelectionChanged) return;
-				if (cmbSymbol.SelectedItem is string selectedSym && !string.IsNullOrWhiteSpace(selectedSym))
+				Instance = this;
+				stackerDispatcher = this.Dispatcher;
+				string selectedSym = cmbSymbol.SelectedItem as string;
+				if (!string.IsNullOrWhiteSpace(selectedSym))
 				{
-					LoadUnifiedInstrumentPair(selectedSym);
+					LoadSymbolPairOnWindow(selectedSym);
+				}
+			};
+			cmbSymbol.DropDownClosed += (s, e) =>
+			{
+				if (isSuppressSymbolSelectionChanged) return;
+				Instance = this;
+				stackerDispatcher = this.Dispatcher;
+				string sym = (cmbSymbol.SelectedItem as string) ?? cmbSymbol.Text;
+				if (!string.IsNullOrWhiteSpace(sym))
+				{
+					LoadSymbolPairOnWindow(sym.Trim());
 				}
 			};
 			cmbSymbol.KeyDown += (s, e) =>
 			{
 				if (e.Key == Key.Enter && !string.IsNullOrWhiteSpace(cmbSymbol.Text))
 				{
-					LoadUnifiedInstrumentPair(cmbSymbol.Text.Trim());
+					Instance = this;
+					stackerDispatcher = this.Dispatcher;
+					LoadSymbolPairOnWindow(cmbSymbol.Text.Trim());
 					e.Handled = true;
 				}
 			};
@@ -647,7 +854,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 			// Right Actions: Launch 2-Screen, Scanner Switcher, Auto-Dock & Undock All
 			StackPanel actionsPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-			Button btnAutoLaunch = CreateAccentButton("⚡ Launch 2-Screen", (s, e) => LoadUnifiedInstrumentPair(GetSelectedSymbol()));
+			Button btnAutoLaunch = CreateAccentButton("⚡ Launch 2-Screen", (s, e) =>
+			{
+				Instance = this;
+				stackerDispatcher = this.Dispatcher;
+				LoadSymbolPairOnWindow(GetSelectedSymbol(), true);
+			});
 			Button btnScanner = CreateHeaderButton("📊 Scanner", (s, e) => ActivateScannerWindow());
 			btnScanner.Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248));
 			btnScanner.FontWeight = FontWeights.Bold;
@@ -759,7 +971,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 			txtTitle = new TextBlock
 			{
-				Text = paneIndex == 1 ? "SCREEN 1: MARKET PROFILE (1M TPO)" : "SCREEN 2: 5-MIN CANDLES",
+				Text = paneIndex == 1 ? "SCREEN 1: MARKET PROFILE (1M TPO)" : "SCREEN 2: ORDERFLOW (5M FOOTPRINT)",
 				Foreground = paneIndex == 1 ? new SolidColorBrush(Color.FromRgb(0, 229, 255)) : new SolidColorBrush(Color.FromRgb(0, 230, 118)),
 				FontWeight = FontWeights.Bold,
 				FontSize = 11,
@@ -776,7 +988,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 				FontSize = 11,
 				Background = new SolidColorBrush(Color.FromRgb(16, 20, 28)),
 				Foreground = Brushes.White,
-				Margin = new Thickness(0, 0, 6, 0)
+				Margin = new Thickness(0, 0, 6, 0),
+				Visibility = Visibility.Collapsed
 			};
 			cmbCharts.DropDownOpened += (s, e) => RefreshAvailableCharts();
 			int pIdx = paneIndex;
@@ -790,6 +1003,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			};
 
 			Button btnUndock = CreatePaneButton("Undock ↗", (s, e) => UndockPane(pIdx));
+			btnUndock.Visibility = Visibility.Collapsed;
 			Button btnMax = CreatePaneButton("Maximize ⤢", (s, e) => ToggleMaximize(pIdx));
 			if (pIdx == 1) btnMaxPane1 = btnMax;
 			else btnMaxPane2 = btnMax;
@@ -827,7 +1041,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			};
 			TextBlock title = new TextBlock
 			{
-				Text = paneIndex == 1 ? "Screen 1: Market Profile" : "Screen 2: 5-Minute Candlestick",
+				Text = paneIndex == 1 ? "Screen 1: Market Profile (1M TPO)" : "Screen 2: Orderflow Footprint (5M)",
 				FontWeight = FontWeights.Bold,
 				FontSize = 16,
 				Foreground = Brushes.White,
@@ -838,7 +1052,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			{
 				Text = paneIndex == 1
 					? "Dalton Market Profile (1-Min timeframe, 70% Value Area, Initial Balance, POC)"
-					: "Fast 5-Min Price Action & Order Execution (Integrated Chart Trader)",
+					: "MZ-Style Orderflow Footprint (5-Min Clusters, POC, 70% VA, 400% Imbalances & Delta Grid)",
 				FontSize = 12,
 				Foreground = new SolidColorBrush(Color.FromRgb(140, 150, 170)),
 				HorizontalAlignment = HorizontalAlignment.Center,
@@ -846,7 +1060,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			};
 
 			Button btnLaunch = CreateAccentButton(
-				paneIndex == 1 ? "+ Open Market Profile Chart" : "+ Open 5-Min Candles Chart",
+				paneIndex == 1 ? "+ Open Market Profile Chart" : "+ Open 5-Min Orderflow Chart",
 				(s, e) => LaunchChartForPane(paneIndex));
 			btnLaunch.HorizontalAlignment = HorizontalAlignment.Center;
 
@@ -904,7 +1118,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 						{
 							try
 							{
-								RefreshDockedChartVisuals(targetPane);
+								RefreshDockedChartVisuals(targetPane, false, true);
 							}
 							catch { }
 						};
@@ -912,25 +1126,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 						{
 							try
 							{
-								RefreshDockedChartVisuals();
-							}
-							catch { }
-						};
-						chartInstance.PreviewMouseDown += (s, ev) =>
-						{
-							try
-							{
-								RefreshDockedChartVisuals();
-								Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Render, new Action(() => RefreshDockedChartVisuals()));
-							}
-							catch { }
-						};
-						chartInstance.PreviewMouseUp += (s, ev) =>
-						{
-							try
-							{
-								RefreshDockedChartVisuals();
-								Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Render, new Action(() => RefreshDockedChartVisuals()));
+								RefreshDockedChartVisuals(0, false, false);
 							}
 							catch { }
 						};
@@ -953,7 +1149,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				if (paneIndex == 1)
 				{
 					if (dockedChart1Hwnd != IntPtr.Zero && dockedChart1Hwnd != hwnd)
-						UndockPane(1);
+						CloseSingleDockedChart(1);
 
 					dockedChart1Hwnd = hwnd;
 					dockedChart1Title = title;
@@ -962,12 +1158,13 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 					txtPane1Title.Text = "SCREEN 1: " + title;
 					placeholderPane1.Visibility = Visibility.Collapsed;
+					HookChartInstrumentSelector(chartInstance, 1);
 					SyncPaneWindow(1);
 				}
 				else
 				{
 					if (dockedChart2Hwnd != IntPtr.Zero && dockedChart2Hwnd != hwnd)
-						UndockPane(2);
+						CloseSingleDockedChart(2);
 
 					dockedChart2Hwnd = hwnd;
 					dockedChart2Title = title;
@@ -976,6 +1173,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 					txtPane2Title.Text = "SCREEN 2: " + title;
 					placeholderPane2.Visibility = Visibility.Collapsed;
+					HookChartInstrumentSelector(chartInstance, 2);
 					SyncPaneWindow(2);
 				}
 
@@ -984,15 +1182,15 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 				// Follow-up sync pass after NTWindow post-load events settle
 				int targetIdx = paneIndex;
-				var settleTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(180) };
+				var settleTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
 				int settleTicks = 0;
 				settleTimer.Tick += (s, ev) =>
 				{
 					settleTicks++;
-					if (targetIdx == 1) { lastX1 = -99999; lastY1 = -99999; lastW1 = -99999; lastH1 = -99999; }
-					else { lastX2 = -99999; lastY2 = -99999; lastW2 = -99999; lastH2 = -99999; }
 					SyncPaneWindow(targetIdx);
-					if (settleTicks >= 3)
+					if (settleTicks == 1)
+						RefreshDockedChartVisuals(targetIdx, true, true);
+					if (settleTicks >= 2)
 						settleTimer.Stop();
 				};
 				settleTimer.Start();
@@ -1165,28 +1363,34 @@ namespace NinjaTrader.NinjaScript.AddOns
 				int h = Math.Max(50, (int)Math.Round((container.ActualHeight - headerH - borderThickness) * dpiY));
 
 				// CRITICAL ANTI-SHAKING & QUOTA PROTECTION CHECK:
+				bool sizeChanged;
+				bool posChanged;
 				if (paneIndex == 1)
 				{
 					if (x == lastX1 && y == lastY1 && w == lastW1 && h == lastH1)
 					{
-						SyncD2DForm(1, true);
+						SyncD2DForm(1, true, false, false);
 						return;
 					}
+					sizeChanged = (w != lastW1 || h != lastH1);
+					posChanged = (x != lastX1 || y != lastY1);
 					lastX1 = x; lastY1 = y; lastW1 = w; lastH1 = h;
 				}
 				else
 				{
 					if (x == lastX2 && y == lastY2 && w == lastW2 && h == lastH2)
 					{
-						SyncD2DForm(2, true);
+						SyncD2DForm(2, true, false, false);
 						return;
 					}
+					sizeChanged = (w != lastW2 || h != lastH2);
+					posChanged = (x != lastX2 || y != lastY2);
 					lastX2 = x; lastY2 = y; lastW2 = w; lastH2 = h;
 				}
 
 				StackerWin32.MoveWindow(hwnd, x, y, w, h, true);
 				StackerWin32.ShowWindow(hwnd, StackerWin32.SW_SHOW);
-				SyncD2DForm(paneIndex, true);
+				SyncD2DForm(paneIndex, true, sizeChanged, posChanged);
 			}
 			catch { }
 		}
@@ -1509,6 +1713,43 @@ namespace NinjaTrader.NinjaScript.AddOns
 			return "NIFTY_I";
 		}
 
+		private void HookChartInstrumentSelector(NinjaTrader.Gui.Chart.Chart chartInstance, int paneIndex)
+		{
+			if (chartInstance == null) return;
+			try
+			{
+				var selField = typeof(NinjaTrader.Gui.Chart.Chart).GetField("instrumentSelector", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
+				if (selField != null)
+				{
+					var selector = selField.GetValue(chartInstance) as NinjaTrader.Gui.Tools.InstrumentSelector;
+					if (selector != null)
+					{
+						selector.InstrumentChanged += (s, e) =>
+						{
+							if (isUpdatingInstrumentProgrammatically) return;
+							try
+							{
+								Instrument newInst = selector.Instrument;
+								if (newInst != null && !string.IsNullOrWhiteSpace(newInst.FullName))
+								{
+									string sym = newInst.FullName.Trim();
+									if (!string.Equals(sym, currentLoadedSymbol, StringComparison.OrdinalIgnoreCase))
+									{
+										Dispatcher.BeginInvoke(new Action(() =>
+										{
+											LoadSymbolPairOnWindow(sym, false);
+										}));
+									}
+								}
+							}
+							catch { }
+						};
+					}
+				}
+			}
+			catch { }
+		}
+
 		public static Instrument ResolveBestInstrument(string preferredName)
 		{
 			try
@@ -1520,15 +1761,57 @@ namespace NinjaTrader.NinjaScript.AddOns
 					if (clean.Equals("NIFTY", StringComparison.OrdinalIgnoreCase)) clean = "NIFTY_I";
 					if (clean.Equals("BANKNIFTY", StringComparison.OrdinalIgnoreCase)) clean = "BANKNIFTY_I";
 
-					Instrument inst = Instrument.GetInstrument(clean, false);
-					if (inst == null) inst = Instrument.GetInstrument(clean, true);
-					if (inst == null) inst = Instrument.GetInstrument(clean);
-					if (inst == null) inst = Instrument.GetInstrumentFuzzy(clean);
-					if (inst == null && clean.EndsWith("_I", StringComparison.OrdinalIgnoreCase))
-						inst = Instrument.GetInstrument(clean.Substring(0, clean.Length - 2));
+					// 1. Check already-loaded Instrument.All for an exact match first
+					try
+					{
+						if (Instrument.All != null)
+						{
+							foreach (var it in Instrument.All)
+							{
+								if (it != null && (string.Equals(it.FullName, clean, StringComparison.OrdinalIgnoreCase) ||
+									(it.MasterInstrument != null && string.Equals(it.MasterInstrument.Name, clean, StringComparison.OrdinalIgnoreCase))))
+								{
+									return it;
+								}
+							}
+						}
+					}
+					catch { }
 
-					if (inst != null)
-						return inst;
+					Instrument inst = null;
+					try { inst = Instrument.GetInstrument(clean, false); } catch { }
+					if (inst == null)
+					{
+						try { inst = Instrument.GetInstrument(clean, true); } catch { }
+					}
+					if (inst == null)
+					{
+						try
+						{
+							inst = Instrument.GetInstrument(clean);
+						}
+						catch { }
+					}
+					if (inst == null)
+					{
+						try
+						{
+							Instrument fuzzy = Instrument.GetInstrumentFuzzy(clean);
+							if (fuzzy != null && (fuzzy.FullName.StartsWith(clean, StringComparison.OrdinalIgnoreCase) ||
+								(fuzzy.MasterInstrument != null && string.Equals(fuzzy.MasterInstrument.Name, clean, StringComparison.OrdinalIgnoreCase))))
+							{
+								inst = fuzzy;
+							}
+						}
+						catch { }
+					}
+					if (inst == null && clean.EndsWith("_I", StringComparison.OrdinalIgnoreCase))
+					{
+						try { inst = Instrument.GetInstrument(clean.Substring(0, clean.Length - 2), true); } catch { }
+					}
+
+					// Return inst (even if null) so CreateConfiguredChart uses the requested symbol name and NEVER falls back to an unrelated symbol!
+					return inst;
 				}
 
 				string[] candidates = new string[] { "NIFTY_I", "BANKNIFTY_I", "FINNIFTY_I", "RELIANCE_I", "HDFCBANK_I", "GC 12-26", "NQ 12-26", "MNQ 12-26", "ES 12-26" };
@@ -1536,35 +1819,77 @@ namespace NinjaTrader.NinjaScript.AddOns
 				{
 					try
 					{
-						Instrument inst = Instrument.GetInstrument(c, false);
+						Instrument inst = Instrument.GetInstrument(c, true);
 						if (inst != null)
 							return inst;
 					}
 					catch { }
 				}
-
-				if (Instrument.All != null)
-				{
-					foreach (var it in Instrument.All)
-					{
-						if (it != null && it.FullName.EndsWith("_I", StringComparison.OrdinalIgnoreCase))
-							return it;
-					}
-					foreach (var it in Instrument.All)
-					{
-						if (it != null && it.FullName.IndexOf("NIFTY", StringComparison.OrdinalIgnoreCase) >= 0)
-							return it;
-					}
-					foreach (var it in Instrument.All)
-					{
-						if (it != null)
-							return it;
-					}
-				}
 			}
 			catch { }
 
 			return null;
+		}
+
+		private static void EnsurePaneIndicatorAttached(ChartControl cc, bool applyMarketProfile)
+		{
+			if (cc == null || cc.PrimaryBars == null || cc.ChartPanels == null || cc.ChartPanels.Count == 0 || cc.BarsArray == null || cc.BarsArray.Count == 0)
+				return;
+
+			try
+			{
+				EnsureD2DFactoryForCurrentThread();
+				string targetTypePart = applyMarketProfile ? "MarketProfile" : "AK10XOrderflow";
+				bool exists = false;
+				foreach (var ind in cc.Indicators)
+				{
+					if (ind != null && ind.GetType().Name.IndexOf(targetTypePart, StringComparison.OrdinalIgnoreCase) >= 0)
+					{
+						exists = true;
+						break;
+					}
+				}
+
+				if (!applyMarketProfile && cc.Properties != null && cc.Properties.BarDistance < 75f)
+				{
+					cc.Properties.BarDistance = 110f;
+				}
+
+				if (!exists)
+				{
+					if (applyMarketProfile)
+					{
+						var mp = new NinjaTrader.NinjaScript.Indicators.INDMarketProfile50Charts();
+						mp.SetState(State.SetDefaults);
+						mp.ChartControl = cc;
+						mp.ChartBars = cc.PrimaryBars;
+						mp.ChartPanel = cc.ChartPanels[0];
+						mp.Panel = 0;
+						cc.Indicators.Add(mp);
+					}
+					else
+					{
+						var ofInd = new NinjaTrader.NinjaScript.Indicators.AK10XOrderflow();
+						ofInd.SetState(State.SetDefaults);
+						ofInd.ChartControl = cc;
+						ofInd.ChartBars = cc.PrimaryBars;
+						ofInd.ChartPanel = cc.ChartPanels[0];
+						ofInd.Panel = 0;
+						cc.Indicators.Add(ofInd);
+					}
+
+					var refreshMethod = typeof(ChartControl).GetMethod("RefreshIndicators", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+					if (refreshMethod != null)
+						refreshMethod.Invoke(cc, new object[] { true, true });
+
+					var applyMethod = typeof(ChartControl).GetMethod("ApplyNinjaScripts", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+					if (applyMethod != null)
+						applyMethod.Invoke(cc, null);
+				}
+
+				cc.InvalidateVisual();
+			}
+			catch { }
 		}
 
 		private NinjaTrader.Gui.Chart.Chart CreateConfiguredChart(string instrumentName, int periodMinutes, bool applyMarketProfile)
@@ -1617,12 +1942,16 @@ namespace NinjaTrader.NinjaScript.AddOns
 				try
 				{
 					bp.ChartStyle = NinjaTrader.NinjaScript.ChartStyles.ChartStyle.CreateInstance(ChartStyleType.CandleStick);
+					if (!applyMarketProfile && bp.ChartStyle != null)
+						bp.ChartStyle.BarWidth = 2;
 				}
 				catch
 				{
 					var cs = new NinjaTrader.NinjaScript.ChartStyles.CandleStyle();
 					cs.SetState(State.SetDefaults);
 					cs.SetState(State.Configure);
+					if (!applyMarketProfile)
+						cs.BarWidth = 2;
 					bp.ChartStyle = cs;
 				}
 
@@ -1636,75 +1965,39 @@ namespace NinjaTrader.NinjaScript.AddOns
 				newChart.Height = 700;
 				newChart.ShowActivated = false;
 
-				// If Screen 1 Market Profile is requested, automatically attach INDMarketProfile50Charts
-				if (applyMarketProfile)
+				// Automatically attach INDMarketProfile50Charts (Screen 1) or AK10XOrderflow (Screen 2)
+				bool isProfileChart = applyMarketProfile;
+				var initTimer = new System.Windows.Threading.DispatcherTimer(
+					TimeSpan.FromMilliseconds(35),
+					System.Windows.Threading.DispatcherPriority.Background,
+					(s, e) => { },
+					newChart.Dispatcher);
+				int initTries = 0;
+				initTimer.Tick += (s, e) =>
 				{
-					var initTimer = new System.Windows.Threading.DispatcherTimer(
-						TimeSpan.FromMilliseconds(80),
-						System.Windows.Threading.DispatcherPriority.Background,
-						(s, e) => { },
-						newChart.Dispatcher);
-					int initTries = 0;
-					initTimer.Tick += (s, e) =>
+					initTries++;
+					try
 					{
-						initTries++;
-						try
+						if (newChart.ActiveChartControl != null)
 						{
-							if (newChart.ActiveChartControl != null)
+							ChartControl cc = newChart.ActiveChartControl;
+							if (cc.PrimaryBars == null || cc.ChartPanels == null || cc.ChartPanels.Count == 0 || cc.BarsArray == null || cc.BarsArray.Count == 0)
 							{
-								ChartControl cc = newChart.ActiveChartControl;
-								if (cc.PrimaryBars == null || cc.ChartPanels == null || cc.ChartPanels.Count == 0 || cc.BarsArray == null || cc.BarsArray.Count == 0)
-								{
-									if (initTries >= 40)
-										initTimer.Stop();
-									return;
-								}
-								bool exists = false;
-								foreach (var ind in cc.Indicators)
-								{
-									if (ind != null && ind.GetType().Name.Contains("MarketProfile"))
-									{
-										exists = true;
-										break;
-									}
-								}
-								if (!exists)
-								{
-									EnsureD2DFactoryForCurrentThread();
-									var mp = new NinjaTrader.NinjaScript.Indicators.INDMarketProfile50Charts();
-									mp.SetState(State.SetDefaults);
-									mp.ChartControl = cc;
-									mp.ChartBars = cc.PrimaryBars;
-									mp.ChartPanel = cc.ChartPanels[0];
-									mp.Panel = 0;
-									cc.Indicators.Add(mp);
-
-									var refreshMethod = typeof(ChartControl).GetMethod("RefreshIndicators", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-									if (refreshMethod != null)
-										refreshMethod.Invoke(cc, new object[] { true, true });
-
-									var applyMethod = typeof(ChartControl).GetMethod("ApplyNinjaScripts", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-									if (applyMethod != null)
-										applyMethod.Invoke(cc, null);
-
-									cc.InvalidateVisual();
+								if (initTries >= 80)
 									initTimer.Stop();
-									return;
-								}
-								else
-								{
-									initTimer.Stop();
-									return;
-								}
+								return;
 							}
-						}
-						catch { }
-
-						if (initTries >= 40)
+							EnsurePaneIndicatorAttached(cc, isProfileChart);
 							initTimer.Stop();
-					};
-					initTimer.Start();
-				}
+							return;
+						}
+					}
+					catch { }
+
+					if (initTries >= 80)
+						initTimer.Stop();
+				};
+				initTimer.Start();
 
 				return newChart;
 			}
@@ -1723,14 +2016,22 @@ namespace NinjaTrader.NinjaScript.AddOns
 				{
 					string inst = !string.IsNullOrWhiteSpace(preferredSymbol) ? preferredSymbol : GetSelectedSymbol();
 					bool isProfile = (paneIndex == 1);
-					int period = isProfile ? 1 : 5; // Chart 1 = 1-Min MP, Chart 2 = 5-Min Candles
+					int period = isProfile ? 1 : 5; // Chart 1 = 1-Min MP, Chart 2 = 5-Min Orderflow Footprint
 
 					NinjaTrader.Gui.Chart.Chart newChart = CreateConfiguredChart(inst, period, isProfile);
 					newChart.Show();
 
+					string fallbackTitle = paneIndex == 1 ? (inst + " (1-Min Market Profile)") : (inst + " (5-Min Orderflow)");
+					IntPtr immediateHwnd = new WindowInteropHelper(newChart).Handle;
+					if (immediateHwnd != IntPtr.Zero)
+					{
+						DockChartByHwnd(immediateHwnd, fallbackTitle, paneIndex, newChart);
+						return;
+					}
+
 					int attempts = 0;
 					var timer = new System.Windows.Threading.DispatcherTimer();
-					timer.Interval = TimeSpan.FromMilliseconds(50);
+					timer.Interval = TimeSpan.FromMilliseconds(25);
 					timer.Tick += (s, e) =>
 					{
 						attempts++;
@@ -1740,21 +2041,20 @@ namespace NinjaTrader.NinjaScript.AddOns
 							if (hwnd != IntPtr.Zero)
 							{
 								timer.Stop();
-								string title = newChart.Title;
-								DockChartByHwnd(hwnd, !string.IsNullOrWhiteSpace(title) ? title : (paneIndex == 1 ? inst + " (1-Min MP)" : inst + " (5-Min Candles)"), paneIndex, newChart);
+								DockChartByHwnd(hwnd, fallbackTitle, paneIndex, newChart);
 								return;
 							}
 						}
 						catch { }
 
-						if (attempts >= 25)
+						if (attempts >= 40)
 						{
 							timer.Stop();
 							try
 							{
 								IntPtr hwnd = new WindowInteropHelper(newChart).Handle;
 								if (hwnd != IntPtr.Zero)
-									DockChartByHwnd(hwnd, paneIndex == 1 ? "Market Profile" : "5-Min Candles", paneIndex, newChart);
+									DockChartByHwnd(hwnd, fallbackTitle, paneIndex, newChart);
 							}
 							catch { }
 						}
@@ -1767,63 +2067,89 @@ namespace NinjaTrader.NinjaScript.AddOns
 				}
 			};
 
-			if (AK10XChartStackerWindow.StackerDispatcher != null && !AK10XChartStackerWindow.StackerDispatcher.CheckAccess())
-				AK10XChartStackerWindow.StackerDispatcher.BeginInvoke(openAction);
-			else if (Dispatcher.CheckAccess())
-				openAction();
-			else
+			if (!Dispatcher.CheckAccess())
 				Dispatcher.BeginInvoke(openAction);
+			else
+				openAction();
 		}
 
-		private static bool TryUpdateChartInstrumentInPlace(NinjaTrader.Gui.Chart.Chart chartWin, Instrument inst, int periodMinutes)
+		private bool TryUpdateChartInstrumentInPlace(NinjaTrader.Gui.Chart.Chart chartWin, Instrument inst, int periodMinutes)
 		{
 			if (chartWin == null || inst == null) return false;
+			bool success = false;
+			Action updateAct = () =>
+			{
+				isUpdatingInstrumentProgrammatically = true;
+				try
+				{
+					int targetDays = (periodMinutes == 1) ? 30 : 15;
+					if (chartWin.ActiveChartControl != null)
+					{
+						if (chartWin.ActiveChartControl.BarsPropertiesCollection != null)
+						{
+							foreach (BarsProperties bpItem in chartWin.ActiveChartControl.BarsPropertiesCollection)
+							{
+								if (bpItem != null && bpItem.DaysBack < targetDays)
+									bpItem.DaysBack = targetDays;
+							}
+						}
+						if (chartWin.ActiveChartControl.BarsArray != null)
+						{
+							foreach (ChartBars cbItem in chartWin.ActiveChartControl.BarsArray)
+							{
+								if (cbItem != null && cbItem.Properties != null && cbItem.Properties.DaysBack < targetDays)
+									cbItem.Properties.DaysBack = targetDays;
+							}
+						}
+					}
+
+					// 1. Update Chart's built-in instrumentSelector and trigger Chart.OnInstrumentChanged
+					var selField = typeof(NinjaTrader.Gui.Chart.Chart).GetField("instrumentSelector", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
+					if (selField != null)
+					{
+						var selector = selField.GetValue(chartWin) as NinjaTrader.Gui.Tools.InstrumentSelector;
+						if (selector != null)
+						{
+							selector.SuppressEvent = false;
+							selector.Instrument = inst;
+
+							if (chartWin.ActiveChartControl == null || chartWin.ActiveChartControl.Instrument == null ||
+								!string.Equals(chartWin.ActiveChartControl.Instrument.FullName, inst.FullName, StringComparison.OrdinalIgnoreCase))
+							{
+								var onInstChanged = typeof(NinjaTrader.Gui.Chart.Chart).GetMethod("OnInstrumentChanged", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
+								if (onInstChanged != null)
+									onInstChanged.Invoke(chartWin, new object[] { selector, new CancelEventArgs(false) });
+							}
+						}
+					}
+
+					// 2. Verify whether ActiveChartControl.Instrument actually switched to inst
+					if (chartWin.ActiveChartControl != null && chartWin.ActiveChartControl.Instrument != null &&
+						(string.Equals(chartWin.ActiveChartControl.Instrument.FullName, inst.FullName, StringComparison.OrdinalIgnoreCase) ||
+						 (chartWin.ActiveChartControl.Instrument.MasterInstrument != null && inst.MasterInstrument != null &&
+						  string.Equals(chartWin.ActiveChartControl.Instrument.MasterInstrument.Name, inst.MasterInstrument.Name, StringComparison.OrdinalIgnoreCase))))
+					{
+						EnsurePaneIndicatorAttached(chartWin.ActiveChartControl, periodMinutes == 1);
+						success = true;
+					}
+				}
+				catch { }
+				finally
+				{
+					isUpdatingInstrumentProgrammatically = false;
+				}
+			};
+
 			try
 			{
-				int targetDays = (periodMinutes == 1) ? 30 : 15;
-				if (chartWin.ActiveChartControl != null)
-				{
-					if (chartWin.ActiveChartControl.BarsPropertiesCollection != null)
-					{
-						foreach (BarsProperties bpItem in chartWin.ActiveChartControl.BarsPropertiesCollection)
-						{
-							if (bpItem != null && bpItem.DaysBack < targetDays)
-								bpItem.DaysBack = targetDays;
-						}
-					}
-					if (chartWin.ActiveChartControl.BarsArray != null)
-					{
-						foreach (ChartBars cbItem in chartWin.ActiveChartControl.BarsArray)
-						{
-							if (cbItem != null && cbItem.Properties != null && cbItem.Properties.DaysBack < targetDays)
-								cbItem.Properties.DaysBack = targetDays;
-						}
-					}
-				}
-
-				// 1. Primary official NinjaTrader ChartTab IInstrumentProvider setter (updates toolbar, tab, title, and bars in-place)
-				if (chartWin.MainTabControl != null && chartWin.MainTabControl.SelectedItem is NinjaTrader.Gui.Tools.IInstrumentProvider ip)
-				{
-					ip.Instrument = inst;
-					return true;
-				}
-				// 2. Fallback to ApplyDataSeriesChangeToSelected
-				if (chartWin.ActiveChartControl != null && chartWin.ActiveChartControl.BarsArray != null && chartWin.ActiveChartControl.BarsArray.Count > 0)
-				{
-					var applyMethod = typeof(NinjaTrader.Gui.Chart.Chart).GetMethod("ApplyDataSeriesChangeToSelected", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-					if (applyMethod != null)
-					{
-						applyMethod.Invoke(chartWin, new object[] {
-							chartWin.ActiveChartControl,
-							inst,
-							new BarsPeriod { BarsPeriodType = BarsPeriodType.Minute, Value = periodMinutes }
-						});
-						return true;
-					}
-				}
+				if (chartWin.Dispatcher != null && !chartWin.Dispatcher.CheckAccess())
+					chartWin.Dispatcher.Invoke(updateAct);
+				else
+					updateAct();
 			}
 			catch { }
-			return false;
+
+			return success;
 		}
 
 		public static void ActivateScannerWindow()
@@ -1870,13 +2196,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			catch { }
 		}
 
-		/// <summary>
-		/// Common unified chart loader:
-		/// Chart 1: 1-Min Timeframe with INDMarketProfile50Charts attached.
-		/// Chart 2: 5-Min Timeframe Candlestick chart.
-		/// Docks both seamlessly into Screen 1 & Screen 2 of the 2-Screen Stacker in Maximized view.
-		/// </summary>
-		public static void LoadUnifiedInstrumentPair(string symbol)
+		public void LoadSymbolPairOnWindow(string symbol, bool forceReload = false)
 		{
 			if (string.IsNullOrWhiteSpace(symbol)) symbol = "NIFTY_I";
 			string clean = symbol.Trim();
@@ -1889,18 +2209,13 @@ namespace NinjaTrader.NinjaScript.AddOns
 				try
 				{
 					EnsureD2DFactoryForCurrentThread();
-
-					// Ensure Stacker window is created and visible on UI thread
-					if (Instance == null || !Instance.IsLoaded)
-					{
-						Instance = new AK10XChartStackerWindow();
-						Instance.Show();
-					}
+					Instance = this;
+					stackerDispatcher = this.Dispatcher;
 
 					// Fill 100% of screen work area in WindowState.Normal so child Direct2DForms never lose coordinates
-					Instance.MaximizeStackerToWorkArea();
+					MaximizeStackerToWorkArea();
 
-					IntPtr sHwnd = new WindowInteropHelper(Instance).EnsureHandle();
+					IntPtr sHwnd = new WindowInteropHelper(this).EnsureHandle();
 					if (sHwnd != IntPtr.Zero)
 					{
 						StackerWin32.ShowWindow(sHwnd, StackerWin32.SW_SHOWNORMAL);
@@ -1908,40 +2223,59 @@ namespace NinjaTrader.NinjaScript.AddOns
 						StackerWin32.BringWindowToTop(sHwnd);
 					}
 
-					Instance.Activate();
-					Instance.Focus();
+					Activate();
+					Focus();
 
-					if (Instance.cmbSymbol != null)
+					if (cmbSymbol != null)
 					{
-						Instance.isSuppressSymbolSelectionChanged = true;
-						if (!Instance.cmbSymbol.Items.Contains(clean))
-							Instance.cmbSymbol.Items.Insert(0, clean);
-						Instance.cmbSymbol.SelectedItem = clean;
-						Instance.cmbSymbol.Text = clean;
-						Instance.isSuppressSymbolSelectionChanged = false;
+						isSuppressSymbolSelectionChanged = true;
+						if (!cmbSymbol.Items.Contains(clean))
+							cmbSymbol.Items.Insert(0, clean);
+						cmbSymbol.SelectedItem = clean;
+						cmbSymbol.Text = clean;
+						isSuppressSymbolSelectionChanged = false;
 					}
+
+					// Deduplicate rapid single+double click bursts for the same symbol
+					bool bothAlive = dockedChart1Instance != null && dockedChart2Instance != null &&
+						dockedChart1Hwnd != IntPtr.Zero && dockedChart2Hwnd != IntPtr.Zero &&
+						StackerWin32.IsWindow(dockedChart1Hwnd) && StackerWin32.IsWindow(dockedChart2Hwnd);
+
+					if (!forceReload && bothAlive &&
+						string.Equals(currentLoadedSymbol, clean, StringComparison.OrdinalIgnoreCase) &&
+						(DateTime.Now - lastSymbolLoadTimestamp).TotalMilliseconds < 650)
+					{
+						SyncBothPanes();
+						RefreshDockedChartVisuals(0, false, false);
+						return;
+					}
+
+					currentLoadedSymbol = clean;
+					lastSymbolLoadTimestamp = DateTime.Now;
+
+					dockedChart1Title = clean + " (1-Min Market Profile)";
+					dockedChart2Title = clean + " (5-Min Orderflow)";
+					if (txtPane1Title != null) txtPane1Title.Text = "SCREEN 1: " + dockedChart1Title;
+					if (txtPane2Title != null) txtPane2Title.Text = "SCREEN 2: " + dockedChart2Title;
+					UpdateWindowTitle();
 
 					Instrument inst = ResolveBestInstrument(clean);
 
-					// FAST & SMOOTH IN-PLACE UPDATE: If both charts are already docked and alive, update instrument directly with ZERO screen blinking!
 					bool updatedInPlace = false;
-					if (Instance.dockedChart1Instance != null && Instance.dockedChart2Instance != null &&
-						Instance.dockedChart1Hwnd != IntPtr.Zero && Instance.dockedChart2Hwnd != IntPtr.Zero &&
-						StackerWin32.IsWindow(Instance.dockedChart1Hwnd) && StackerWin32.IsWindow(Instance.dockedChart2Hwnd) &&
-						inst != null)
+					if (bothAlive && inst != null)
 					{
 						try
 						{
-							bool ok1 = TryUpdateChartInstrumentInPlace(Instance.dockedChart1Instance, inst, 1);
-							bool ok2 = TryUpdateChartInstrumentInPlace(Instance.dockedChart2Instance, inst, 5);
+							bool ok1 = TryUpdateChartInstrumentInPlace(dockedChart1Instance, inst, 1);
+							bool ok2 = TryUpdateChartInstrumentInPlace(dockedChart2Instance, inst, 5);
 							if (ok1 && ok2)
 							{
-								Instance.dockedChart1Title = inst.FullName + " (1-Min MP)";
-								Instance.dockedChart2Title = inst.FullName + " (5-Min Candles)";
-								Instance.txtPane1Title.Text = "SCREEN 1: " + inst.FullName + " (1-Min Market Profile)";
-								Instance.txtPane2Title.Text = "SCREEN 2: " + inst.FullName + " (5-Min Candlestick)";
-								Instance.UpdateWindowTitle();
-								Instance.ForceLayoutAndSyncPanes();
+								SyncBothPanes();
+								RefreshDockedChartVisuals(0, false, false);
+								if (dockedChart1Instance.ActiveChartControl != null)
+									dockedChart1Instance.ActiveChartControl.InvalidateVisual();
+								if (dockedChart2Instance.ActiveChartControl != null)
+									dockedChart2Instance.ActiveChartControl.InvalidateVisual();
 								updatedInPlace = true;
 							}
 						}
@@ -1950,23 +2284,49 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 					if (!updatedInPlace)
 					{
-						Instance.CloseAllDockedCharts();
+						// Launch Chart 1 (1-Min Market Profile) & Chart 2 (5-Min Orderflow Footprint)
+						// Note: DockChartByHwnd closes the previous chart at the exact moment the new chart docks, eliminating blink!
+						LaunchChartForPane(1, clean);
 
-						// Launch Chart 1: 1-Min Timeframe with INDMarketProfile50Charts
-						Instance.LaunchChartForPane(1, clean);
-
-						// Launch Chart 2: 5-Min Timeframe Candles after 150ms stagger
 						var timer = new System.Windows.Threading.DispatcherTimer();
-						timer.Interval = TimeSpan.FromMilliseconds(150);
+						timer.Interval = TimeSpan.FromMilliseconds(35);
 						timer.Tick += (s, e) =>
 						{
 							timer.Stop();
-							Instance.LaunchChartForPane(2, clean);
+							LaunchChartForPane(2, clean);
 						};
 						timer.Start();
 					}
+				}
+				catch (Exception ex)
+				{
+					NinjaTrader.Code.Output.Process("AK10X LoadSymbolPairOnWindow Error: " + ex.Message, PrintTo.OutputTab1);
+				}
+			};
 
-					Instance.UpdateWindowTitle();
+			if (!Dispatcher.CheckAccess())
+				Dispatcher.BeginInvoke(act);
+			else
+				act();
+		}
+
+		/// <summary>
+		/// Common unified chart loader:
+		/// Chart 1: 1-Min Timeframe with INDMarketProfile50Charts attached.
+		/// Chart 2: 5-Min Timeframe with AK10XOrderflow attached.
+		/// Docks both seamlessly into Screen 1 and Screen 2 of the 2-Screen Stacker in Maximized view.
+		/// </summary>
+		public static void LoadUnifiedInstrumentPair(string symbol)
+		{
+			Action openAct = () =>
+			{
+				try
+				{
+					AK10XChartStackerWindow win = FindOrCreateActiveInstance();
+					if (win != null)
+					{
+						win.LoadSymbolPairOnWindow(symbol, false);
+					}
 				}
 				catch (Exception ex)
 				{
@@ -1975,62 +2335,75 @@ namespace NinjaTrader.NinjaScript.AddOns
 			};
 
 			if (AK10XChartStackerWindow.StackerDispatcher != null && !AK10XChartStackerWindow.StackerDispatcher.CheckAccess())
-				AK10XChartStackerWindow.StackerDispatcher.BeginInvoke(act);
+				AK10XChartStackerWindow.StackerDispatcher.BeginInvoke(openAct);
 			else
-				act();
+				openAct();
 		}
 
-		public void CloseAllDockedCharts()
+		private void CloseSingleDockedChart(int paneIndex)
 		{
 			try
 			{
-				IntPtr h1 = dockedChart1Hwnd;
-				var c1 = dockedChart1Instance;
-				dockedChart1Hwnd = IntPtr.Zero;
-				dockedChart1Title = null;
-				dockedChart1Instance = null;
-				lastX1 = -99999; lastY1 = -99999; lastW1 = -99999; lastH1 = -99999;
+				if (paneIndex == 1)
+				{
+					IntPtr h1 = dockedChart1Hwnd;
+					var c1 = dockedChart1Instance;
+					dockedChart1Hwnd = IntPtr.Zero;
+					dockedChart1Instance = null;
+					lastX1 = -99999; lastY1 = -99999; lastW1 = -99999; lastH1 = -99999;
 
-				IntPtr h2 = dockedChart2Hwnd;
-				var c2 = dockedChart2Instance;
-				dockedChart2Hwnd = IntPtr.Zero;
-				dockedChart2Title = null;
-				dockedChart2Instance = null;
-				lastX2 = -99999; lastY2 = -99999; lastW2 = -99999; lastH2 = -99999;
+					if (h1 != IntPtr.Zero && StackerWin32.IsWindow(h1))
+					{
+						StackerWin32.ShowWindow(h1, StackerWin32.SW_HIDE);
+						StackerWin32.SetParent(h1, IntPtr.Zero);
+					}
+					if (c1 != null)
+					{
+						try { c1.Close(); } catch { }
+					}
+					else if (h1 != IntPtr.Zero && StackerWin32.IsWindow(h1))
+					{
+						StackerWin32.PostMessage(h1, StackerWin32.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+					}
+				}
+				else if (paneIndex == 2)
+				{
+					IntPtr h2 = dockedChart2Hwnd;
+					var c2 = dockedChart2Instance;
+					dockedChart2Hwnd = IntPtr.Zero;
+					dockedChart2Instance = null;
+					lastX2 = -99999; lastY2 = -99999; lastW2 = -99999; lastH2 = -99999;
 
-				if (h1 != IntPtr.Zero && StackerWin32.IsWindow(h1))
-				{
-					StackerWin32.ShowWindow(h1, StackerWin32.SW_HIDE);
-					StackerWin32.SetParent(h1, IntPtr.Zero);
-				}
-				if (c1 != null)
-				{
-					try { c1.Close(); } catch { }
-				}
-				else if (h1 != IntPtr.Zero && StackerWin32.IsWindow(h1))
-				{
-					StackerWin32.PostMessage(h1, StackerWin32.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
-				}
-
-				if (h2 != IntPtr.Zero && StackerWin32.IsWindow(h2))
-				{
-					StackerWin32.ShowWindow(h2, StackerWin32.SW_HIDE);
-					StackerWin32.SetParent(h2, IntPtr.Zero);
-				}
-				if (c2 != null)
-				{
-					try { c2.Close(); } catch { }
-				}
-				else if (h2 != IntPtr.Zero && StackerWin32.IsWindow(h2))
-				{
-					StackerWin32.PostMessage(h2, StackerWin32.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+					if (h2 != IntPtr.Zero && StackerWin32.IsWindow(h2))
+					{
+						StackerWin32.ShowWindow(h2, StackerWin32.SW_HIDE);
+						StackerWin32.SetParent(h2, IntPtr.Zero);
+					}
+					if (c2 != null)
+					{
+						try { c2.Close(); } catch { }
+					}
+					else if (h2 != IntPtr.Zero && StackerWin32.IsWindow(h2))
+					{
+						StackerWin32.PostMessage(h2, StackerWin32.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+					}
 				}
 			}
 			catch { }
 		}
 
+		public void CloseAllDockedCharts()
+		{
+			CloseSingleDockedChart(1);
+			CloseSingleDockedChart(2);
+			dockedChart1Title = null;
+			dockedChart2Title = null;
+		}
+
 		protected override void OnClosing(CancelEventArgs e)
 		{
+			isWindowClosed = true;
+			try { Connection.ConnectionStatusUpdate -= OnStackerConnectionStatusUpdate; } catch { }
 			// Close both docked charts cleanly when AK10X 2-Screen Stacker closes (Item 3)
 			CloseAllDockedCharts();
 			if (Instance == this) Instance = null;
@@ -2181,15 +2554,17 @@ namespace NinjaTrader.NinjaScript.AddOns
 			{
 				try
 				{
-					AK10XChartStackerWindow win = AK10XChartStackerWindow.Instance;
-					if (win == null || !win.IsLoaded)
+					AK10XChartStackerWindow win = AK10XChartStackerWindow.FindOrCreateActiveInstance();
+					if (win != null)
 					{
-						win = new AK10XChartStackerWindow();
-						win.Show();
+						win.MaximizeStackerToWorkArea();
+						win.Activate();
+						win.Focus();
+						if (win.dockedChart1Instance == null && win.dockedChart2Instance == null)
+						{
+							win.LoadSymbolPairOnWindow(win.cmbSymbol != null && !string.IsNullOrWhiteSpace(win.cmbSymbol.Text) ? win.cmbSymbol.Text.Trim() : "NIFTY_I", false);
+						}
 					}
-					win.MaximizeStackerToWorkArea();
-					win.Activate();
-					win.Focus();
 				}
 				catch (Exception ex)
 				{
