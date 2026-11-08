@@ -376,6 +376,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public string Symbol;
 			public Instrument Instrument;
 			public BarsRequest BarsReq30Min;
+			public List<MpBarSample> Raw1MinBars = new List<MpBarSample>();
 			public List<MpBarSample> CachedBars = new List<MpBarSample>();
 			public object Sync = new object();
 			public long TickCount;
@@ -383,6 +384,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public int LastTickDir;
 			public DateTime LastTickTime;
 			public bool HasRealBars;
+			public DateTime LastBarsRequestAttempt;
 
 			public double TodayOpen;
 			public double TodayHigh;
@@ -406,7 +408,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 						TickCount++;
 						if (oldP > 0 && Math.Abs(e.Price - oldP) > 1e-9)
 							LastTickDir = e.Price > oldP ? 1 : -1;
-						HasRealBars = true;
 						isLastTick = true;
 					}
 					else if (e.MarketDataType == MarketDataType.DailyHigh && e.Price > 0)
@@ -465,46 +466,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
-		private sealed class SeedReference
-		{
-			public string Ticker;
-			public double Price;
-			public double PctChange;
-			public string OpenHL;
-			public bool AboveSma;
-			public string PrevDayType;
-			public string PdSingleP;
-			public string OpenVa;
-			public string OpenHl;
-			public string OpenType;
-			public string PdBreak;
-			public double Atr10;
-			public double HlRange;
-			public string IbSize;
-			public string IbBreak;
-			public string PriceIb;
-			public string TodayVa;
-			public string Bar30Min;
-			public string SingleP;
-			public string DayType;
-			public double TpoSize;
-
-			public SeedReference(string t, double p, double chg, string ohl, bool smaUp, string pdt, string pdsp,
-				string ova, string ohlRel, string ot, string pbrk, double atr, double hlr, string ibs, string ibb,
-				string pib, string tva, string b30, string sp, string dt, double tpo)
-			{
-				Ticker = t; Price = p; PctChange = chg; OpenHL = ohl; AboveSma = smaUp; PrevDayType = pdt;
-				PdSingleP = pdsp; OpenVa = ova; OpenHl = ohlRel; OpenType = ot; PdBreak = pbrk; Atr10 = atr;
-				HlRange = hlr; IbSize = ibs; IbBreak = ibb; PriceIb = pib; TodayVa = tva; Bar30Min = b30;
-				SingleP = sp; DayType = dt; TpoSize = tpo;
-			}
-		}
-
 		private readonly ConcurrentDictionary<string, SymbolSub> subscriptions = new ConcurrentDictionary<string, SymbolSub>(StringComparer.OrdinalIgnoreCase);
 		private readonly ConcurrentDictionary<string, MpScannerRow> rowsBySymbol = new ConcurrentDictionary<string, MpScannerRow>(StringComparer.OrdinalIgnoreCase);
-		private readonly Dictionary<string, SeedReference> referenceSeeds = new Dictionary<string, SeedReference>(StringComparer.OrdinalIgnoreCase);
 		private readonly List<string> userCustomSymbols = new List<string>();
-		private readonly Random tickRng = new Random(50108);
 		private bool isDisposed;
 
 		public int PeriodicityMinutes { get; set; }
@@ -539,19 +503,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 				var sub = kvp.Value;
 				if (sub != null)
 				{
-					if (sub.BarsReq30Min != null)
-					{
-						try { sub.BarsReq30Min.Dispose(); } catch { }
-						sub.BarsReq30Min = null;
-					}
 					lock (sub.Sync)
 					{
-						sub.CachedBars.Clear();
-						sub.HasRealBars = false;
+						if (sub.Raw1MinBars != null && sub.Raw1MinBars.Count > 0)
+						{
+							RebuildAggregatedBarsLocked(sub, PeriodicityMinutes);
+						}
+						else
+						{
+							sub.CachedBars.Clear();
+							sub.HasRealBars = false;
+						}
 					}
 				}
 			}
-			subscriptions.Clear();
 			RefreshAll(false);
 		}
 
@@ -578,162 +543,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			IbCandleCount = 2;
 			ValueAreaPercent = 70.0;
 			DefaultMinTickSize = 0.05;
-			EnableLiveTickSimulationWhenIdle = true;
+			EnableLiveTickSimulationWhenIdle = false;
 			WatchlistPreset = MpWatchlistPreset.AccelpixNseCore44;
-			InitializeReferenceSeeds();
-			InitMirrorWatcher();
-		}
-
-		private FileSystemWatcher mirrorWatcher;
-		private string mirrorFilePath;
-
-		private void InitMirrorWatcher()
-		{
-			try
-			{
-				string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NinjaTrader 8", "bin", "Custom");
-				mirrorFilePath = Path.Combine(dir, "50Charts_Live_Mirror.json");
-				if (File.Exists(mirrorFilePath))
-				{
-					LoadMirrorFile(mirrorFilePath);
-				}
-
-				if (Directory.Exists(dir))
-				{
-					mirrorWatcher = new FileSystemWatcher(dir, "50Charts_Live_Mirror.json")
-					{
-						NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
-						EnableRaisingEvents = true
-					};
-					mirrorWatcher.Changed += (s, e) => OnMirrorFileUpdated();
-					mirrorWatcher.Created += (s, e) => OnMirrorFileUpdated();
-				}
-			}
-			catch { }
-		}
-
-		private void OnMirrorFileUpdated()
-		{
-			try
-			{
-				Thread.Sleep(60);
-				if (!string.IsNullOrEmpty(mirrorFilePath) && File.Exists(mirrorFilePath))
-				{
-					LoadMirrorFile(mirrorFilePath);
-				}
-			}
-			catch { }
-		}
-
-		private void LoadMirrorFile(string path)
-		{
-			try
-			{
-				if (!File.Exists(path)) return;
-				string text = File.ReadAllText(path);
-				if (string.IsNullOrWhiteSpace(text)) return;
-
-				var serializer = new System.Web.Script.Serialization.JavaScriptSerializer();
-				var list = serializer.Deserialize<List<Dictionary<string, object>>>(text);
-				if (list != null && list.Count > 0)
-				{
-					foreach (var dict in list)
-					{
-						string sym = dict.ContainsKey("Ticker") ? Convert.ToString(dict["Ticker"]) : null;
-						if (string.IsNullOrEmpty(sym)) continue;
-
-						double p = dict.ContainsKey("Price") ? Convert.ToDouble(dict["Price"], CultureInfo.InvariantCulture) : 0;
-						double chg = dict.ContainsKey("PctChange") ? Convert.ToDouble(dict["PctChange"], CultureInfo.InvariantCulture) : 0;
-						string ohl = dict.ContainsKey("OpenEqualHL") ? Convert.ToString(dict["OpenEqualHL"]) : (dict.ContainsKey("OpenHL") ? Convert.ToString(dict["OpenHL"]) : "");
-						bool smaUp = dict.ContainsKey("AboveSma") ? Convert.ToBoolean(dict["AboveSma"]) : (p >= 0);
-						string pdt = dict.ContainsKey("PrevDayType") ? Convert.ToString(dict["PrevDayType"]) : "Normal day - Up";
-						string pdsp = dict.ContainsKey("PdSingleP") ? Convert.ToString(dict["PdSingleP"]) : "";
-						string ova = dict.ContainsKey("OpenVsPdVa") ? Convert.ToString(dict["OpenVsPdVa"]) : (dict.ContainsKey("OpenVa") ? Convert.ToString(dict["OpenVa"]) : "Open Above PDVA");
-						string ohlRel = dict.ContainsKey("OpenVsPdHl") ? Convert.ToString(dict["OpenVsPdHl"]) : (dict.ContainsKey("OpenHl") ? Convert.ToString(dict["OpenHl"]) : "Open Above PDHL");
-						string ot = dict.ContainsKey("OpenType") ? Convert.ToString(dict["OpenType"]) : "OAOR";
-						string pbrk = dict.ContainsKey("PdBreak") ? Convert.ToString(dict["PdBreak"]) : "";
-						double atr = dict.ContainsKey("Atr10") ? Convert.ToDouble(dict["Atr10"], CultureInfo.InvariantCulture) : 20.0;
-						double hlr = dict.ContainsKey("HlRange") ? Convert.ToDouble(dict["HlRange"], CultureInfo.InvariantCulture) : 20.0;
-						string ibs = dict.ContainsKey("IbSize") ? Convert.ToString(dict["IbSize"]) : "Wide";
-						string ibb = dict.ContainsKey("IbBreak") ? Convert.ToString(dict["IbBreak"]) : "";
-						string pib = dict.ContainsKey("PriceIb") ? Convert.ToString(dict["PriceIb"]) : "";
-						string tva = dict.ContainsKey("TodayVa") ? Convert.ToString(dict["TodayVa"]) : "Higher than PDVA";
-						string b30 = dict.ContainsKey("Bar30Min") ? Convert.ToString(dict["Bar30Min"]) : "";
-						string sp = dict.ContainsKey("SingleP") ? Convert.ToString(dict["SingleP"]) : "";
-						string dt = dict.ContainsKey("DayType") ? Convert.ToString(dict["DayType"]) : "Non-Trend day";
-						double tpo = dict.ContainsKey("TpoSize") ? Convert.ToDouble(dict["TpoSize"], CultureInfo.InvariantCulture) : 1.0;
-
-						referenceSeeds[sym] = new SeedReference(sym, p, chg, ohl, smaUp, pdt, pdsp, ova, ohlRel, ot, pbrk, atr, hlr, ibs, ibb, pib, tva, b30, sp, dt, tpo);
-					}
-					RefreshAll(false);
-				}
-			}
-			catch { }
-		}
-
-		private void InitializeReferenceSeeds()
-		{
-			SeedReference[] seeds = new SeedReference[]
-			{
-				new SeedReference("ABB_I", 6656.00, -1.80, "", false, "Trend day - Up", "Single Print - Up", "Open Inside PDVA", "Open Inside PDHL", "OAIR", "", 234.05, 182.00, "Wide", "", "", "Overlapping Lower VA", "Inside Bar", "", "Non-Trend day", 4.0),
-				new SeedReference("ADANIPORTS_I", 1500.90, 1.42, "", true, "Non-Trend day", "", "Open Above PDVA", "Open Inside PDHL", "OpenTest Drive", "Broken - Up", 48.97, 27.40, "Wide", "Broken - Down", "Price Within IB", "Higher than PDVA", "", "", "Normal day - Up", 1.0),
-				new SeedReference("ASIANPAINT_I", 2520.70, 4.17, "Open = High", true, "Normal day - Down", "", "Open Above PDVA", "Open Above PDHL", "Open Drive", "Broken - Up", 59.52, 88.70, "Very Wide", "", "", "Higher than PDVA", "Inside Bar - Broken Up", "", "Trend day - Up", 2.0),
-				new SeedReference("AXISBANK_I", 1274.00, 3.18, "", true, "Normal day - Down", "", "Open Above PDVA", "Open Above PDHL", "OpenTest Drive", "Broken - Up", 24.73, 29.40, "Very Wide", "Broken - Up", "Price Above IB", "Higher than PDVA", "", "", "Trend day - Up", 1.0),
-				new SeedReference("BAJAJ_AUTO_I", 10633.00, 0.23, "Open = High", true, "Neutral - Centre day", "", "Open Inside PDVA", "Open Inside PDHL", "ORR", "Broken - Up", 283.83, 191.00, "Wide", "", "", "Overlapping Lower VA", "Inside Bar", "", "Non-Trend day", 5.0),
-				new SeedReference("BAJAJFINSV_I", 1807.10, 2.78, "", true, "Normal day - Up", "", "Open Above PDVA", "Open Inside PDHL", "OpenTest Drive", "Broken - Up", 41.16, 36.60, "Very Wide", "", "", "Higher than PDVA", "", "", "Non-Trend day", 1.0),
-				new SeedReference("BAJFINANCE_I", 1043.65, 4.87, "", true, "Normal Variation day - Up", "", "Open Above PDVA", "Open Above PDHL", "OpenTest Drive", "Broken - Up", 25.08, 30.00, "Very Wide", "", "", "Higher than PDVA", "Inside Bar", "", "Non-Trend day", 1.0),
-				new SeedReference("BANKNIFTY_I", 57134.80, 2.01, "", true, "Neutral - Centre day", "", "Open Above PDVA", "Open Above PDHL", "OpenTest Drive", "Broken - Up", 687.94, 540.00, "Wide", "", "", "Higher than PDVA", "", "Single Print - Up", "Trend day - Up", 10.0),
-				new SeedReference("BHARTIARTL_I", 2061.50, -0.52, "Open = High", true, "Neutral - Extreme day - Up", "", "Open Above PDVA", "Open Inside PDHL", "ORR", "Broken - Up", 44.01, 38.60, "Very Wide", "", "", "Overlapping Lower VA", "Inside Bar", "", "Non-Trend day", 1.0),
-				new SeedReference("BPCL_I", 318.45, 4.43, "", true, "Normal Variation day - Up", "", "Open Above PDVA", "Open Above PDHL", "OpenTest Drive", "Broken - Up", 7.07, 9.65, "Very Wide", "", "", "Higher than PDVA", "", "", "Non-Trend day", 0.5),
-				new SeedReference("BRITANNIA_I", 5015.80, 1.08, "", true, "Neutral - Centre day", "", "Open Above PDVA", "Open Above PDHL", "Open Drive", "Broken - Up", 110.48, 110.00, "Very Wide", "", "", "Higher than PDVA", "", "", "Non-Trend day", 3.0),
-				new SeedReference("CIPLA_I", 1409.10, 0.44, "", true, "Normal Variation day - Up", "", "Open Above PDVA", "Open Inside PDHL", "OAOR", "Broken - Up", 27.61, 18.90, "Wide", "Broken - Up", "Price Within IB", "Higher than PDVA", "", "", "Non-Trend day", 1.0),
-				new SeedReference("COALINDIA_I", 396.50, -1.07, "Open = High", false, "Non-Trend day", "", "Open Above PDVA", "Open Inside PDHL", "ORR", "Broken - BothSides", 10.07, 6.20, "Wide", "", "", "Overlapping Lower VA", "", "", "Non-Trend day", 0.5),
-				new SeedReference("DIVISLAB_I", 10191.00, 1.10, "", true, "Normal day - Up", "", "Open Above PDVA", "Open Inside PDHL", "ORR", "Broken - BothSides", 229.55, 260.50, "Very Wide", "Broken - Up", "Price Above IB", "Higher than PDVA", "Inside Bar - Broken Up", "", "Trend day - Up", 5.0),
-				new SeedReference("DRREDDY_I", 1380.50, 0.41, "", true, "Normal day - Up", "", "Open Above PDVA", "Open Inside PDHL", "ORR", "Broken - Up", 28.59, 23.10, "Very Wide", "", "", "Higher than PDVA", "", "", "Non-Trend day", 1.0),
-				new SeedReference("EICHERMOT_I", 7655.00, 2.97, "", true, "Normal day - Up", "", "Open Above PDVA", "Open Above PDHL", "OpenTest Drive", "Broken - Up", 166.85, 210.50, "Very Wide", "", "", "Higher than PDVA", "", "", "Non-Trend day", 4.0),
-				new SeedReference("GAIL_I", 180.52, -0.10, "", true, "Normal day - Up", "", "Open Above PDVA", "Open Inside PDHL", "OpenTest Drive", "Broken - Up", 4.85, 5.30, "Wide", "", "", "Higher than PDVA", "", "", "Non-Trend day", 0.25),
-				new SeedReference("GRASIM_I", 3219.80, 2.16, "", true, "Neutral - Extreme day - Up", "Single Print - Up", "Open Above PDVA", "Open Above PDHL", "OpenTest Drive", "Broken - Up", 66.07, 60.70, "Very Wide", "", "", "Higher than PDVA", "", "", "Non-Trend day", 2.0),
-				new SeedReference("HCLTECH_I", 1452.30, 2.80, "", true, "Normal day - Up", "", "Open Above PDVA", "Open Above PDHL", "OpenTest Drive", "Broken - Up", 37.44, 33.40, "Very Wide", "", "", "Higher than PDVA", "", "", "Non-Trend day", 1.0),
-				new SeedReference("HDFCBANK_I", 754.20, 2.08, "Open = High", true, "Non-Trend day", "", "Open Above PDVA", "Open Above PDHL", "Open Drive", "Broken - Up", 15.59, 10.95, "Wide", "", "", "Higher than PDVA", "", "", "Non-Trend day", 0.5),
-				new SeedReference("HDFCLIFE_I", 532.15, 1.09, "", true, "Normal Variation day - Up", "", "Open Above PDVA", "Open Above PDHL", "Open Drive", "Broken - Up", 13.26, 6.60, "Wide", "Broken - Up", "Price Within IB", "Higher than PDVA", "Inside Bar", "", "Normal day - Up", 0.5),
-				new SeedReference("HEROMOTOCO_I", 5504.00, 2.15, "", true, "Normal day - Up", "", "Open Above PDVA", "Open Inside PDHL", "OAOR", "Broken - Up", 162.94, 81.50, "Wide", "", "", "Higher than PDVA", "Inside Bar - Broken Up", "", "Non-Trend day", 3.0),
-				new SeedReference("HINDALCO_I", 947.00, 0.48, "", true, "Trend day - Up", "Single Print - Up", "Open Above PDVA", "Open Above PDHL", "OpenTest Drive", "Broken - Up", 22.52, 12.25, "Wide", "", "", "Higher than PDVA", "", "", "Non-Trend day", 0.5),
-				new SeedReference("HINDUNILVR_I", 1974.90, 0.72, "", true, "Non-Trend day", "", "Open Above PDVA", "Open Above PDHL", "Open Drive", "Broken - Up", 47.63, 36.00, "Wide", "", "", "Higher than PDVA", "", "", "Non-Trend day", 1.0),
-				new SeedReference("ICICIBANK_I", 1408.70, 3.03, "", true, "Non-Trend day", "", "Open Above PDVA", "Open Above PDHL", "OAOR", "Broken - Up", 26.20, 21.60, "Wide", "Broken - Up", "Price Within IB", "Higher than PDVA", "", "Single Print - Up", "Normal day - Up", 1.0),
-				new SeedReference("INDUSINDBK_I", 902.45, 4.21, "", true, "Normal day - Up", "", "Open Above PDVA", "Open Above PDHL", "OpenTest Drive", "Broken - Up", 22.70, 29.85, "Very Wide", "Broken - Down", "Price Within IB", "Higher than PDVA", "Outside Bar - Broken Up", "", "Non-Trend day", 0.5),
-				new SeedReference("INFY_I", 1171.20, 3.49, "", true, "Normal Variation day - Up", "", "Open Above PDVA", "Open Above PDHL", "OpenTest Drive", "Broken - Up", 35.91, 27.70, "Wide", "", "", "Higher than PDVA", "", "", "Non-Trend day", 1.0),
-				new SeedReference("IOC_I", 146.74, 3.13, "", true, "Normal day - Down", "", "Open Above PDVA", "Open Above PDHL", "OpenTest Drive", "Broken - Up", 3.13, 1.55, "Normal", "", "", "Higher than PDVA", "", "", "Non-Trend day", 0.1),
-				new SeedReference("ITC_I", 279.85, -0.29, "", true, "Non-Trend day", "", "Open Above PDVA", "Open Inside PDHL", "ORR", "", 6.71, 5.10, "Wide", "", "", "Overlapping Lower VA", "", "", "Non-Trend day", 0.25),
-				new SeedReference("JSWSTEEL_I", 1362.50, 1.48, "", true, "Normal Variation day - Up", "", "Open Above PDVA", "Open Above PDHL", "OAOR", "Broken - Up", 32.54, 23.20, "Wide", "", "", "Higher than PDVA", "Inside Bar", "", "Non-Trend day", 1.0),
-				new SeedReference("KOTAKBANK_I", 463.55, 0.73, "", true, "Non-Trend day", "", "Open Above PDVA", "Open Inside PDHL", "ORR", "Broken - Up", 9.34, 15.00, "Very Wide", "", "", "Higher than PDVA", "Inside Bar", "", "Non-Trend day", 0.5),
-				new SeedReference("LT_I", 4002.30, 1.99, "", true, "Normal day - Up", "", "Open Above PDVA", "Open Above PDHL", "OpenTest Drive", "Broken - Up", 61.90, 61.70, "Wide", "Broken - Down", "Price Within IB", "Higher than PDVA", "", "", "Normal day - Up", 2.0),
-				new SeedReference("M_M_I", 3071.00, 3.39, "", true, "Neutral - Extreme day - Up", "", "Open Above PDVA", "Open Above PDHL", "OpenTest Drive", "Broken - Up", 59.91, 85.00, "Very Wide", "", "", "Higher than PDVA", "Inside Bar - Broken Up", "", "Non-Trend day", 2.0),
-				new SeedReference("MARUTI_I", 12593.00, 4.88, "", true, "Neutral - Centre day", "", "Open Above PDVA", "Open Above PDHL", "OpenTest Drive", "Broken - Up", 245.29, 365.00, "Very Wide", "", "", "Higher than PDVA", "", "", "Non-Trend day", 5.0),
-				new SeedReference("NESTLEIND_I", 1256.70, 0.70, "", true, "Normal day - Up", "", "Open Above PDVA", "Open Above PDHL", "Open Drive", "Broken - Up", 36.67, 13.80, "Normal", "", "", "Higher than PDVA", "Inside Bar - Broken Up", "", "Non-Trend day", 1.0),
-				new SeedReference("NIFTY_I", 24400.70, 1.80, "", true, "Normal day - Up", "", "Open Above PDVA", "Open Above PDHL", "OpenTest Drive", "Broken - Up", 311.83, 159.00, "Wide", "", "", "Higher than PDVA", "Inside Bar - Broken Up", "", "Non-Trend day", 5.0),
-				new SeedReference("NTPC_I", 317.55, -0.53, "", true, "Normal Variation day - Up", "Single Print - Up", "Open Above PDVA", "Open Inside PDHL", "ORR", "Broken - Up", 7.37, 7.35, "Very Wide", "Broken - Down", "Price Within IB", "Higher than PDVA", "", "Single Print - Down", "Normal day - Up", 0.25),
-				new SeedReference("ONGC_I", 230.40, -2.04, "Open = High", true, "Normal Variation day - Up", "", "Open Above PDVA", "Open Inside PDHL", "ORR", "Broken - Down", 4.15, 6.32, "Very Wide", "", "", "Lower than PDVA", "", "", "Normal day - Down", 0.25),
-				new SeedReference("PNB_I", 124.02, 1.10, "", true, "Normal Variation day - Up", "", "Open Above PDVA", "Open Above PDHL", "OAOR", "Broken - Up", 3.08, 1.62, "Wide", "", "", "Higher than PDVA", "", "", "Non-Trend day", 0.1),
-				new SeedReference("POWERGRID_I", 259.10, 0.10, "", true, "Normal day - Up", "", "Open Above PDVA", "Open Inside PDHL", "OAOR", "Broken - Up", 6.32, 5.85, "Very Wide", "", "", "Higher than PDVA", "Inside Bar", "Single Print - Down", "Non-Trend day", 0.25),
-				new SeedReference("RELIANCE_I", 1311.20, -0.38, "Open = High", true, "Normal day - Up", "", "Open Above PDVA", "Open Above PDHL", "ORR", "Broken - Up", 35.27, 19.00, "Wide", "", "", "Overlapping Lower VA", "", "Single Print - Down", "Non-Trend day", 1.0),
-				new SeedReference("SBILIFE_I", 1733.30, 1.31, "", true, "Normal day - Up", "", "Open Above PDVA", "Open Above PDHL", "Open Drive", "Broken - Up", 40.60, 32.70, "Very Wide", "", "", "Higher than PDVA", "", "", "Non-Trend day", 1.0),
-				new SeedReference("SBIN_I", 994.35, 1.10, "", true, "Normal day - Up", "", "Open Above PDVA", "Open Above PDHL", "OAOR", "Broken - Up", 20.05, 9.00, "Normal", "", "", "Higher than PDVA", "Inside Bar", "", "Non-Trend day", 0.5),
-				new SeedReference("TATASTEEL_I", 164.80, 1.92, "", true, "Normal day - Up", "", "Open Above PDVA", "Open Inside PDHL", "OpenTest Drive", "Broken - Up", 4.12, 3.85, "Wide", "Broken - Up", "Price Above IB", "Higher than PDVA", "", "", "Normal Variation day - Up", 0.2),
-				new SeedReference("TITAN_I", 4822.00, 1.54, "", true, "Normal day - Down", "Single Print - Up", "Open Above PDVA", "Open Above PDHL", "OAOR", "Broken - Up", 105.27, 115.10, "Very Wide", "", "", "Higher than PDVA", "", "", "Trend day - Up", 3.0),
-				new SeedReference("UPL_I", 534.00, 0.02, "", true, "Trend day - Up", "Single Print - Up", "Open Above PDVA", "Open Above PDHL", "OAOR", "Broken - Up", 20.30, 10.15, "Wide", "", "", "Overlapping Lower VA", "", "", "Trend day - Up", 0.5),
-				new SeedReference("TECHM_I", 1335.50, 2.92, "", true, "Trend day - Down", "Single Print - Down", "Open Above PDVA", "Open Above PDHL", "OpenTest Drive", "Broken - Up", 49.93, 47.60, "Very Wide", "", "", "Higher than PDVA", "Inside Bar - Broken Up", "", "Non-Trend day", 1.0),
-				new SeedReference("TCS_I", 2491.80, 1.69, "Open = High", true, "Normal Variation day - Down", "Single Print - Down", "Open Above PDVA", "Open Above PDHL", "OpenTest Drive", "Broken - Up", 68.59, 47.80, "Wide", "", "", "Higher than PDVA", "", "", "Non-Trend day", 2.0),
-				new SeedReference("ULTRACEMCO_I", 12237.00, 3.00, "Open = Low", true, "Non-Trend day", "", "Open Above PDVA", "Open Above PDHL", "Open Drive", "Broken - Up", 242.27, 239.00, "Very Wide", "Broken - Up", "Price Within IB", "Higher than PDVA", "", "", "Normal day - Up", 5.0),
-				new SeedReference("WIPRO_I", 196.42, 1.65, "", true, "Normal day - Up", "", "Open Inside PDVA", "Open Inside PDHL", "OpenTest Drive", "Broken - Up", 5.32, 3.21, "Wide", "", "", "Higher than PDVA", "", "", "Non-Trend day", 0.1),
-				new SeedReference("SUNPHARMA_I", 1376.50, 2.46, "", true, "Normal day - Up", "", "Open Inside PDVA", "Open Inside PDHL", "ORR", "Broken - BothSides", 39.04, 69.00, "Very Wide", "Broken - Up", "Price Above IB", "Higher than PDVA", "", "", "Trend day - Up", 1.0),
-				new SeedReference("GC 04-26", 4104.90, 0.84, "", true, "Normal Variation day - Up", "", "Open Above PDVA", "Open Inside PDHL", "OpenTest Drive", "Broken - Up", 48.20, 39.50, "Wide", "Broken - Up", "Price Above IB", "Higher than PDVA", "Inside Bar - Broken Up", "Single Print - Up", "Trend day - Up", 0.5),
-				new SeedReference("GC 12-26", 4128.40, 0.79, "", true, "Normal day - Up", "", "Open Above PDVA", "Open Inside PDHL", "OAOR", "Broken - Up", 46.80, 36.10, "Wide", "Broken - Up", "Price Above IB", "Higher than PDVA", "", "", "Normal Variation day - Up", 0.5),
-				new SeedReference("ES 03-26", 5892.50, 0.42, "", true, "Normal Variation day - Up", "", "Open Inside PDVA", "Open Inside PDHL", "OAIR", "Broken - Up", 64.50, 48.25, "Normal", "Broken - Up", "Price Above IB", "Overlapping to PDVA High", "Inside Bar - Broken Up", "", "Normal Variation day - Up", 0.25),
-				new SeedReference("NQ 03-26", 20850.25, 0.68, "", true, "Trend day - Up", "Single Print - Up", "Open Above PDVA", "Open Inside PDHL", "Open Drive", "Broken - Up", 295.00, 242.50, "Wide", "Broken - Up", "Price Above IB", "Higher than PDVA", "", "Single Print - Up", "Trend day - Up", 1.0)
-			};
-
-			for (int i = 0; i < seeds.Length; i++)
-				referenceSeeds[seeds[i].Ticker] = seeds[i];
 		}
 
 		public static List<string> GetAccelpixNearMonthSymbols()
@@ -979,9 +790,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private void EnsureSubscribedInternal(string symbol, bool forceResubscribe = false)
 		{
 			SymbolSub sub = subscriptions.GetOrAdd(symbol, s => new SymbolSub { Symbol = s });
-			if (sub.IsMarketDataSubscribed && !forceResubscribe)
+			if (sub.IsMarketDataSubscribed && sub.HasRealBars && !forceResubscribe)
+				return;
+			if (!forceResubscribe && (DateTime.Now - sub.LastBarsRequestAttempt).TotalSeconds < 8.0)
 				return;
 
+			sub.LastBarsRequestAttempt = DateTime.Now;
 			sub.OnTickReceived = sym =>
 			{
 				RefreshSymbol(sym, false);
@@ -1021,7 +835,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 							{
 								sub.LastPrice = inst.MarketData.Last.Price;
 								sub.LastTickTime = inst.MarketData.Last.Time;
-								sub.HasRealBars = true;
 							}
 							if (inst.MarketData.DailyHigh != null && inst.MarketData.DailyHigh.Price > 0)
 								sub.TodayHigh = inst.MarketData.DailyHigh.Price;
@@ -1037,31 +850,95 @@ namespace NinjaTrader.NinjaScript.Indicators
 					}
 					catch { }
 
-					// 2. Request Historical Profile Bars for Active Periodicity
+					// 2. Request Real Historical 1-Minute Bars from Accelpix / NT8 and Aggregate to Session-Anchored Periodicity (Default 30-Min TPO)
 					try
 					{
+						if (sub.BarsReq30Min != null)
+						{
+							try { sub.BarsReq30Min.Dispose(); } catch { }
+							sub.BarsReq30Min = null;
+						}
+
 						DateTime toDate = DateTime.Now.AddDays(1);
-						DateTime fromDate = DateTime.Now.AddDays(-20);
+						DateTime fromDate = DateTime.Now.AddDays(-38);
 						BarsRequest req = new BarsRequest(inst, fromDate, toDate);
-						req.BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Minute, Value = Math.Max(1, PeriodicityMinutes) };
+						req.BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Minute, Value = 1 };
 						if (inst.MasterInstrument != null && inst.MasterInstrument.TradingHours != null)
 							req.TradingHours = inst.MasterInstrument.TradingHours;
 						req.Update += (s, e) => OnLiveBarsUpdate(sub, e);
 						sub.BarsReq30Min = req;
-						req.Request((r, err, msg) =>
+
+						using (ManualResetEventSlim doneEvt = new ManualResetEventSlim(false))
 						{
-							if (err == ErrorCode.NoError && r != null && r.Bars != null && r.Bars.Count > 0)
+							req.Request((r, err, msg) =>
 							{
-								ExtractBarsFromRequest(sub, r.Bars);
-							}
-							RefreshSymbol(sub.Symbol, false);
-							RaiseUpdated();
-						});
+								try
+								{
+									if (err == ErrorCode.NoError && r != null && r.Bars != null && r.Bars.Count > 0)
+									{
+										ExtractBarsFromRequest(sub, r.Bars);
+									}
+									RefreshSymbol(sub.Symbol, false);
+									RequestThrottledUpdate();
+								}
+								finally
+								{
+									try { doneEvt.Set(); } catch { }
+								}
+							});
+							doneEvt.Wait(250);
+						}
 					}
 					catch { }
 				}
 			}
 			catch { }
+		}
+
+		private static void RebuildAggregatedBarsLocked(SymbolSub sub, int periodMinutes)
+		{
+			sub.CachedBars.Clear();
+			if (sub.Raw1MinBars == null || sub.Raw1MinBars.Count == 0)
+			{
+				sub.HasRealBars = false;
+				return;
+			}
+
+			int period = Math.Max(1, periodMinutes);
+			MpBarSample curSlot = null;
+			for (int i = 0; i < sub.Raw1MinBars.Count; i++)
+			{
+				MpBarSample m = sub.Raw1MinBars[i];
+				if (m.Time.DayOfWeek == DayOfWeek.Saturday || m.Time.DayOfWeek == DayOfWeek.Sunday)
+					continue;
+				// NT8 1-minute bar timestamp is bar close time (e.g. 09:16:00 for 09:15:00-09:15:59).
+				// Subtract 1 second so 09:16..09:45 maps to 09:15 slot (A), 09:46..10:15 maps to 09:45 slot (B), etc.
+				DateTime effTime = m.Time.Second == 0 ? m.Time.AddSeconds(-1) : m.Time;
+				DateTime slotTime = GetPeriodicityBarTime(effTime, period);
+
+				if (curSlot != null && curSlot.Time == slotTime)
+				{
+					if (m.High > curSlot.High) curSlot.High = m.High;
+					if (m.Low < curSlot.Low) curSlot.Low = m.Low;
+					curSlot.Close = m.Close;
+					curSlot.Volume += m.Volume;
+				}
+				else
+				{
+					curSlot = new MpBarSample
+					{
+						Time = slotTime,
+						Open = m.Open,
+						High = m.High,
+						Low = m.Low,
+						Close = m.Close,
+						Volume = m.Volume
+					};
+					sub.CachedBars.Add(curSlot);
+				}
+			}
+
+			sub.HasRealBars = sub.CachedBars.Count >= 2;
 		}
 
 		private void ExtractBarsFromRequest(SymbolSub sub, Bars bars)
@@ -1070,12 +947,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 				return;
 			lock (sub.Sync)
 			{
-				sub.CachedBars.Clear();
+				sub.Raw1MinBars.Clear();
 				int count = bars.Count;
-				int start = Math.Max(0, count - 600);
+				int start = Math.Max(0, count - 15000);
 				for (int i = start; i < count; i++)
 				{
-					sub.CachedBars.Add(new MpBarSample
+					sub.Raw1MinBars.Add(new MpBarSample
 					{
 						Time = bars.GetTime(i),
 						Open = bars.GetOpen(i),
@@ -1085,14 +962,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 						Volume = bars.GetVolume(i)
 					});
 				}
-				if (sub.CachedBars.Count >= 4)
+				RebuildAggregatedBarsLocked(sub, PeriodicityMinutes);
+				if (sub.CachedBars.Count >= 2)
 				{
-					sub.HasRealBars = true;
 					double lastClose = sub.CachedBars[sub.CachedBars.Count - 1].Close;
 					if (sub.LastPrice > 0 && Math.Abs(lastClose - sub.LastPrice) > 1e-9)
 						sub.LastTickDir = lastClose > sub.LastPrice ? 1 : -1;
 					sub.LastPrice = lastClose;
-					sub.LastTickTime = DateTime.Now;
+					sub.LastTickTime = sub.CachedBars[sub.CachedBars.Count - 1].Time;
 				}
 			}
 		}
@@ -1116,7 +993,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 						sub.TickCount++;
 						sub.LastTickTime = DateTime.Now;
 
-						MpBarSample sample = new MpBarSample
+						MpBarSample sample1m = new MpBarSample
 						{
 							Time = e.BarsSeries.GetTime(idx),
 							Open = e.BarsSeries.GetOpen(idx),
@@ -1126,11 +1003,33 @@ namespace NinjaTrader.NinjaScript.Indicators
 							Volume = e.BarsSeries.GetVolume(idx)
 						};
 
-						if (sub.CachedBars.Count > 0 && sub.CachedBars[sub.CachedBars.Count - 1].Time == sample.Time)
-							sub.CachedBars[sub.CachedBars.Count - 1] = sample;
-						else
-							sub.CachedBars.Add(sample);
-						sub.HasRealBars = sub.CachedBars.Count >= 4;
+						if (sample1m.Time.DayOfWeek != DayOfWeek.Saturday && sample1m.Time.DayOfWeek != DayOfWeek.Sunday)
+						{
+							if (sub.Raw1MinBars.Count > 0 && sub.Raw1MinBars[sub.Raw1MinBars.Count - 1].Time == sample1m.Time)
+								sub.Raw1MinBars[sub.Raw1MinBars.Count - 1] = sample1m;
+							else
+								sub.Raw1MinBars.Add(sample1m);
+
+							DateTime effTime = sample1m.Time.Second == 0 ? sample1m.Time.AddSeconds(-1) : sample1m.Time;
+							DateTime slotTime = GetPeriodicityBarTime(effTime, PeriodicityMinutes);
+							if (sub.CachedBars.Count > 0 && sub.CachedBars[sub.CachedBars.Count - 1].Time == slotTime)
+							{
+								RebuildAggregatedBarsLocked(sub, PeriodicityMinutes);
+							}
+							else
+							{
+								sub.CachedBars.Add(new MpBarSample
+								{
+									Time = slotTime,
+									Open = sample1m.Open,
+									High = sample1m.High,
+									Low = sample1m.Low,
+									Close = sample1m.Close,
+									Volume = sample1m.Volume
+								});
+							}
+							sub.HasRealBars = sub.CachedBars.Count >= 2;
+						}
 					}
 				}
 				RefreshSymbol(sub.Symbol, false);
@@ -1141,7 +1040,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		public void UpdateFromChartIndicatorBars(string symbol, List<MpBarSample> chart30MinSamples)
 		{
-			if (string.IsNullOrWhiteSpace(symbol) || chart30MinSamples == null || chart30MinSamples.Count < 4)
+			if (string.IsNullOrWhiteSpace(symbol) || chart30MinSamples == null || chart30MinSamples.Count < 2)
 				return;
 
 			SymbolSub sub = subscriptions.GetOrAdd(symbol, s => new SymbolSub { Symbol = s });
@@ -1169,14 +1068,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				lock (sub.Sync)
 				{
-					if (sub.CachedBars.Count >= 4)
+					if (sub.CachedBars.Count >= 2)
 						barsSnapshot = new List<MpBarSample>(sub.CachedBars);
 				}
 			}
 
-			if (barsSnapshot != null && barsSnapshot.Count >= 4)
+			if (barsSnapshot != null && barsSnapshot.Count >= 2)
 			{
-				MpScannerRow computed = ComputeRowFrom30MinBars(symbol, barsSnapshot, sub, allowSimTick);
+				MpScannerRow computed = ComputeRowFrom30MinBars(symbol, barsSnapshot, sub);
 				if (computed != null)
 				{
 					MpScannerRow existing;
@@ -1184,21 +1083,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 						existing.CopyFrom(computed);
 					else
 						rowsBySymbol[symbol] = computed;
-					return;
 				}
 			}
-
-			MpScannerRow seeded = BuildSeededRow(symbol, sub, allowSimTick && EnableLiveTickSimulationWhenIdle);
-			MpScannerRow cur;
-			if (rowsBySymbol.TryGetValue(symbol, out cur))
-				cur.CopyFrom(seeded);
-			else
-				rowsBySymbol[symbol] = seeded;
 		}
 
-		private MpScannerRow ComputeRowFrom30MinBars(string symbol, List<MpBarSample> bars, SymbolSub sub, bool allowSimTick)
+		private MpScannerRow ComputeRowFrom30MinBars(string symbol, List<MpBarSample> bars, SymbolSub sub)
 		{
 			var dayGroups = bars
+				.Where(b => b.Time.DayOfWeek != DayOfWeek.Saturday && b.Time.DayOfWeek != DayOfWeek.Sunday)
 				.GroupBy(b => b.Time.Date)
 				.OrderBy(g => g.Key)
 				.Select(g => g.OrderBy(b => b.Time).ToList())
@@ -1211,12 +1103,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 			List<MpBarSample> todayBars = dayGroups[dayGroups.Count - 1];
 			List<MpBarSample> prevBars = dayGroups[dayGroups.Count - 2];
 
-			double tickSize = DefaultMinTickSize;
+			double tickSize = Math.Max(0.0001, DefaultMinTickSize);
 			if (sub != null && sub.Instrument != null && sub.Instrument.MasterInstrument != null && sub.Instrument.MasterInstrument.TickSize > 0)
 				tickSize = sub.Instrument.MasterInstrument.TickSize;
 
-			List<double> dailyCloses = new List<double>();
-			List<double> trueRanges = new List<double>();
+			// 1. Daily OHLCV Series & Wilder ATR / SMA (Exact 50chartsMP.dll 1001C0BA..1001C352)
+			List<double> dailyCloses = new List<double>(dayGroups.Count);
+			List<double> trueRanges = new List<double>(dayGroups.Count);
 			double prevCloseForTr = 0;
 			for (int d = 0; d < dayGroups.Count; d++)
 			{
@@ -1234,13 +1127,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 				prevCloseForTr = dClose;
 			}
 
-			int smaCount = Math.Min(SmaDays, dailyCloses.Count);
-			double smaVal = dailyCloses.Skip(dailyCloses.Count - smaCount).Average();
-
-			var atrSource = trueRanges.Count > 1 ? trueRanges.Take(trueRanges.Count - 1).ToList() : trueRanges;
-			int atrCount = Math.Min(AtrDays, atrSource.Count);
-			double atrVal = Math.Max(tickSize * 4, atrSource.Skip(atrSource.Count - atrCount).Average());
-
 			double pdHigh = prevBars.Max(x => x.High);
 			double pdLow = prevBars.Min(x => x.Low);
 			double pdClose = prevBars[prevBars.Count - 1].Close;
@@ -1252,27 +1138,39 @@ namespace NinjaTrader.NinjaScript.Indicators
 			double tdClose = todayBars[todayBars.Count - 1].Close;
 			double tdVol = todayBars.Sum(x => x.Volume);
 
-			double livePrice = (sub != null && sub.LastPrice > 0) ? sub.LastPrice : tdClose;
-			double liveHigh = (sub != null && sub.TodayHigh > 0) ? Math.Max(tdHigh, sub.TodayHigh) : Math.Max(tdHigh, livePrice);
-			double liveLow = (sub != null && sub.TodayLow > 0) ? Math.Min(tdLow, sub.TodayLow) : Math.Min(tdLow, livePrice);
-			double liveOpen = (sub != null && sub.TodayOpen > 0) ? sub.TodayOpen : tdOpen;
-			double liveVol = (sub != null && sub.TodayVolume > 0) ? Math.Max(tdVol, sub.TodayVolume) : tdVol;
-			double livePrevClose = (sub != null && sub.PrevClose > 0) ? sub.PrevClose : pdClose;
+			DateTime latestSessionDate = todayBars[todayBars.Count - 1].Time.Date;
+			bool isTodaySession = latestSessionDate == DateTime.Today && sub != null && sub.LastTickTime.Date == latestSessionDate;
+			double livePrice = (isTodaySession && sub != null && sub.LastPrice > 0) ? sub.LastPrice : tdClose;
+			double liveHigh = (isTodaySession && sub != null && sub.TodayHigh > 0) ? Math.Max(tdHigh, sub.TodayHigh) : Math.Max(tdHigh, livePrice);
+			double liveLow = (isTodaySession && sub != null && sub.TodayLow > 0) ? Math.Min(tdLow, sub.TodayLow) : Math.Min(tdLow, livePrice);
+			double liveOpen = (isTodaySession && sub != null && sub.TodayOpen > 0) ? sub.TodayOpen : tdOpen;
+			double liveVol = (isTodaySession && sub != null && sub.TodayVolume > 0) ? Math.Max(tdVol, sub.TodayVolume) : tdVol;
+			double livePrevClose = pdClose;
 
-			double tpoStep = EstimateAutoTpoSize(symbol, livePrice, atrVal, tickSize);
+			// Update latest daily close with livePrice for SMA(N) - Daily
+			if (dailyCloses.Count > 0)
+				dailyCloses[dailyCloses.Count - 1] = livePrice;
 
-			if (sub != null && allowSimTick && EnableLiveTickSimulationWhenIdle)
+			int smaCount = Math.Min(Math.Max(1, SmaDays), dailyCloses.Count);
+			double smaVal = Math.Round(dailyCloses.Skip(dailyCloses.Count - smaCount).Average(), 2);
+
+			// 50chartsMP.dll uses LastValue(Ref(ATR(N), -1)) (previous trading day's Daily ATR)
+			var prevDayTrueRanges = trueRanges.Count > 1 ? trueRanges.Take(trueRanges.Count - 1).ToList() : trueRanges;
+			double atrVal = Math.Round(ComputeWilderAtr(prevDayTrueRanges, Math.Max(1, AtrDays), tickSize), 2);
+			double atr10Val = Math.Round(ComputeWilderAtr(prevDayTrueRanges, 10, tickSize), 2);
+
+			// Exact 50chartsMP.dll Auto TPO Size (1001C422..1001C51B):
+			// ONE tpoSize is computed from Ref(ATR(10), -1) and passed to both PrevDay and Today profiles.
+			double tdTpoStep = Compute50ChartsAutoTpoSize(atr10Val, tickSize);
+			double pdTpoStep = tdTpoStep;
+
+			// Ensure live high/low are reflected in the current todayBar for real-time profile building
+			if (todayBars.Count > 0)
 			{
-				if ((DateTime.Now - sub.LastTickTime).TotalSeconds >= 2.0)
-				{
-					double step = Math.Max(0.05, tpoStep * 0.05);
-					double delta = (tickRng.NextDouble() - 0.49) * step;
-					livePrice = Math.Round((livePrice + delta) * 20.0) / 20.0;
-					sub.LastPrice = livePrice;
-					sub.LastTickDir = delta >= 0 ? 1 : -1;
-					sub.TickCount++;
-					sub.LastTickTime = DateTime.Now;
-				}
+				MpBarSample lastTb = todayBars[todayBars.Count - 1];
+				if (liveHigh > lastTb.High) lastTb.High = liveHigh;
+				if (liveLow < lastTb.Low) lastTb.Low = liveLow;
+				lastTb.Close = livePrice;
 			}
 
 			double pctChange = livePrevClose > 1e-9 ? ((livePrice - livePrevClose) / livePrevClose) * 100.0 : 0.0;
@@ -1280,38 +1178,27 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			double pdVah, pdPoc, pdVal;
 			int pdPocCount;
-			bool pdSpUp, pdSpDown;
+			int pdSinglePrintCode;
 			string pdDayType;
 			MpCellTone pdDayTypeTone;
-			BuildTpoProfileMetrics(prevBars, tpoStep, IbCandleCount, ValueAreaPercent,
-				out pdVah, out pdPoc, out pdVal, out pdPocCount, out pdSpUp, out pdSpDown, out pdDayType, out pdDayTypeTone);
+			BuildTpoProfileMetrics(prevBars, pdTpoStep, IbCandleCount, ValueAreaPercent, true,
+				out pdVah, out pdPoc, out pdVal, out pdPocCount, out pdSinglePrintCode, out pdDayType, out pdDayTypeTone);
 
 			double tdVah, tdPoc, tdVal;
 			int tdPocCount;
-			bool tdSpUp, tdSpDown;
+			int tdSinglePrintCode;
 			string tdDayType;
 			MpCellTone tdDayTypeTone;
-			BuildTpoProfileMetrics(todayBars, tpoStep, IbCandleCount, ValueAreaPercent,
-				out tdVah, out tdPoc, out tdVal, out tdPocCount, out tdSpUp, out tdSpDown, out tdDayType, out tdDayTypeTone);
+			BuildTpoProfileMetrics(todayBars, tdTpoStep, IbCandleCount, ValueAreaPercent, false,
+				out tdVah, out tdPoc, out tdVal, out tdPocCount, out tdSinglePrintCode, out tdDayType, out tdDayTypeTone);
 
 			int ibBarsCount = Math.Min(Math.Max(1, IbCandleCount), todayBars.Count);
 			double ibHigh = todayBars.Take(ibBarsCount).Max(x => x.High);
 			double ibLow = todayBars.Take(ibBarsCount).Min(x => x.Low);
 			double ibRange = Math.Max(0, ibHigh - ibLow);
 
-			DateTime barTime;
-			if (todayBars != null && todayBars.Count > 0)
-			{
-				DateTime lastBar = todayBars[todayBars.Count - 1].Time;
-				if (lastBar.Date == DateTime.Today)
-					barTime = GetPeriodicityBarTime(DateTime.Now, PeriodicityMinutes);
-				else
-					barTime = GetPeriodicityBarTime(lastBar, PeriodicityMinutes);
-			}
-			else
-			{
-				barTime = GetPeriodicityBarTime(DateTime.Now, PeriodicityMinutes);
-			}
+			DateTime barTime = todayBars[todayBars.Count - 1].Time;
+
 			MpScannerRow row = new MpScannerRow
 			{
 				Ticker = symbol,
@@ -1331,7 +1218,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				Price = livePrice,
 				PercentChange = pctChange,
 				DailySma = smaVal,
-				PdTpoSize = tpoStep,
+				PdTpoSize = pdTpoStep,
 				PdVah = pdVah,
 				PdPoc = pdPoc,
 				PdVal = pdVal,
@@ -1343,26 +1230,27 @@ namespace NinjaTrader.NinjaScript.Indicators
 				IbHigh = ibHigh,
 				IbLow = ibLow,
 				IbRange = ibRange,
-				TodayTpoSize = tpoStep,
+				TodayTpoSize = tdTpoStep,
 				TodayVah = tdVah,
 				TodayPoc = tdPoc,
 				TodayVal = tdVal,
 				TodayPocTpoCount = tdPocCount,
 				TodayDayType = tdDayType,
-				TodayDayTypeTone = MpCellTone.Default
+				TodayDayTypeTone = tdDayTypeTone
 			};
 
 			row.PriceTone = row.PercentChange >= 0 ? MpCellTone.FgGreen : MpCellTone.FgRed;
 
-			if (Math.Abs(liveOpen - liveLow) <= tickSize * 1.5 && (liveHigh - liveLow) > tickSize * 2)
-			{
-				row.OpenEqualHL = "Open = Low";
-				row.OpenEqualHLTone = MpCellTone.BgGreen;
-			}
-			else if (Math.Abs(liveOpen - liveHigh) <= tickSize * 1.5 && (liveHigh - liveLow) > tickSize * 2)
+			// Exact 50chartsMP.dll Open=H/L (1001E5D8): exact equality with TodayOpen == TodayHigh / TodayOpen == TodayLow
+			if (Math.Abs(liveOpen - liveHigh) <= tickSize * 0.5 && (liveHigh - liveLow) > tickSize)
 			{
 				row.OpenEqualHL = "Open = High";
 				row.OpenEqualHLTone = MpCellTone.BgRedOrange;
+			}
+			else if (Math.Abs(liveOpen - liveLow) <= tickSize * 0.5 && (liveHigh - liveLow) > tickSize)
+			{
+				row.OpenEqualHL = "Open = Low";
+				row.OpenEqualHLTone = MpCellTone.BgGreen;
 			}
 			else
 			{
@@ -1370,6 +1258,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				row.OpenEqualHLTone = MpCellTone.Default;
 			}
 
+			// Exact 50chartsMP.dll Price - SMA(21) (1001E90D)
 			string smaColLabel = "SMA(" + SmaDays + ")";
 			if (livePrice >= smaVal)
 			{
@@ -1382,23 +1271,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 				row.PriceVsSmaTone = MpCellTone.BgRedOrange;
 			}
 
-			SeedReference seed = null;
-			referenceSeeds.TryGetValue(symbol, out seed);
-
-			if (pdSpUp)
+			// Exact 50chartsMP.dll PD-SingleP (1001ED19)
+			if (pdSinglePrintCode == 1)
 			{
 				row.PdSinglePrint = "Single Print - Up";
 				row.PdSinglePrintTone = MpCellTone.BgGreen;
 			}
-			else if (pdSpDown)
+			else if (pdSinglePrintCode == -1)
 			{
 				row.PdSinglePrint = "Single Print - Down";
 				row.PdSinglePrintTone = MpCellTone.BgRedOrange;
-			}
-			else if (seed != null && !string.IsNullOrEmpty(seed.PdSingleP))
-			{
-				row.PdSinglePrint = seed.PdSingleP;
-				row.PdSinglePrintTone = GetSinglePrintTone(seed.PdSingleP);
 			}
 			else
 			{
@@ -1406,28 +1288,34 @@ namespace NinjaTrader.NinjaScript.Indicators
 				row.PdSinglePrintTone = MpCellTone.Default;
 			}
 
-			if (liveOpen > pdVah)
+			// Exact 50chartsMP.dll Open vs PDVA (1001FA5A): >= pdVah is Above, <= pdVal is Below
+			int openVsPdvaCode;
+			if (liveOpen >= pdVah)
 			{
 				row.OpenVsPdVa = "Open Above PDVA";
 				row.OpenVsPdVaTone = MpCellTone.BgGreen;
+				openVsPdvaCode = 1;
 			}
-			else if (liveOpen < pdVal)
+			else if (liveOpen <= pdVal)
 			{
 				row.OpenVsPdVa = "Open Below PDVA";
 				row.OpenVsPdVaTone = MpCellTone.BgRedOrange;
+				openVsPdvaCode = -1;
 			}
 			else
 			{
 				row.OpenVsPdVa = "Open Inside PDVA";
 				row.OpenVsPdVaTone = MpCellTone.Default;
+				openVsPdvaCode = 0;
 			}
 
-			if (liveOpen > pdHigh)
+			// Exact 50chartsMP.dll Open vs PDHL (1001F92F): >= pdHigh is Above, <= pdLow is Below
+			if (liveOpen >= pdHigh)
 			{
 				row.OpenVsPdHl = "Open Above PDHL";
 				row.OpenVsPdHlTone = MpCellTone.BgGreen;
 			}
-			else if (liveOpen < pdLow)
+			else if (liveOpen <= pdLow)
 			{
 				row.OpenVsPdHl = "Open Below PDHL";
 				row.OpenVsPdHlTone = MpCellTone.BgRedOrange;
@@ -1438,12 +1326,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 				row.OpenVsPdHlTone = MpCellTone.Default;
 			}
 
+			// Exact 50chartsMP.dll OpenType (1001FB95)
 			string openTypeStr;
 			MpCellTone openTypeTone;
-			ClassifyOpenType(todayBars, pdHigh, pdLow, pdVah, pdVal, tpoStep, out openTypeStr, out openTypeTone);
+			ClassifyOpenType(todayBars, openVsPdvaCode, pdVah, pdVal, tdTpoStep, out openTypeStr, out openTypeTone);
 			row.OpenType = openTypeStr;
 			row.OpenTypeTone = openTypeTone;
 
+			// Exact 50chartsMP.dll PrevDay Breakout (1001FF41)
 			bool brokePdUp = liveHigh > pdHigh;
 			bool brokePdDown = liveLow < pdLow;
 			if (brokePdUp && brokePdDown)
@@ -1467,19 +1357,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 				row.PrevDayBreakoutTone = MpCellTone.Default;
 			}
 
-			double ibAtrRatio = atrVal > 1e-9 ? (ibRange / atrVal) : 0.45;
-			if (ibAtrRatio > 0.80)
+			// Exact 50chartsMP.dll IB Size (1001F0BB): compared against atr10Val (0.8, 0.5, 1/3)
+			if (ibRange >= atr10Val * 0.80)
 				row.IbSize = "Very Wide";
-			else if (ibAtrRatio > 0.50)
+			else if (ibRange >= atr10Val * 0.50)
 				row.IbSize = "Wide";
-			else if (ibAtrRatio < (1.0 / 3.0))
+			else if (ibRange <= (atr10Val / 3.0))
 				row.IbSize = "Small";
 			else
 				row.IbSize = "Normal";
 			row.IbSizeTone = MpCellTone.Default;
 
-			bool ibBrokenUp = todayBars.Count > ibBarsCount && liveHigh > ibHigh + tickSize * 0.5;
-			bool ibBrokenDown = todayBars.Count > ibBarsCount && liveLow < ibLow - tickSize * 0.5;
+			// Exact 50chartsMP.dll IB Breakout (1001F295) & Price - IB (10020352)
+			bool ibBrokenUp = liveHigh > ibHigh;
+			bool ibBrokenDown = liveLow < ibLow;
 			if (ibBrokenUp && ibBrokenDown)
 			{
 				row.IbBreakout = "Broken - BothSides";
@@ -1501,48 +1392,55 @@ namespace NinjaTrader.NinjaScript.Indicators
 				row.IbBreakoutTone = MpCellTone.Default;
 			}
 
-			if (livePrice > ibHigh)
+			// In 50chartsMP.dll (10020352), Price - IB is only populated when IB has been broken (ibBrokenUp || ibBrokenDown)
+			if (ibBrokenUp || ibBrokenDown)
 			{
-				row.PriceVsIb = "Price Above IB";
-				row.PriceVsIbTone = MpCellTone.BgGreen;
-			}
-			else if (livePrice < ibLow)
-			{
-				row.PriceVsIb = "Price Below IB";
-				row.PriceVsIbTone = MpCellTone.BgRedOrange;
+				if (livePrice > ibHigh)
+				{
+					row.PriceVsIb = "Price Above IB";
+					row.PriceVsIbTone = MpCellTone.BgGreen;
+				}
+				else if (livePrice < ibLow)
+				{
+					row.PriceVsIb = "Price Below IB";
+					row.PriceVsIbTone = MpCellTone.BgRedOrange;
+				}
+				else
+				{
+					row.PriceVsIb = "Price Within IB";
+					row.PriceVsIbTone = MpCellTone.BgYellow;
+				}
 			}
 			else
 			{
-				row.PriceVsIb = "Price Within IB";
-				row.PriceVsIbTone = MpCellTone.BgYellow;
+				row.PriceVsIb = "";
+				row.PriceVsIbTone = MpCellTone.Default;
 			}
 
+			// Exact 50chartsMP.dll Today VA (100204E2)
 			string todayVaStr;
 			MpCellTone todayVaTone;
-			ClassifyTodayVa(tdVah, tdVal, pdVah, pdVal, tpoStep, out todayVaStr, out todayVaTone);
+			ClassifyTodayVa(tdVah, tdVal, pdVah, pdVal, out todayVaStr, out todayVaTone);
 			row.TodayVaStatus = todayVaStr;
 			row.TodayVaTone = todayVaTone;
 
+			// Exact 50chartsMP.dll 30-min PreviousBar (1001F3F0)
 			string prevBarStr;
 			MpCellTone prevBarTone;
 			Classify30MinPrevBar(todayBars, prevBars, out prevBarStr, out prevBarTone);
 			row.Prev30MinBarStatus = prevBarStr;
 			row.Prev30MinBarTone = prevBarTone;
 
-			if (tdSpUp)
+			// Exact 50chartsMP.dll SingleP (10020203)
+			if (tdSinglePrintCode == 1)
 			{
 				row.TodaySinglePrint = "Single Print - Up";
 				row.TodaySinglePrintTone = MpCellTone.BgGreen;
 			}
-			else if (tdSpDown)
+			else if (tdSinglePrintCode == -1)
 			{
 				row.TodaySinglePrint = "Single Print - Down";
 				row.TodaySinglePrintTone = MpCellTone.BgRedOrange;
-			}
-			else if (seed != null && !string.IsNullOrEmpty(seed.SingleP))
-			{
-				row.TodaySinglePrint = seed.SingleP;
-				row.TodaySinglePrintTone = GetSinglePrintTone(seed.SingleP);
 			}
 			else
 			{
@@ -1553,24 +1451,31 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return row;
 		}
 
-		private static double EstimateAutoTpoSize(string symbol, double price, double atr, double tickSize)
+		private static double ComputeWilderAtr(List<double> trueRanges, int period, double minTick)
 		{
-			if (symbol.StartsWith("BANKNIFTY", StringComparison.OrdinalIgnoreCase))
-				return 10.0;
-			if (symbol.StartsWith("NIFTY", StringComparison.OrdinalIgnoreCase))
-				return 3.0;
-			if (symbol.StartsWith("ES", StringComparison.OrdinalIgnoreCase) || symbol.StartsWith("MES", StringComparison.OrdinalIgnoreCase))
-				return 0.25;
-			if (symbol.StartsWith("GC", StringComparison.OrdinalIgnoreCase) || symbol.StartsWith("MGC", StringComparison.OrdinalIgnoreCase))
-				return 0.50;
+			if (trueRanges == null || trueRanges.Count == 0)
+				return minTick * 10.0;
+			int n = Math.Max(1, period);
+			if (trueRanges.Count <= n)
+				return Math.Max(minTick, trueRanges.Average());
 
-			double raw = Math.Max(tickSize, atr / 35.0);
-			if (price > 5000) return 5.0;
-			if (price > 2500) return 2.0;
-			if (price > 800) return 1.0;
-			if (price > 300) return 0.50;
-			if (price > 100) return 0.25;
-			return Math.Max(tickSize, Math.Round(raw / tickSize) * tickSize);
+			double atr = trueRanges.Take(n).Average();
+			for (int i = n; i < trueRanges.Count; i++)
+			{
+				atr = ((atr * (n - 1)) + trueRanges[i]) / n;
+			}
+			return Math.Max(minTick, atr);
+		}
+
+		// Exact 50chartsMP.dll Auto TPO Size (1001C422):
+		// ceil(((ceil(atr10) * 4.0) / 100.0) / tickSize) * tickSize
+		private static double Compute50ChartsAutoTpoSize(double atr10, double tickSize)
+		{
+			double minTick = Math.Max(0.0001, tickSize);
+			double ceilAtr = Math.Ceiling(Math.Max(minTick, atr10));
+			double raw = (ceilAtr * 4.0) / 100.0;
+			double step = Math.Ceiling((raw / minTick) - 1e-9) * minTick;
+			return Math.Max(minTick, Math.Round(step, 4));
 		}
 
 		private static void BuildTpoProfileMetrics(
@@ -1578,333 +1483,404 @@ namespace NinjaTrader.NinjaScript.Indicators
 			double tpoStep,
 			int ibCount,
 			double vaPct,
+			bool isCompletedSession,
 			out double vahPrice,
 			out double pocPrice,
 			out double valPrice,
 			out int pocTpoCount,
-			out bool hasSinglePrintUp,
-			out bool hasSinglePrintDown,
+			out int singlePrintCode,
 			out string dayType,
 			out MpCellTone dayTypeTone)
 		{
 			vahPrice = 0; pocPrice = 0; valPrice = 0; pocTpoCount = 0;
-			hasSinglePrintUp = false; hasSinglePrintDown = false;
-			dayType = "Non-Trend day";
+			singlePrintCode = 0;
+			dayType = "";
 			dayTypeTone = MpCellTone.Default;
 
 			if (sessionBars == null || sessionBars.Count == 0)
 				return;
 
-			double step = Math.Max(1e-5, tpoStep);
-			SortedDictionary<int, HashSet<int>> rows = new SortedDictionary<int, HashSet<int>>();
-			for (int p = 0; p < sessionBars.Count; p++)
-			{
-				MpBarSample b = sessionBars[p];
-				int lowBin = (int)Math.Floor(b.Low / step);
-				int highBin = (int)Math.Ceiling(b.High / step);
-				if (highBin - lowBin > 400)
-				{
-					step = (b.High - b.Low) / 100.0;
-					lowBin = (int)Math.Floor(b.Low / step);
-					highBin = (int)Math.Ceiling(b.High / step);
-				}
-				for (int bin = lowBin; bin <= highBin; bin++)
-				{
-					HashSet<int> set;
-					if (!rows.TryGetValue(bin, out set))
-					{
-						set = new HashSet<int>();
-						rows[bin] = set;
-					}
-					set.Add(p);
-				}
-			}
-
-			if (rows.Count == 0)
-				return;
-
-			int minBin = rows.Keys.Min();
-			int maxBin = rows.Keys.Max();
-			double midBin = (minBin + maxBin) * 0.5;
-
-			int pocBin = rows
-				.OrderByDescending(kv => kv.Value.Count)
-				.ThenBy(kv => Math.Abs(kv.Key - midBin))
-				.First().Key;
-
-			pocTpoCount = rows[pocBin].Count;
-			int totalTpo = Math.Max(1, rows.Values.Sum(s => s.Count));
-			int targetTpo = Math.Max(1, (int)Math.Ceiling(totalTpo * (vaPct / 100.0)));
-			int included = pocTpoCount;
-			int valBin = pocBin;
-			int vahBin = pocBin;
-
-			while (included < targetTpo && (valBin > minBin || vahBin < maxBin))
-			{
-				HashSet<int> lowSet, highSet;
-				int lowCnt = valBin > minBin && rows.TryGetValue(valBin - 1, out lowSet) ? lowSet.Count : -1;
-				int highCnt = vahBin < maxBin && rows.TryGetValue(vahBin + 1, out highSet) ? highSet.Count : -1;
-				if (highCnt >= lowCnt && vahBin < maxBin)
-				{
-					vahBin++;
-					if (highCnt > 0) included += highCnt;
-				}
-				else if (valBin > minBin)
-				{
-					valBin--;
-					if (lowCnt > 0) included += lowCnt;
-				}
-				else if (vahBin < maxBin)
-				{
-					vahBin++;
-					if (highCnt > 0) included += highCnt;
-				}
-			}
-
-			pocPrice = pocBin * step;
-			vahPrice = vahBin * step;
-			valPrice = valBin * step;
-
 			double dayOpen = sessionBars[0].Open;
 			double dayClose = sessionBars[sessionBars.Count - 1].Close;
 			double dayHigh = sessionBars.Max(x => x.High);
 			double dayLow = sessionBars.Min(x => x.Low);
-			double dayRange = Math.Max(step, dayHigh - dayLow);
+
+			// Exact 50chartsMP.dll Profile Grid Construction (10023E24..1002423A)
+			double step = Math.Max(1e-5, tpoStep);
+			double sessionMinLow = Math.Floor(dayLow / step) * step;
+			double sessionMaxHighFloor = Math.Floor(dayHigh / step) * step;
+			int numBuckets = Math.Max(1, (int)Math.Round(((sessionMaxHighFloor - sessionMinLow) / step) + 1.0, MidpointRounding.AwayFromZero));
+			if (numBuckets > 2000)
+			{
+				step = Math.Max(1e-5, (dayHigh - dayLow) / 500.0);
+				sessionMinLow = Math.Floor(dayLow / step) * step;
+				sessionMaxHighFloor = Math.Floor(dayHigh / step) * step;
+				numBuckets = Math.Max(1, (int)Math.Round(((sessionMaxHighFloor - sessionMinLow) / step) + 1.0, MidpointRounding.AwayFromZero));
+			}
+
+			int[] tpoCount = new int[numBuckets];
+			bool[] hasLastBar = new bool[numBuckets];
+			int lastBarIdx = sessionBars.Count - 1;
+
+			for (int p = 0; p < sessionBars.Count; p++)
+			{
+				MpBarSample b = sessionBars[p];
+				double bLowFloor = Math.Max(sessionMinLow, Math.Floor(b.Low / step) * step);
+				double bHighFloor = Math.Min(sessionMaxHighFloor, Math.Floor(b.High / step) * step);
+
+				for (int i = 0; i < numBuckets; i++)
+				{
+					double price = sessionMinLow + i * step;
+					bool geLow = price >= bLowFloor || AlmostEqual50Charts(bLowFloor, price);
+					bool leHigh = price <= bHighFloor || AlmostEqual50Charts(bHighFloor, price);
+					if (geLow && leHigh)
+					{
+						tpoCount[i]++;
+						if (p == lastBarIdx)
+							hasLastBar[i] = true;
+					}
+				}
+			}
+
+			int maxTpo = 0;
+			int totalTpo = 0;
+			for (int i = 0; i < numBuckets; i++)
+			{
+				if (tpoCount[i] > maxTpo)
+					maxTpo = tpoCount[i];
+				totalTpo += tpoCount[i];
+			}
+			if (maxTpo <= 0 || totalTpo <= 0)
+				return;
+
+			// Exact 50chartsMP.dll Center-Outward POC Search (1002969F..10029700)
+			int midIdx = (int)Math.Floor(numBuckets * 0.5);
+			int pocIdx = midIdx;
+			for (int d = 0; d <= numBuckets; d++)
+			{
+				int ecx = midIdx - d;
+				int edx = midIdx + d;
+				if (ecx >= 0 && ecx < numBuckets && tpoCount[ecx] >= maxTpo)
+				{
+					pocIdx = ecx;
+					break;
+				}
+				if (edx >= 0 && edx < numBuckets && tpoCount[edx] >= maxTpo)
+				{
+					pocIdx = edx;
+					break;
+				}
+			}
+
+			pocTpoCount = tpoCount[pocIdx];
+
+			// Exact 50chartsMP.dll 70% Value Area 2-Bucket Expansion (10029702..100297FE)
+			double targetTpo = (totalTpo * vaPct) / 100.0;
+			double included = pocTpoCount;
+			int valPtr = pocIdx - 1;
+			int vahPtr = pocIdx + 1;
+
+			while (targetTpo > included && (valPtr >= 0 || vahPtr < numBuckets))
+			{
+				int down2 = (valPtr >= 0 ? tpoCount[valPtr] : 0) + (valPtr > 0 ? tpoCount[valPtr - 1] : 0);
+				int up2 = (vahPtr < numBuckets ? tpoCount[vahPtr] : 0) + (vahPtr + 1 < numBuckets ? tpoCount[vahPtr + 1] : 0);
+
+				if (down2 > up2)
+				{
+					included += down2;
+					valPtr -= 2;
+				}
+				else if (up2 > down2)
+				{
+					included += up2;
+					vahPtr += 2;
+				}
+				else
+				{
+					// Simultaneous tie expansion on both sides (100297A8..100297D6)
+					included += up2 + down2;
+					vahPtr += 2;
+					valPtr -= 2;
+				}
+			}
+
+			int valIdx = Math.Max(0, valPtr + 1);
+			int vahIdx = Math.Min(numBuckets - 1, vahPtr - 1);
+
+			pocPrice = Math.Round(sessionMinLow + pocIdx * step, 2);
+			vahPrice = Math.Round(sessionMinLow + vahIdx * step, 2);
+			valPrice = Math.Round(sessionMinLow + valIdx * step, 2);
+
+			// -------------------------------------------------------------
+			// Interior Single Print Detection (50chartsMP.dll 10029AF0, 1001ED19 & 10020203)
+			// Excludes buying tail at bottom and selling tail at top, and for live session excludes unconfirmed extreme of latest bar.
+			// -------------------------------------------------------------
+			int interiorBottom = 0;
+			while (interiorBottom < numBuckets && tpoCount[interiorBottom] <= 1)
+				interiorBottom++;
+
+			int interiorTop = numBuckets - 1;
+			while (interiorTop >= 0 && tpoCount[interiorTop] <= 1)
+				interiorTop--;
+
+			List<int> spZoneMidBins = new List<int>();
+			if (interiorTop > interiorBottom && sessionBars.Count >= 3)
+			{
+				int streak = 0;
+				int streakStart = -1;
+				for (int b = interiorBottom; b <= interiorTop; b++)
+				{
+					bool isSingle = tpoCount[b] == 1 && (isCompletedSession || !hasLastBar[b]);
+					if (isSingle)
+					{
+						if (streak == 0) streakStart = b;
+						streak++;
+					}
+					else
+					{
+						if (streak >= 1)
+							spZoneMidBins.Add((streakStart + (b - 1)) / 2);
+						streak = 0;
+					}
+				}
+				if (streak >= 1)
+					spZoneMidBins.Add((streakStart + interiorTop) / 2);
+			}
+
+			if (spZoneMidBins.Count > 0)
+			{
+				double lastSpPrice = sessionMinLow + spZoneMidBins[spZoneMidBins.Count - 1] * step;
+				singlePrintCode = dayClose >= lastSpPrice ? 1 : -1;
+			}
+
+			// -------------------------------------------------------------
+			// Exact 50chartsMP.dll Day Type Classification (10027942..10027AC1, 1001EE26, 100202B9)
+			// Only classified once >= 3 TPO periods exist (1001EE5B)
+			// -------------------------------------------------------------
+			if (!isCompletedSession && sessionBars.Count < 3)
+			{
+				dayType = "";
+				dayTypeTone = MpCellTone.Default;
+				return;
+			}
 
 			int ibCnt = Math.Min(Math.Max(1, ibCount), sessionBars.Count);
 			double ibH = sessionBars.Take(ibCnt).Max(x => x.High);
 			double ibL = sessionBars.Take(ibCnt).Min(x => x.Low);
-			double ibRange = Math.Max(step, ibH - ibL);
 
-			bool extUp = (dayHigh - ibH) > step * 1.5;
-			bool extDown = (ibL - dayLow) > step * 1.5;
-			bool isUp = dayClose >= dayOpen;
-			string dir = isUp ? "Up" : "Down";
-
-			if (!extUp && !extDown)
+			if (dayHigh > ibH && dayLow < ibL)
 			{
-				if (ibRange < dayRange * 0.45 || rows.Count <= 6)
-				{
-					dayType = "Non-Trend day";
-					dayTypeTone = MpCellTone.Default;
-				}
-				else
-				{
-					dayType = "Normal day - " + dir;
-					dayTypeTone = isUp ? MpCellTone.BgGreen : MpCellTone.BgRedOrange;
-				}
-			}
-			else if (extUp && extDown)
-			{
-				double closePos = (dayClose - dayLow) / dayRange;
-				if (closePos >= 0.72)
-				{
-					dayType = "Neutral - Extreme day - Up";
-					dayTypeTone = MpCellTone.BgYellow;
-				}
-				else if (closePos <= 0.28)
-				{
-					dayType = "Neutral - Extreme day - Down";
-					dayTypeTone = MpCellTone.BgYellow;
-				}
-				else
+				// Both sides of IB broken (100279BE..10027A06)
+				if (dayClose >= ibL && dayClose <= ibH)
 				{
 					dayType = "Neutral - Centre day";
 					dayTypeTone = MpCellTone.BgYellow;
 				}
-			}
-			else if (dayRange >= ibRange * 2.0)
-			{
-				string trendDir = extUp ? "Up" : "Down";
-				dayType = "Trend day - " + trendDir;
-				dayTypeTone = extUp ? MpCellTone.BgGreen : MpCellTone.BgRedOrange;
-			}
-			else
-			{
-				string nvDir = extUp ? "Up" : "Down";
-				dayType = "Normal Variation day - " + nvDir;
-				dayTypeTone = extUp ? MpCellTone.BgGreen : MpCellTone.BgRedOrange;
-			}
-
-			// -------------------------------------------------------------
-			// Rigorous Market Profile Single Print Zone Detection (50Charts / REA)
-			// -------------------------------------------------------------
-			// 1. Single prints represent fast, aggressive directional initiative elongations.
-			// 2. Minimum contiguous width: At least 4 consecutive TPO bins where ONLY ONE period printed (pset.Count == 1).
-			// 3. Must be formed during an extension period AFTER the Initial Balance (period index p >= ibCnt).
-			// 4. Must NOT be an extreme high or low tail (excess). Tails within outer 10% of session range are tails, not single prints.
-			// 5. Must NOT be visited or retraded by any later period in the session (guaranteed by pset.Count == 1).
-			int totalRange = maxBin - minBin;
-			if (totalRange >= 8 && sessionBars.Count >= 4 && (dayType.StartsWith("Trend") || dayType.StartsWith("Normal Variation") || extUp || extDown))
-			{
-				int tailMargin = Math.Max(3, (int)Math.Round(totalRange * 0.10));
-				int scanMin = minBin + tailMargin;
-				int scanMax = maxBin - tailMargin;
-
-				int currentStreak = 0;
-				int streakPeriod = -1;
-				int streakStartBin = -1;
-
-				int bestUpStreak = 0;
-				int bestDownStreak = 0;
-
-				for (int b = scanMin; b <= scanMax; b++)
+				else if (dayClose > ibH)
 				{
-					HashSet<int> pset;
-					if (rows.TryGetValue(b, out pset) && pset.Count == 1)
-					{
-						int p = pset.First();
-						if (p >= ibCnt && p < sessionBars.Count)
-						{
-							if (currentStreak == 0 || streakPeriod == p)
-							{
-								if (currentStreak == 0) streakStartBin = b;
-								currentStreak++;
-								streakPeriod = p;
-							}
-							else
-							{
-								if (currentStreak >= 4 && streakPeriod >= 0 && streakPeriod < sessionBars.Count)
-								{
-									MpBarSample bar = sessionBars[streakPeriod];
-									bool isBullish = bar.Close >= bar.Open;
-									if (isBullish || streakStartBin >= pocBin || extUp)
-										bestUpStreak = Math.Max(bestUpStreak, currentStreak);
-									else if (!isBullish || streakStartBin < pocBin || extDown)
-										bestDownStreak = Math.Max(bestDownStreak, currentStreak);
-								}
-								currentStreak = 1;
-								streakPeriod = p;
-								streakStartBin = b;
-							}
-							continue;
-						}
-					}
-
-					if (currentStreak >= 4 && streakPeriod >= 0 && streakPeriod < sessionBars.Count)
-					{
-						MpBarSample bar = sessionBars[streakPeriod];
-						bool isBullish = bar.Close >= bar.Open;
-						if (isBullish || streakStartBin >= pocBin || extUp)
-							bestUpStreak = Math.Max(bestUpStreak, currentStreak);
-						else if (!isBullish || streakStartBin < pocBin || extDown)
-							bestDownStreak = Math.Max(bestDownStreak, currentStreak);
-					}
-					currentStreak = 0;
-					streakPeriod = -1;
+					dayType = "Neutral - Extreme day - Up";
+					dayTypeTone = MpCellTone.BgGreen;
 				}
-
-				if (currentStreak >= 4 && streakPeriod >= 0 && streakPeriod < sessionBars.Count)
+				else
 				{
-					MpBarSample bar = sessionBars[streakPeriod];
-					bool isBullish = bar.Close >= bar.Open;
-					if (isBullish || streakStartBin >= pocBin || extUp)
-						bestUpStreak = Math.Max(bestUpStreak, currentStreak);
-					else if (!isBullish || streakStartBin < pocBin || extDown)
-						bestDownStreak = Math.Max(bestDownStreak, currentStreak);
+					dayType = "Neutral - Extreme day - Down";
+					dayTypeTone = MpCellTone.BgRedOrange;
 				}
-
-				if (bestUpStreak >= 4 && (bestUpStreak >= bestDownStreak || extUp))
-					hasSinglePrintUp = true;
-				else if (bestDownStreak >= 4 && (bestDownStreak > bestUpStreak || extDown))
-					hasSinglePrintDown = true;
+			}
+			else if (dayHigh <= ibH && dayLow >= ibL)
+			{
+				// Neither side of IB broken (10027A13..10027A25)
+				dayType = "Non-Trend day";
+				dayTypeTone = MpCellTone.BgYellow;
+			}
+			else if (dayClose >= ibL && dayClose <= ibH)
+			{
+				// One side of IB broken, Close inside IB (10027A2A..10027A4E)
+				if (dayHigh > ibH)
+				{
+					dayType = "Normal day - Up";
+					dayTypeTone = MpCellTone.BgGreen;
+				}
+				else
+				{
+					dayType = "Normal day - Down";
+					dayTypeTone = MpCellTone.BgRedOrange;
+				}
+			}
+			else if (dayClose > ibH && dayHigh >= ibH)
+			{
+				// Close above IB High (10027A50..10027A8B)
+				if (pocTpoCount > 7 || (pocTpoCount == 7 && pocPrice >= ibL && pocPrice <= ibH))
+				{
+					dayType = "Normal Variation day - Up";
+					dayTypeTone = MpCellTone.BgGreen;
+				}
+				else
+				{
+					dayType = "Trend day - Up";
+					dayTypeTone = MpCellTone.BgGreen;
+				}
+			}
+			else if (dayClose < ibL && dayLow <= ibL)
+			{
+				// Close below IB Low (10027A8D..10027AC1)
+				if (pocTpoCount > 7 || (pocTpoCount == 7 && pocPrice >= ibL && pocPrice <= ibH))
+				{
+					dayType = "Normal Variation day - Down";
+					dayTypeTone = MpCellTone.BgRedOrange;
+				}
+				else
+				{
+					dayType = "Trend day - Down";
+					dayTypeTone = MpCellTone.BgRedOrange;
+				}
 			}
 		}
 
+		// Exact 50chartsMP.dll OpenType Classification (1001FB95..1001FF40)
 		private static void ClassifyOpenType(
 			List<MpBarSample> todayBars,
-			double pdHigh,
-			double pdLow,
+			int openVsPdvaCode,
 			double pdVah,
 			double pdVal,
 			double step,
 			out string openType,
 			out MpCellTone tone)
 		{
-			openType = "OAIR";
+			openType = "";
 			tone = MpCellTone.Default;
-			if (todayBars == null || todayBars.Count == 0)
+			// 1001FBE3..1001FBFB: OpenType is only evaluated when >= 3 bars exist (lastBarIdx >= firstBarIdx + 2)
+			if (todayBars == null || todayBars.Count < 3)
 				return;
 
-			MpBarSample first = todayBars[0];
-			double open = first.Open;
-			double firstRange = Math.Max(step, first.High - first.Low);
-			double openNearLow = (open - first.Low) / firstRange;
-			double openNearHigh = (first.High - open) / firstRange;
+			double s = Math.Max(1e-5, step);
+			double qOpen0 = Math.Floor(todayBars[0].Open / s) * s;
+			double qHigh0 = Math.Floor(todayBars[0].High / s) * s;
+			double qLow0 = Math.Floor(todayBars[0].Low / s) * s;
 
-			if (openNearLow <= 0.15 && first.Close > open + firstRange * 0.55)
+			// [edi+4] = High array (qHigh1), [edi+8] = Low array (qLow1)
+			double qHigh1 = Math.Floor(todayBars[1].High / s) * s;
+			double qLow1 = Math.Floor(todayBars[1].Low / s) * s;
+
+			double ib2High = qHigh1;
+			double ib2Low = qLow1;
+			// 1001FCF5: 3rd bar (index 2) is included in ib2High/ib2Low when lastBarIdx > firstBarIdx + 2 (Count > 3)
+			if (todayBars.Count > 3)
 			{
-				openType = "Open Drive";
-				tone = MpCellTone.BgGreen;
-				return;
-			}
-			if (openNearHigh <= 0.15 && first.Close < open - firstRange * 0.55)
-			{
-				openType = "Open Drive";
-				tone = MpCellTone.BgGreen;
-				return;
-			}
-
-			bool testedRef = (first.Low <= pdVah && first.Close > pdVah)
-				|| (first.High >= pdVal && first.Close < pdVal)
-				|| (first.Low <= pdHigh && first.Close > pdHigh)
-				|| (first.High >= pdLow && first.Close < pdLow);
-
-			if (testedRef && Math.Abs(first.Close - open) >= firstRange * 0.40)
-			{
-				openType = "OpenTest Drive";
-				tone = MpCellTone.BgGreen;
-				return;
+				double qHigh2 = Math.Floor(todayBars[2].High / s) * s;
+				double qLow2 = Math.Floor(todayBars[2].Low / s) * s;
+				ib2High = Math.Max(qHigh1, qHigh2);
+				ib2Low = Math.Min(qLow1, qLow2);
 			}
 
-			if (todayBars.Count >= 2)
+			int aOpenAboveLow = (int)Math.Round((qOpen0 - qLow0) / s, MidpointRounding.AwayFromZero);
+			int aTotalTicks = (int)Math.Round((qHigh0 - qLow0) / s, MidpointRounding.AwayFromZero);
+			int aHighAboveOpen = aTotalTicks - aOpenAboveLow;
+
+			// Case 1 (1001FDBA): Bullish Open Drive from Open = Low (aOpenAboveLow == 0 && B.Low > A.Open)
+			if (aOpenAboveLow == 0 && qLow1 > qOpen0)
 			{
-				MpBarSample second = todayBars[1];
-				if ((open > pdVah && second.Close < pdVah) || (open < pdVal && second.Close > pdVal))
+				if (openVsPdvaCode == -1 && Math.Max(qHigh0, qHigh1) >= pdVal)
 				{
 					openType = "ORR";
 					tone = MpCellTone.Default;
-					return;
 				}
+				else
+				{
+					openType = "Open Drive";
+					tone = MpCellTone.BgGreen;
+				}
+				return;
 			}
 
-			if (open > pdVah || open < pdVal)
+			// Case 2 (1001FDEC): Bearish Open Drive from Open = High (aHighAboveOpen == 0 && A.Open > B.High)
+			if (aHighAboveOpen == 0 && qOpen0 > qHigh1)
 			{
-				openType = "OAOR";
-				tone = MpCellTone.Default;
+				if (openVsPdvaCode == 1 && Math.Min(qLow0, qLow1) <= pdVah)
+				{
+					openType = "ORR";
+					tone = MpCellTone.Default;
+				}
+				else
+				{
+					openType = "Open Drive";
+					tone = MpCellTone.BgGreen;
+				}
+				return;
 			}
-			else
+
+			// Case 3 (1001FE16): Bullish OpenTest Drive (aOpenAboveLow < aHighAboveOpen && B.Low > A.Open)
+			if (aOpenAboveLow < aHighAboveOpen && qLow1 > qOpen0)
 			{
-				openType = "OAIR";
+				if (openVsPdvaCode == -1 && Math.Max(qHigh0, qHigh1) >= pdVal)
+				{
+					openType = "ORR";
+					tone = MpCellTone.Default;
+				}
+				else
+				{
+					openType = "OpenTest Drive";
+					tone = MpCellTone.BgGreen;
+				}
+				return;
+			}
+
+			// Case 4 (1001FE3E): Bearish OpenTest Drive (aOpenAboveLow > aHighAboveOpen && A.Open > B.High)
+			if (aOpenAboveLow > aHighAboveOpen && qOpen0 > qHigh1)
+			{
+				if (openVsPdvaCode == 1 && Math.Min(qLow0, qLow1) <= pdVah)
+				{
+					openType = "ORR";
+					tone = MpCellTone.Default;
+				}
+				else
+				{
+					openType = "OpenTest Drive";
+					tone = MpCellTone.BgGreen;
+				}
+				return;
+			}
+
+			// Case 5 (1001FE63): OAIR / OAOR
+			if ((qOpen0 >= qLow1 && qOpen0 <= qHigh1) || (qOpen0 >= ib2Low && qOpen0 <= ib2High))
+			{
+				openType = (openVsPdvaCode == 1 || openVsPdvaCode == -1) ? "OAOR" : "OAIR";
 				tone = MpCellTone.Default;
 			}
 		}
 
+		// Exact 50chartsMP.dll Helper 10018AF0 (0.05% price equality check)
+		private static bool AlmostEqual50Charts(double a, double b)
+		{
+			if (Math.Abs(a) < 1e-9) return Math.Abs(b) < 1e-9;
+			return (Math.Abs(a - b) * 100.0 / Math.Abs(a)) <= 0.05;
+		}
+
+		// Exact 50chartsMP.dll Today VA Classification (100204E2)
 		private static void ClassifyTodayVa(
 			double tdVah,
 			double tdVal,
 			double pdVah,
 			double pdVal,
-			double step,
 			out string status,
 			out MpCellTone tone)
 		{
-			if (tdVal >= pdVah - step * 0.5)
+			if (tdVah > pdVah && tdVal > pdVah)
 			{
 				status = "Higher than PDVA";
 				tone = MpCellTone.BgGreen;
 			}
-			else if (tdVah <= pdVal + step * 0.5)
+			else if (tdVah < pdVal && tdVal < pdVal)
 			{
 				status = "Lower than PDVA";
 				tone = MpCellTone.BgRedOrange;
 			}
-			else if (Math.Abs(tdVah - pdVah) <= step && Math.Abs(tdVal - pdVal) <= step)
+			else if (AlmostEqual50Charts(tdVah, pdVah) && AlmostEqual50Charts(tdVal, pdVal))
 			{
 				status = "Same VA";
 				tone = MpCellTone.Default;
 			}
-			else if (tdVah <= pdVah && tdVal >= pdVal)
+			else if ((AlmostEqual50Charts(tdVah, pdVah) || tdVah < pdVah) && (AlmostEqual50Charts(tdVal, pdVal) || tdVal > pdVal))
 			{
 				status = "Inside PrevVA";
 				tone = MpCellTone.Default;
@@ -1914,18 +1890,24 @@ namespace NinjaTrader.NinjaScript.Indicators
 				status = "Overlapping to PDVA H & L";
 				tone = MpCellTone.BgYellow;
 			}
-			else if (tdVah > pdVah && tdVal >= pdVal && tdVal < pdVah)
+			else if (tdVah > pdVah && (tdVal > pdVal || AlmostEqual50Charts(tdVal, pdVal)))
 			{
 				status = "Overlapping to PDVA High";
 				tone = MpCellTone.BgGreen;
 			}
-			else
+			else if ((tdVah < pdVah || AlmostEqual50Charts(tdVah, pdVah)) && tdVal < pdVal)
 			{
 				status = "Overlapping to PDVA low";
 				tone = MpCellTone.BgRedOrange;
 			}
+			else
+			{
+				status = "";
+				tone = MpCellTone.Default;
+			}
 		}
 
+		// Exact 50chartsMP.dll 30-min PreviousBar Classification (1001F3F0..1001F879)
 		private static void Classify30MinPrevBar(
 			List<MpBarSample> todayBars,
 			List<MpBarSample> prevBars,
@@ -1945,16 +1927,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 			MpBarSample prev1 = combined[combined.Count - 2];
 			MpBarSample prev2 = combined[combined.Count - 3];
 
-			bool isInside = prev1.High <= prev2.High && prev1.Low >= prev2.Low;
 			bool isOutside = prev1.High > prev2.High && prev1.Low < prev2.Low;
+			bool isInside = prev1.High < prev2.High && prev1.Low > prev2.Low;
 			if (!isInside && !isOutside)
 				return;
 
 			string baseLabel = isInside ? "Inside Bar" : "Outside Bar";
-			bool brokeUp = curr.High > prev1.High;
-			bool brokeDown = curr.Low < prev1.Low;
+			bool brokeBoth = curr.High > prev1.High && curr.Low < prev1.Low;
+			bool brokeUp = curr.High > prev1.High && curr.Low > prev1.Low;
+			bool brokeDown = curr.High < prev1.High && curr.Low < prev1.Low;
 
-			if (brokeUp && brokeDown)
+			if (brokeBoth)
 			{
 				status = baseLabel + " - Broken BothSides";
 				tone = MpCellTone.Default;
@@ -1976,144 +1959,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
-		private MpScannerRow BuildSeededRow(string symbol, SymbolSub sub, bool simTick)
-		{
-			SeedReference seed;
-			if (!referenceSeeds.TryGetValue(symbol, out seed))
-			{
-				seed = new SeedReference(symbol, 1000.00, 0.45, "", true, "Normal day - Up", "", "Open Above PDVA", "Open Inside PDHL", "OAOR", "Broken - Up", 22.50, 18.40, "Normal", "Broken - Up", "Price Above IB", "Higher than PDVA", "", "", "Normal Variation day - Up", 1.0);
-				referenceSeeds[symbol] = seed;
-			}
-
-			double prevClose = seed.Price / (1.0 + (seed.PctChange / 100.0));
-			if (sub != null && sub.PrevClose > 0)
-				prevClose = sub.PrevClose;
-
-			double livePrice = seed.Price;
-			int tickDir = seed.PctChange >= 0 ? 1 : -1;
-			long ticks = 1;
-
-			if (sub != null)
-			{
-				if (sub.LastPrice > 0)
-				{
-					livePrice = sub.LastPrice;
-					tickDir = sub.LastTickDir;
-					ticks = Math.Max(1, sub.TickCount);
-				}
-				else
-				{
-					sub.LastPrice = seed.Price;
-					livePrice = seed.Price;
-				}
-
-				if (simTick)
-				{
-					double step = Math.Max(0.05, seed.TpoSize * 0.1);
-					double delta = (tickRng.NextDouble() - 0.485) * step;
-					sub.LastPrice = Math.Max(step, Math.Round((sub.LastPrice + delta) * 20.0) / 20.0);
-					sub.LastTickDir = delta >= 0 ? 1 : -1;
-					sub.TickCount++;
-					sub.LastTickTime = DateTime.Now;
-
-					livePrice = sub.LastPrice;
-					tickDir = sub.LastTickDir;
-					ticks = sub.TickCount;
-				}
-			}
-
-			double pctChange = prevClose > 0 ? ((livePrice - prevClose) / prevClose) * 100.0 : seed.PctChange;
-			double hlRange = Math.Max(seed.HlRange, Math.Abs(livePrice - prevClose) * 1.15);
-			double tdLow = sub != null && sub.TodayLow > 0 ? sub.TodayLow : Math.Round((livePrice - hlRange * (pctChange >= 0 ? 0.65 : 0.35)) * 20.0) / 20.0;
-			double tdHigh = sub != null && sub.TodayHigh > 0 ? sub.TodayHigh : Math.Round((tdLow + hlRange) * 20.0) / 20.0;
-			double tdOpen = sub != null && sub.TodayOpen > 0 ? sub.TodayOpen : (seed.OpenHL == "Open = Low" ? tdLow : (seed.OpenHL == "Open = High" ? tdHigh : Math.Round((prevClose * 1.001) * 20.0) / 20.0));
-			double tdVol = sub != null && sub.TodayVolume > 0 ? sub.TodayVolume : (985000 + ticks * 120);
-			double ibRange = Math.Round((hlRange * 0.54) * 20.0) / 20.0;
-			double ibLow = Math.Round((tdLow + hlRange * 0.12) * 20.0) / 20.0;
-			double ibHigh = Math.Round((ibLow + ibRange) * 20.0) / 20.0;
-			double sma21 = seed.AboveSma ? Math.Round((livePrice * 0.982) * 20.0) / 20.0 : Math.Round((livePrice * 1.018) * 20.0) / 20.0;
-
-			DateTime barTime = GetPeriodicityBarTime(DateTime.Now, PeriodicityMinutes);
-			MpScannerRow row = new MpScannerRow
-			{
-				Ticker = symbol,
-				DateTimeStr = barTime.ToString("dd-MM-yyyy hh:mm:ss tt", CultureInfo.InvariantCulture),
-				LastUpdateTime = barTime,
-				IsLiveConnected = sub != null && (sub.HasRealBars || sub.TickCount > 0 || sub.LastPrice > 0),
-				TickCount = ticks,
-				LastTickDirection = tickDir,
-				PrevDayHigh = Math.Round((prevClose + seed.Atr10 * 0.55) * 20.0) / 20.0,
-				PrevDayLow = Math.Round((prevClose - seed.Atr10 * 0.45) * 20.0) / 20.0,
-				PrevDayClose = Math.Round(prevClose * 20.0) / 20.0,
-				PrevDayVolume = 1250000,
-				TodayVolume = tdVol,
-				TodayOpen = tdOpen,
-				TodayHigh = tdHigh,
-				TodayLow = tdLow,
-				OpenEqualHL = seed.OpenHL,
-				OpenEqualHLTone = seed.OpenHL == "Open = Low" ? MpCellTone.BgGreen : (seed.OpenHL == "Open = High" ? MpCellTone.BgRedOrange : MpCellTone.Default),
-				Price = livePrice,
-				PercentChange = pctChange,
-				PriceTone = pctChange >= 0 ? MpCellTone.FgGreen : MpCellTone.FgRed,
-				DailySma = sma21,
-				PriceVsSma = seed.AboveSma ? ("Price Above SMA(" + SmaDays + ")") : ("Price Below SMA(" + SmaDays + ")"),
-				PriceVsSmaTone = seed.AboveSma ? MpCellTone.BgGreen : MpCellTone.BgRedOrange,
-				PdTpoSize = seed.TpoSize,
-				PdVah = Math.Round((prevClose + seed.Atr10 * 0.28) * 20.0) / 20.0,
-				PdPoc = Math.Round(prevClose * 20.0) / 20.0,
-				PdVal = Math.Round((prevClose - seed.Atr10 * 0.25) * 20.0) / 20.0,
-				PdPocTpoCount = 8,
-				PrevDayType = seed.PrevDayType,
-				PrevDayTypeTone = GetDayTypeTone(seed.PrevDayType),
-				PdSinglePrint = seed.PdSingleP,
-				PdSinglePrintTone = GetSinglePrintTone(seed.PdSingleP),
-				OpenVsPdVa = seed.OpenVa,
-				OpenVsPdVaTone = seed.OpenVa.Contains("Above") ? MpCellTone.BgGreen : (seed.OpenVa.Contains("Below") ? MpCellTone.BgRedOrange : MpCellTone.Default),
-				OpenVsPdHl = seed.OpenHl,
-				OpenVsPdHlTone = seed.OpenHl.Contains("Above") ? MpCellTone.BgGreen : (seed.OpenHl.Contains("Below") ? MpCellTone.BgRedOrange : MpCellTone.Default),
-				OpenType = seed.OpenType,
-				OpenTypeTone = (seed.OpenType == "Open Drive" || seed.OpenType == "OpenTest Drive") ? MpCellTone.BgGreen : MpCellTone.Default,
-				PrevDayBreakout = seed.PdBreak,
-				PrevDayBreakoutTone = GetBreakoutTone(seed.PdBreak),
-				DailyAtr = seed.Atr10,
-				HlRange = hlRange,
-				IbHigh = ibHigh,
-				IbLow = ibLow,
-				IbRange = ibRange,
-				IbSize = seed.IbSize,
-				IbSizeTone = MpCellTone.Default,
-				IbBreakout = seed.IbBreak,
-				IbBreakoutTone = GetBreakoutTone(seed.IbBreak),
-				PriceVsIb = seed.PriceIb,
-				PriceVsIbTone = string.IsNullOrEmpty(seed.PriceIb) ? MpCellTone.Default : (seed.PriceIb.Contains("Above") ? MpCellTone.BgGreen : (seed.PriceIb.Contains("Below") ? MpCellTone.BgRedOrange : MpCellTone.BgYellow)),
-				TodayTpoSize = seed.TpoSize,
-				TodayVah = Math.Round((livePrice + hlRange * 0.22) * 20.0) / 20.0,
-				TodayPoc = Math.Round((livePrice - hlRange * 0.05) * 20.0) / 20.0,
-				TodayVal = Math.Round((livePrice - hlRange * 0.28) * 20.0) / 20.0,
-				TodayPocTpoCount = 7,
-				TodayVaStatus = seed.TodayVa,
-				TodayVaTone = GetTodayVaTone(seed.TodayVa),
-				Prev30MinBarStatus = seed.Bar30Min,
-				Prev30MinBarTone = GetPrevBarTone(seed.Bar30Min),
-				TodaySinglePrint = seed.SingleP,
-				TodaySinglePrintTone = GetSinglePrintTone(seed.SingleP),
-				TodayDayType = seed.DayType,
-				TodayDayTypeTone = GetDayTypeTone(seed.DayType)
-			};
-
-			return row;
-		}
-
 		private static MpCellTone GetDayTypeTone(string dt)
 		{
-			if (string.IsNullOrEmpty(dt) || dt.StartsWith("Non-Trend", StringComparison.OrdinalIgnoreCase))
+			if (string.IsNullOrEmpty(dt))
 				return MpCellTone.Default;
-			if (dt.StartsWith("Neutral", StringComparison.OrdinalIgnoreCase))
+			if (dt.StartsWith("Non-Trend", StringComparison.OrdinalIgnoreCase) || dt.StartsWith("Neutral - Centre", StringComparison.OrdinalIgnoreCase))
 				return MpCellTone.BgYellow;
 			if (dt.EndsWith("Up", StringComparison.OrdinalIgnoreCase))
 				return MpCellTone.BgGreen;
 			if (dt.EndsWith("Down", StringComparison.OrdinalIgnoreCase))
 				return MpCellTone.BgRedOrange;
+			if (dt.StartsWith("Neutral", StringComparison.OrdinalIgnoreCase))
+				return MpCellTone.BgYellow;
 			return MpCellTone.Default;
 		}
 
@@ -2252,6 +2109,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 			cols.Add(new MpColumnDef { Id = "Price", Header = "Price", Group = "Core", Width = 82f, IsNumeric = true, TextSelector = r => r.FormatNum(r.Price), SortNumSelector = r => r.Price, ToneSelector = r => r.PriceTone });
 			cols.Add(new MpColumnDef { Id = "PctChange", Header = "%Change", Group = "Core", Width = 70f, IsNumeric = true, TextSelector = r => r.FormatNum(r.PercentChange), SortNumSelector = r => r.PercentChange, ToneSelector = r => r.PriceTone });
 
+			if (showDailySma)
+			{
+				cols.Add(new MpColumnDef { Id = "DailySma", Header = "SMA(" + smaDays + ") - Daily", Group = "DailySMA", Width = 96f, IsNumeric = true, TextSelector = r => r.FormatNum(r.DailySma), SortNumSelector = r => r.DailySma, ToneSelector = r => MpCellTone.Default });
+				cols.Add(new MpColumnDef { Id = "PriceVsSma", Header = "Price - SMA(" + smaDays + ")", Group = "DailySMA", Width = 128f, IsNumeric = false, TextSelector = r => r.PriceVsSma, ToneSelector = r => r.PriceVsSmaTone });
+			}
+
 			if (showPrevDayMpLevels)
 			{
 				cols.Add(new MpColumnDef { Id = "PdTpo", Header = "TPOSize", Group = "PrevDayMP", Width = 64f, IsNumeric = true, TextSelector = r => r.FormatNum(r.PdTpoSize), SortNumSelector = r => r.PdTpoSize, ToneSelector = r => MpCellTone.Default });
@@ -2261,12 +2124,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 				cols.Add(new MpColumnDef { Id = "PdPocCnt", Header = "PD-POC TPOCount", Group = "PrevDayMP", Width = 96f, IsNumeric = true, TextSelector = r => r.PdPocTpoCount.ToString(CultureInfo.InvariantCulture), SortNumSelector = r => r.PdPocTpoCount, ToneSelector = r => MpCellTone.Default });
 			}
 
-			cols.Add(new MpColumnDef { Id = "PrevDayType", Header = "PrevDay Type", Group = "Core", Width = 116f, IsNumeric = false, TextSelector = r => r.PrevDayType, ToneSelector = r => r.PrevDayTypeTone });
-			cols.Add(new MpColumnDef { Id = "PdSingleP", Header = "PD-SingleP", Group = "Core", Width = 88f, IsNumeric = false, TextSelector = r => r.PdSinglePrint, ToneSelector = r => r.PdSinglePrintTone });
-			cols.Add(new MpColumnDef { Id = "OpenVa", Header = "Open", Group = "Core", Width = 94f, IsNumeric = false, TextSelector = r => r.OpenVsPdVa, ToneSelector = r => r.OpenVsPdVaTone });
-			cols.Add(new MpColumnDef { Id = "OpenHl", Header = "Open", Group = "Core", Width = 94f, IsNumeric = false, TextSelector = r => r.OpenVsPdHl, ToneSelector = r => r.OpenVsPdHlTone });
-			cols.Add(new MpColumnDef { Id = "OpenType", Header = "OpenType", Group = "Core", Width = 96f, IsNumeric = false, TextSelector = r => r.OpenType, ToneSelector = r => r.OpenTypeTone });
-			cols.Add(new MpColumnDef { Id = "PdBreakout", Header = "PrevDay Breakout", Group = "Core", Width = 116f, IsNumeric = false, TextSelector = r => r.PrevDayBreakout, ToneSelector = r => r.PrevDayBreakoutTone });
+			cols.Add(new MpColumnDef { Id = "PrevDayType", Header = "PrevDay Type", Group = "Core", Width = 148f, IsNumeric = false, TextSelector = r => r.PrevDayType, ToneSelector = r => r.PrevDayTypeTone });
+			cols.Add(new MpColumnDef { Id = "PdSingleP", Header = "PD-SingleP", Group = "Core", Width = 114f, IsNumeric = false, TextSelector = r => r.PdSinglePrint, ToneSelector = r => r.PdSinglePrintTone });
+			cols.Add(new MpColumnDef { Id = "OpenVa", Header = "Open", Group = "Core", Width = 116f, IsNumeric = false, TextSelector = r => r.OpenVsPdVa, ToneSelector = r => r.OpenVsPdVaTone });
+			cols.Add(new MpColumnDef { Id = "OpenHl", Header = "Open", Group = "Core", Width = 116f, IsNumeric = false, TextSelector = r => r.OpenVsPdHl, ToneSelector = r => r.OpenVsPdHlTone });
+			cols.Add(new MpColumnDef { Id = "OpenType", Header = "OpenType", Group = "Core", Width = 102f, IsNumeric = false, TextSelector = r => r.OpenType, ToneSelector = r => r.OpenTypeTone });
+			cols.Add(new MpColumnDef { Id = "PdBreakout", Header = "PrevDay Breakout", Group = "Core", Width = 118f, IsNumeric = false, TextSelector = r => r.PrevDayBreakout, ToneSelector = r => r.PrevDayBreakoutTone });
 			cols.Add(new MpColumnDef { Id = "AtrDaily", Header = "ATR(" + atrDays + ") - Daily", Group = "Core", Width = 92f, IsNumeric = true, TextSelector = r => r.FormatNum(r.DailyAtr), SortNumSelector = r => r.DailyAtr, ToneSelector = r => MpCellTone.Default });
 			cols.Add(new MpColumnDef { Id = "HlRange", Header = "HL Range", Group = "Core", Width = 74f, IsNumeric = true, TextSelector = r => r.FormatNum(r.HlRange), SortNumSelector = r => r.HlRange, ToneSelector = r => MpCellTone.Default });
 
@@ -2278,8 +2141,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 
 			cols.Add(new MpColumnDef { Id = "IbSize", Header = "IB Size", Group = "Core", Width = 72f, IsNumeric = false, TextSelector = r => r.IbSize, ToneSelector = r => r.IbSizeTone });
-			cols.Add(new MpColumnDef { Id = "IbBreakout", Header = "IB Breakout", Group = "Core", Width = 96f, IsNumeric = false, TextSelector = r => r.IbBreakout, ToneSelector = r => r.IbBreakoutTone });
-			cols.Add(new MpColumnDef { Id = "PriceVsIb", Header = "Price - IB", Group = "Core", Width = 92f, IsNumeric = false, TextSelector = r => r.PriceVsIb, ToneSelector = r => r.PriceVsIbTone });
+			cols.Add(new MpColumnDef { Id = "IbBreakout", Header = "IB Breakout", Group = "Core", Width = 114f, IsNumeric = false, TextSelector = r => r.IbBreakout, ToneSelector = r => r.IbBreakoutTone });
+			cols.Add(new MpColumnDef { Id = "PriceVsIb", Header = "Price - IB", Group = "Core", Width = 104f, IsNumeric = false, TextSelector = r => r.PriceVsIb, ToneSelector = r => r.PriceVsIbTone });
 
 			if (showTodayMpLevels)
 			{
@@ -2290,10 +2153,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 				cols.Add(new MpColumnDef { Id = "TdPocCnt", Header = "Today-POC TPOCount", Group = "TodayMP", Width = 104f, IsNumeric = true, TextSelector = r => r.TodayPocTpoCount.ToString(CultureInfo.InvariantCulture), SortNumSelector = r => r.TodayPocTpoCount, ToneSelector = r => MpCellTone.Default });
 			}
 
-			cols.Add(new MpColumnDef { Id = "TodayVa", Header = "Today VA", Group = "Core", Width = 98f, IsNumeric = false, TextSelector = r => r.TodayVaStatus, ToneSelector = r => r.TodayVaTone });
+			cols.Add(new MpColumnDef { Id = "TodayVa", Header = "Today VA", Group = "Core", Width = 148f, IsNumeric = false, TextSelector = r => r.TodayVaStatus, ToneSelector = r => r.TodayVaTone });
 			cols.Add(new MpColumnDef { Id = "Bar30Min", Header = periodicityMinutes + "-min PreviousBar", Group = "Core", Width = 152f, IsNumeric = false, TextSelector = r => r.Prev30MinBarStatus, ToneSelector = r => r.Prev30MinBarTone });
-			cols.Add(new MpColumnDef { Id = "SingleP", Header = "SingleP", Group = "Core", Width = 84f, IsNumeric = false, TextSelector = r => r.TodaySinglePrint, ToneSelector = r => r.TodaySinglePrintTone });
-			cols.Add(new MpColumnDef { Id = "DayType", Header = "Day Type", Group = "Core", Width = 175f, IsNumeric = false, TextSelector = r => r.TodayDayType, ToneSelector = r => r.TodayDayTypeTone });
+			cols.Add(new MpColumnDef { Id = "SingleP", Header = "SingleP", Group = "Core", Width = 114f, IsNumeric = false, TextSelector = r => r.TodaySinglePrint, ToneSelector = r => r.TodaySinglePrintTone });
+			cols.Add(new MpColumnDef { Id = "DayType", Header = "Day Type", Group = "Core", Width = 165f, IsNumeric = false, TextSelector = r => r.TodayDayType, ToneSelector = r => r.TodayDayTypeTone });
 
 			return cols;
 		}
@@ -2310,16 +2173,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public void Dispose()
 		{
 			isDisposed = true;
-			try
-			{
-				if (mirrorWatcher != null)
-				{
-					mirrorWatcher.EnableRaisingEvents = false;
-					mirrorWatcher.Dispose();
-					mirrorWatcher = null;
-				}
-			}
-			catch { }
 			foreach (var kv in subscriptions)
 			{
 				try { kv.Value.Dispose(); } catch { }
@@ -2364,7 +2217,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		public MarketProfileScannerWindow()
 		{
-			Caption = "AK10X Market Profile Live Scanner â€” NinjaTrader 8";
+			Caption = "AK10X Market Profile Live Scanner \u2014 NinjaTrader 8";
 			Width = 1560;
 			Height = 840;
 			WindowStartupLocation = WindowStartupLocation.CenterScreen;
@@ -2513,7 +2366,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			TextBlock lblSub = new TextBlock
 			{
-				Text = "Real-Time Order Flow & Market Profile Screener â€¢ Dynamic Accelpix Feed â€¢ NinjaTrader 8",
+				Text = "Real-Time Order Flow & Market Profile Screener \u2022 Dynamic Accelpix Feed \u2022 NinjaTrader 8",
 				FontSize = 11,
 				Foreground = new WpfSolidBrush(WpfColor.FromRgb(148, 163, 184)),
 				Margin = new Thickness(0, 2, 0, 0)
@@ -2539,7 +2392,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			};
 			txtLivePulse = new TextBlock
 			{
-				Text = "â—‹ CHECKING CONNECTION...",
+				Text = "\u25CB CHECKING CONNECTION...",
 				FontSize = 11.5,
 				FontWeight = FontWeights.Bold,
 				Foreground = new WpfSolidBrush(WpfColor.FromRgb(148, 163, 184))
@@ -2559,7 +2412,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			};
 			txtSpecs = new TextBlock
 			{
-				Text = string.Format("{0}-Min TPO â€¢ 70% VA â€¢ 2-Bar IB â€¢ Daily ATR({1})", engine.PeriodicityMinutes, engine.AtrDays),
+				Text = string.Format("{0}-Min TPO \u2022 70% VA \u2022 2-Bar IB \u2022 Daily ATR({1})", engine.PeriodicityMinutes, engine.AtrDays),
 				FontSize = 11,
 				Foreground = new WpfSolidBrush(WpfColor.FromRgb(203, 213, 225))
 			};
@@ -2613,7 +2466,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			root.Children.Add(headerBar);
 
 			// -------------------------------------------------------------
-			// Row 1: PRIMARY TOOLBAR (Explore, Watchlist, Filter, Search, +Symbol, CSV)
+			// Row 1: PRIMARY TOOLBAR (Explore, Watchlist, Filter, Search, Trading Screen)
 			// -------------------------------------------------------------
 			Border bar1 = new Border
 			{
@@ -2622,9 +2475,30 @@ namespace NinjaTrader.NinjaScript.Indicators
 				BorderThickness = new Thickness(0, 0, 0, 1),
 				Padding = new Thickness(10, 7, 10, 7)
 			};
+			DockPanel toolbarDock = new DockPanel { LastChildFill = true };
+
+			Button btnStacker = CreatePillButton("\u26A1 Trading Screen", WpfColor.FromRgb(255, 179, 0), WpfColors.Black, true);
+			btnStacker.Margin = new Thickness(10, 0, 0, 0);
+			btnStacker.HorizontalAlignment = HorizontalAlignment.Right;
+			btnStacker.Click += (s, e) =>
+			{
+				try
+				{
+					MpScannerRow sel = grid?.SelectedItem as MpScannerRow;
+					string sym = sel != null && !string.IsNullOrWhiteSpace(sel.Ticker) ? sel.Ticker : "NIFTY_I";
+					NinjaTrader.NinjaScript.AddOns.AK10XChartStackerWindow.LoadUnifiedInstrumentPair(sym);
+				}
+				catch (Exception ex)
+				{
+					NinjaTrader.Code.Output.Process("AK10X Trading Screen Launch Error: " + ex.Message, PrintTo.OutputTab1);
+				}
+			};
+			DockPanel.SetDock(btnStacker, Dock.Right);
+			toolbarDock.Children.Add(btnStacker);
+
 			WrapPanel wp1 = new WrapPanel { VerticalAlignment = VerticalAlignment.Center };
 
-			Button btnExplore = CreatePillButton("âœ” AK10X Scan Now", WpfColor.FromRgb(16, 185, 129), WpfColors.White, true);
+			Button btnExplore = CreatePillButton("\u2714 AK10X Scan Now", WpfColor.FromRgb(16, 185, 129), WpfColors.White, true);
 			btnExplore.Click += (s, e) =>
 			{
 				Task.Run(() => engine.RefreshAll(true));
@@ -2757,68 +2631,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			};
 			wp1.Children.Add(cmbRefreshRate);
 
-			chkSimIdle = CreatePillCheckBox("Live Tick Pulse", true, WpfColor.FromRgb(56, 189, 248));
-			chkSimIdle.ToolTip = "Keeps ticks actively streaming and animating live metrics continuously.";
-			chkSimIdle.Checked += (s, e) => engine.EnableLiveTickSimulationWhenIdle = true;
-			chkSimIdle.Unchecked += (s, e) => engine.EnableLiveTickSimulationWhenIdle = false;
-			wp1.Children.Add(chkSimIdle);
-
-			wp1.Children.Add(CreateToolbarLabel("+ Symbol:"));
-			txtAddSymbol = new TextBox
-			{
-				Width = 84,
-				Height = 28,
-				Margin = new Thickness(4, 0, 4, 0),
-				VerticalContentAlignment = VerticalAlignment.Center,
-				Background = new WpfSolidBrush(WpfColor.FromRgb(30, 41, 59)),
-				Foreground = new WpfSolidBrush(WpfColor.FromRgb(248, 250, 252)),
-				BorderBrush = new WpfSolidBrush(WpfColor.FromRgb(51, 65, 85)),
-				Padding = new Thickness(4, 2, 4, 2)
-			};
-			txtAddSymbol.KeyDown += (s, e) =>
-			{
-				if (e.Key == Key.Enter && !string.IsNullOrWhiteSpace(txtAddSymbol.Text))
-				{
-					engine.AddCustomSymbol(txtAddSymbol.Text);
-					txtAddSymbol.Text = "";
-				}
-			};
-			wp1.Children.Add(txtAddSymbol);
-
-			Button btnAddSym = CreatePillButton("Add", WpfColor.FromRgb(37, 99, 235), WpfColors.White, false);
-			btnAddSym.Click += (s, e) =>
-			{
-				if (!string.IsNullOrWhiteSpace(txtAddSymbol.Text))
-				{
-					engine.AddCustomSymbol(txtAddSymbol.Text);
-					txtAddSymbol.Text = "";
-				}
-			};
-			wp1.Children.Add(btnAddSym);
-
-			Button btnExportCsv = CreatePillButton("Export CSV", WpfColor.FromRgb(51, 65, 85), WpfColors.White, false);
-			btnExportCsv.Margin = new Thickness(6, 0, 0, 0);
-			btnExportCsv.Click += (s, e) => ExportCurrentGridToCsv();
-			wp1.Children.Add(btnExportCsv);
-
-						Button btnStacker = CreatePillButton("⚡ 2-Screen Stacker", WpfColor.FromRgb(255, 179, 0), WpfColors.Black, true);
-			btnStacker.Margin = new Thickness(10, 0, 0, 0);
-			btnStacker.Click += (s, e) =>
-			{
-				try
-				{
-					MpScannerRow sel = grid?.SelectedItem as MpScannerRow;
-					string sym = sel != null && !string.IsNullOrWhiteSpace(sel.Ticker) ? sel.Ticker : "NIFTY_I";
-					NinjaTrader.NinjaScript.AddOns.AK10XChartStackerWindow.LoadUnifiedInstrumentPair(sym);
-				}
-				catch (Exception ex)
-				{
-					NinjaTrader.Code.Output.Process("AK10X Stacker Launch Error: " + ex.Message, PrintTo.OutputTab1);
-				}
-			};
-			wp1.Children.Add(btnStacker);
-
-			bar1.Child = wp1;
+			toolbarDock.Children.Add(wp1);
+			bar1.Child = toolbarDock;
 			Grid.SetRow(bar1, 1);
 			root.Children.Add(bar1);
 
@@ -2853,6 +2667,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			wp2.Children.Add(chkPrevDayHlc);
 			wp2.Children.Add(chkTodayOhl);
+			wp2.Children.Add(chkDailySma);
 			wp2.Children.Add(chkPrevMp);
 			wp2.Children.Add(chkIbVals);
 			wp2.Children.Add(chkTodayMp);
@@ -3245,7 +3060,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			UpdateConnectionStatusBadge();
 
 			if (txtSpecs != null)
-				txtSpecs.Text = string.Format("{0}-Min TPO â€¢ 70% VA â€¢ 2-Bar IB â€¢ Daily ATR({1})", engine.PeriodicityMinutes, engine.AtrDays);
+				txtSpecs.Text = string.Format("{0}-Min TPO \u2022 70% VA \u2022 2-Bar IB \u2022 Daily ATR({1})", engine.PeriodicityMinutes, engine.AtrDays);
 
 			if (txtStatus != null)
 			{
@@ -3253,7 +3068,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				txtStatus.Text = string.Format(
 					CultureInfo.InvariantCulture,
 					"AK10X Market Profile Scanner Engine  |  Symbols Displayed: {0} (Real-time Live Active: {1})  |  Periodicity: {2}-min TPO  |  Sorted By: {3} ({4})  |  Watchlist: {5}  |  Updated: {6:dd-MM-yyyy HH:mm:ss}",
-					freshRows.Count, liveCount, engine.PeriodicityMinutes, sortCol.Header, sortAsc ? "Ascending â–²" : "Descending â–¼", engine.WatchlistPreset, DateTime.Now);
+					freshRows.Count, liveCount, engine.PeriodicityMinutes, sortCol.Header, sortAsc ? "Ascending \u25B2" : "Descending \u25BC", engine.WatchlistPreset, DateTime.Now);
 			}
 		}
 
@@ -3309,7 +3124,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				if (accel.Status == ConnectionStatus.Connected || accel.PriceStatus == ConnectionStatus.Connected)
 				{
-					txtLivePulse.Text = (pulseAlt ? "â— " : "â—‰ ") + "LIVE ACCELPIX CONNECTED";
+					txtLivePulse.Text = (pulseAlt ? "\u25CF " : "\u25C9 ") + "LIVE ACCELPIX CONNECTED";
 					txtLivePulse.Foreground = new WpfSolidBrush(WpfColor.FromRgb(74, 222, 128)); // bright green
 					borderLivePill.Background = new WpfSolidBrush(WpfColor.FromRgb(5, 46, 22)); // deep green
 					borderLivePill.BorderBrush = new WpfSolidBrush(WpfColor.FromRgb(22, 101, 52)); // forest green
@@ -3317,7 +3132,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 				if (accel.Status == ConnectionStatus.Connecting || accel.PriceStatus == ConnectionStatus.Connecting)
 				{
-					txtLivePulse.Text = "â— ACCELPIX CONNECTING...";
+					txtLivePulse.Text = "\u25CF ACCELPIX CONNECTING...";
 					txtLivePulse.Foreground = new WpfSolidBrush(WpfColor.FromRgb(251, 191, 36)); // amber gold
 					borderLivePill.Background = new WpfSolidBrush(WpfColor.FromRgb(69, 26, 3)); // amber dark
 					borderLivePill.BorderBrush = new WpfSolidBrush(WpfColor.FromRgb(180, 83, 9)); // amber border
@@ -3325,7 +3140,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 				if (accel.Status == ConnectionStatus.ConnectionLost || accel.PriceStatus == ConnectionStatus.ConnectionLost)
 				{
-					txtLivePulse.Text = "âš  ACCELPIX CONNECTION LOST";
+					txtLivePulse.Text = "\u26A0 ACCELPIX CONNECTION LOST";
 					txtLivePulse.Foreground = new WpfSolidBrush(WpfColor.FromRgb(248, 113, 113)); // red text
 					borderLivePill.Background = new WpfSolidBrush(WpfColor.FromRgb(69, 10, 10)); // red dark
 					borderLivePill.BorderBrush = new WpfSolidBrush(WpfColor.FromRgb(185, 28, 28)); // red border
@@ -3336,14 +3151,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (anyConnected != null)
 			{
 				string cname = (anyConnected.Options != null && !string.IsNullOrEmpty(anyConnected.Options.Name)) ? anyConnected.Options.Name : "LIVE FEED";
-				txtLivePulse.Text = (pulseAlt ? "â— " : "â—‰ ") + "LIVE " + cname.ToUpperInvariant() + " CONNECTED";
+				txtLivePulse.Text = (pulseAlt ? "\u25CF " : "\u25C9 ") + "LIVE " + cname.ToUpperInvariant() + " CONNECTED";
 				txtLivePulse.Foreground = new WpfSolidBrush(WpfColor.FromRgb(74, 222, 128));
 				borderLivePill.Background = new WpfSolidBrush(WpfColor.FromRgb(5, 46, 22));
 				borderLivePill.BorderBrush = new WpfSolidBrush(WpfColor.FromRgb(22, 101, 52));
 				return;
 			}
 
-			txtLivePulse.Text = "â—‹ ACCELPIX DISCONNECTED";
+			txtLivePulse.Text = "\u25CB ACCELPIX DISCONNECTED";
 			txtLivePulse.Foreground = new WpfSolidBrush(WpfColor.FromRgb(148, 163, 184)); // slate 400
 			borderLivePill.Background = new WpfSolidBrush(WpfColor.FromRgb(30, 41, 59)); // slate 800
 			borderLivePill.BorderBrush = new WpfSolidBrush(WpfColor.FromRgb(51, 65, 85)); // slate 700
@@ -3955,10 +3770,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 				float by = y0 + 5f;
 				float bh = 24f;
 
-				DrawToolbarBtn(bx, by, 102f, bh, "âœ” AK10X Scan", "SCAN", brBtnActive, brWhite, brGridLine, tfHeader);
+				DrawToolbarBtn(bx, by, 102f, bh, "\u2714 AK10X Scan", "SCAN", brBtnActive, brWhite, brGridLine, tfHeader);
 				bx += 108f;
 
-				string autoTxt = AutoRefreshEnabled ? ("â— Live (" + AutoRefreshSeconds + "s)") : "â—‹ Paused";
+				string autoTxt = AutoRefreshEnabled ? ("\u25CF Live (" + AutoRefreshSeconds + "s)") : "\u25CB Paused";
 				DrawToolbarBtn(bx, by, 92f, bh, autoTxt, "AUTO", AutoRefreshEnabled ? brBtnActive : brBtn, AutoRefreshEnabled ? brWhite : (light ? brBlack : brLightText), brGridLine, tfHeader);
 				bx += 98f;
 
@@ -3982,12 +3797,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 				DrawToolbarBtn(bx, by, 96f, bh, light ? "Theme: Light" : "Theme: Dark", "THEME", brBtn, light ? brBlack : brLightText, brGridLine, tfHeader);
 				bx += 102f;
 
-				DrawToolbarBtn(bx, by, 34f, bh, "â—€", "LEFT", brBtn, light ? brBlack : brLightText, brGridLine, tfHeader);
+				DrawToolbarBtn(bx, by, 34f, bh, "\u25C0", "LEFT", brBtn, light ? brBlack : brLightText, brGridLine, tfHeader);
 				bx += 38f;
-				DrawToolbarBtn(bx, by, 34f, bh, "â–¶", "RIGHT", brBtn, light ? brBlack : brLightText, brGridLine, tfHeader);
+				DrawToolbarBtn(bx, by, 34f, bh, "\u25B6", "RIGHT", brBtn, light ? brBlack : brLightText, brGridLine, tfHeader);
 				bx += 42f;
 
-				DrawToolbarBtn(bx, by, 158f, bh, "â Pop Out AK10X Window", "POPOUT", brBtnPop, brWhite, brGridLine, tfHeader);
+				DrawToolbarBtn(bx, by, 158f, bh, "\u2750 Pop Out AK10X Window", "POPOUT", brBtnPop, brWhite, brGridLine, tfHeader);
 
 				List<MpColumnDef> cols = MarketProfileScannerEngine.BuildColumnDefinitions(
 					SmaNumberOfDays, AtrNumberOfDays,
@@ -4017,7 +3832,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 						string hdrText = col.Header;
 						if (col.Id == sortColumnId)
-							hdrText += sortAscending ? " â–²" : " â–¼";
+							hdrText += sortAscending ? " \u25B2" : " \u25BC";
 
 						DrawClippedText(hdrText, cx + 4f, headerY + 3f, cw - 6f, headerH - 4f, tfHeader, light ? brBlack : brLightText, false);
 						RenderTarget.DrawLine(new Vector2(cx + cw, headerY), new Vector2(cx + cw, h - footerH), brGridLine, 1f);
