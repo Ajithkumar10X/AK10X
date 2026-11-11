@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -7,32 +7,39 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
-[assembly: AssemblyTitle("AK10X Market Profile 50Charts Setup")]
-[assembly: AssemblyProduct("AK10X Market Profile 50Charts for NinjaTrader 8")]
-[assembly: AssemblyCompany("AK10X Trading")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyTitle("AK10X Complete Suite Setup (Protected Mode)")]
+[assembly: AssemblyProduct("AK10X Orderflow, Market Profile, Scanner & Trading Screen for NinjaTrader 8")]
+[assembly: AssemblyCompany("AK10X Trading Systems")]
+[assembly: AssemblyVersion("2.0.0.0")]
+[assembly: AssemblyFileVersion("2.0.0.0")]
 
 namespace AK10XInstaller
 {
 	public sealed class SetupForm : Form
 	{
 		private TextBox txtNtFolder;
-		private RadioButton rbProtected;
-		private RadioButton rbSource;
 		private TextBox txtLog;
 		private Button btnInstall;
 		private Button btnExportZip;
 		private Button btnUninstall;
 
+		private static readonly string[] WrapperFiles = new string[]
+		{
+			"Indicators\\AK10XOrderflow.cs",
+			"Indicators\\INDMarketProfile50Charts.cs",
+			"Indicators\\MarketProfile50Charts.cs",
+			"Indicators\\MarketProfileScanner50Charts.cs",
+			"AddOns\\AK10XWindowStacker.cs"
+		};
+
 		public SetupForm()
 		{
-			Text = "AK10X Market Profile 50Charts — NinjaTrader 8 Setup Wizard";
-			Size = new Size(720, 560);
+			Text = "AK10X Complete Suite — NinjaTrader 8 Protected Setup";
+			Size = new Size(760, 610);
 			StartPosition = FormStartPosition.CenterScreen;
 			FormBorderStyle = FormBorderStyle.FixedDialog;
 			MaximizeBox = false;
-			BackColor = Color.FromArgb(14, 17, 24);
+			BackColor = Color.FromArgb(12, 16, 23);
 			ForeColor = Color.FromArgb(230, 235, 245);
 			Font = new Font("Segoe UI", 9.5f, FontStyle.Regular);
 
@@ -45,13 +52,13 @@ namespace AK10XInstaller
 			Panel headerPanel = new Panel
 			{
 				Dock = DockStyle.Top,
-				Height = 96,
-				BackColor = Color.FromArgb(20, 25, 35)
+				Height = 100,
+				BackColor = Color.FromArgb(18, 24, 34)
 			};
 
 			PictureBox picLogo = new PictureBox
 			{
-				Location = new Point(18, 12),
+				Location = new Point(18, 14),
 				Size = new Size(72, 72),
 				SizeMode = PictureBoxSizeMode.Zoom,
 				BackColor = Color.Transparent
@@ -69,19 +76,19 @@ namespace AK10XInstaller
 
 			Label lblTitle = new Label
 			{
-				Text = "AK10X Market Profile 50Charts (NinjaTrader 8)",
+				Text = "AK10X Complete Trading Suite (NinjaTrader 8)",
 				Font = new Font("Segoe UI", 15f, FontStyle.Bold),
-				ForeColor = Color.FromArgb(0, 220, 255),
-				Location = new Point(104, 16),
+				ForeColor = Color.FromArgb(0, 224, 255),
+				Location = new Point(104, 14),
 				AutoSize = true
 			};
 			headerPanel.Controls.Add(lblTitle);
 
 			Label lblSub = new Label
 			{
-				Text = "3-Session Forex Market Profile (Asia / London / New York) • Split & Merge • Virgin Levels",
-				Font = new Font("Segoe UI", 9.5f, FontStyle.Regular),
-				ForeColor = Color.FromArgb(180, 190, 205),
+				Text = "AK10XOrderflow • AK10XChartStackerWindow • INDMarketProfile50Charts • MarketProfile50Charts • Scanner",
+				Font = new Font("Segoe UI", 9.0f, FontStyle.Regular),
+				ForeColor = Color.FromArgb(185, 198, 215),
 				Location = new Point(106, 46),
 				AutoSize = true
 			};
@@ -89,9 +96,9 @@ namespace AK10XInstaller
 
 			Label lblVer = new Label
 			{
-				Text = "Version 1.0 • Ready for 1-Click Installation",
-				Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
-				ForeColor = Color.FromArgb(120, 220, 140),
+				Text = "Protected Binary Mode (Source Code Hidden inside AK10X.Suite.dll) • All 5 Modules in One EXE",
+				Font = new Font("Segoe UI", 8.8f, FontStyle.Bold),
+				ForeColor = Color.FromArgb(80, 230, 145),
 				Location = new Point(106, 68),
 				AutoSize = true
 			};
@@ -101,7 +108,7 @@ namespace AK10XInstaller
 			Label lblFolder = new Label
 			{
 				Text = "NinjaTrader 8 User Data Folder:",
-				Location = new Point(20, 112),
+				Location = new Point(20, 114),
 				AutoSize = true,
 				Font = new Font("Segoe UI", 9.5f, FontStyle.Bold)
 			};
@@ -111,9 +118,9 @@ namespace AK10XInstaller
 			txtNtFolder = new TextBox
 			{
 				Text = defaultNtDir,
-				Location = new Point(20, 136),
-				Size = new Size(560, 26),
-				BackColor = Color.FromArgb(24, 30, 42),
+				Location = new Point(20, 138),
+				Size = new Size(595, 26),
+				BackColor = Color.FromArgb(22, 28, 40),
 				ForeColor = Color.White,
 				BorderStyle = BorderStyle.FixedSingle
 			};
@@ -122,8 +129,8 @@ namespace AK10XInstaller
 			Button btnBrowse = new Button
 			{
 				Text = "Browse...",
-				Location = new Point(590, 134),
-				Size = new Size(92, 28),
+				Location = new Point(625, 136),
+				Size = new Size(96, 28),
 				FlatStyle = FlatStyle.Flat,
 				BackColor = Color.FromArgb(35, 45, 65),
 				ForeColor = Color.White
@@ -140,41 +147,44 @@ namespace AK10XInstaller
 			};
 			Controls.Add(btnBrowse);
 
-			GroupBox grpMode = new GroupBox
+			GroupBox grpModules = new GroupBox
 			{
-				Text = "Installation Mode",
+				Text = "Included Protected Modules (Compiled in AK10X.Suite.dll — Source Code Hidden)",
 				Location = new Point(20, 174),
-				Size = new Size(662, 82),
+				Size = new Size(702, 118),
 				ForeColor = Color.FromArgb(255, 200, 80)
 			};
 
-			rbProtected = new RadioButton
+			string[] modDescriptions = new string[]
 			{
-				Text = "Protected Binary DLL Mode (Recommended for Sharing — Hides C# Source Code inside compiled DLL)",
-				Location = new Point(16, 24),
-				Size = new Size(630, 22),
-				Checked = true,
-				ForeColor = Color.FromArgb(230, 235, 245)
+				"✔  1. AK10XOrderflow — 5-Min Orderflow Footprint, 1:2 Logic, Stacked Imbalances & 7-Row Statistic Grid",
+				"✔  2. AK10XChartStackerWindow — AK10X Trading Screen (Control Center -> New -> AK10X Trading Screen)",
+				"✔  3. INDMarketProfile50Charts — Indian NSE Market Profile (Daily/Weekly/Monthly, Split/Merge, Virgin Levels)",
+				"✔  4. MarketProfile50Charts — 3-Session Forex/Commodity Market Profile (Asia / London / New York)",
+				"✔  5. MarketProfileScanner50Charts — Real-Time Accelpix Live Market Profile Scanner (Indicator + Window)"
 			};
-			grpMode.Controls.Add(rbProtected);
 
-			rbSource = new RadioButton
+			for (int i = 0; i < modDescriptions.Length; i++)
 			{
-				Text = "Full Source Code Mode (Installs full editable MarketProfile50Charts.cs into Indicators folder)",
-				Location = new Point(16, 50),
-				Size = new Size(630, 22),
-				ForeColor = Color.FromArgb(190, 200, 215)
-			};
-			grpMode.Controls.Add(rbSource);
-			Controls.Add(grpMode);
+				Label lblMod = new Label
+				{
+					Text = modDescriptions[i],
+					Location = new Point(16, 22 + i * 18),
+					AutoSize = true,
+					Font = new Font("Segoe UI", 8.8f, FontStyle.Regular),
+					ForeColor = Color.FromArgb(220, 230, 242)
+				};
+				grpModules.Controls.Add(lblMod);
+			}
+			Controls.Add(grpModules);
 
 			btnInstall = new Button
 			{
-				Text = "Install to NinjaTrader 8",
-				Location = new Point(20, 270),
-				Size = new Size(250, 40),
+				Text = "Install All 5 Modules (Protected)",
+				Location = new Point(20, 304),
+				Size = new Size(276, 42),
 				FlatStyle = FlatStyle.Flat,
-				BackColor = Color.FromArgb(22, 135, 75),
+				BackColor = Color.FromArgb(18, 145, 80),
 				ForeColor = Color.White,
 				Font = new Font("Segoe UI", 10.5f, FontStyle.Bold),
 				Cursor = Cursors.Hand
@@ -184,11 +194,11 @@ namespace AK10XInstaller
 
 			btnExportZip = new Button
 			{
-				Text = "Save Add-On .ZIP to Desktop",
-				Location = new Point(282, 270),
-				Size = new Size(240, 40),
+				Text = "Save Protected Add-On .ZIP to Desktop",
+				Location = new Point(308, 304),
+				Size = new Size(256, 42),
 				FlatStyle = FlatStyle.Flat,
-				BackColor = Color.FromArgb(25, 95, 145),
+				BackColor = Color.FromArgb(25, 95, 148),
 				ForeColor = Color.White,
 				Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
 				Cursor = Cursors.Hand
@@ -198,11 +208,11 @@ namespace AK10XInstaller
 
 			btnUninstall = new Button
 			{
-				Text = "Uninstall",
-				Location = new Point(534, 270),
-				Size = new Size(148, 40),
+				Text = "Uninstall Suite",
+				Location = new Point(576, 304),
+				Size = new Size(146, 42),
 				FlatStyle = FlatStyle.Flat,
-				BackColor = Color.FromArgb(130, 40, 40),
+				BackColor = Color.FromArgb(135, 38, 38),
 				ForeColor = Color.White,
 				Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
 				Cursor = Cursors.Hand
@@ -213,7 +223,7 @@ namespace AK10XInstaller
 			Label lblLog = new Label
 			{
 				Text = "Installation Status Log:",
-				Location = new Point(20, 322),
+				Location = new Point(20, 356),
 				AutoSize = true,
 				Font = new Font("Segoe UI", 9f, FontStyle.Bold)
 			};
@@ -221,20 +231,21 @@ namespace AK10XInstaller
 
 			txtLog = new TextBox
 			{
-				Location = new Point(20, 344),
-				Size = new Size(662, 160),
+				Location = new Point(20, 378),
+				Size = new Size(702, 178),
 				Multiline = true,
 				ReadOnly = true,
 				ScrollBars = ScrollBars.Vertical,
-				BackColor = Color.FromArgb(10, 12, 18),
-				ForeColor = Color.FromArgb(140, 235, 165),
+				BackColor = Color.FromArgb(9, 12, 18),
+				ForeColor = Color.FromArgb(130, 238, 165),
 				Font = new Font("Consolas", 9f),
 				BorderStyle = BorderStyle.FixedSingle
 			};
 			Controls.Add(txtLog);
 
-			AppendLog("Ready. Detected NinjaTrader 8 folder: " + defaultNtDir);
-			AppendLog("Click [Install to NinjaTrader 8] to install AK10X Market Profile 50Charts.");
+			AppendLog("Ready. Target NinjaTrader 8 folder: " + defaultNtDir);
+			AppendLog("Mode: PROTECTED BINARY (C# source code is hidden inside compiled AK10X.Suite.dll).");
+			AppendLog("Click [Install All 5 Modules (Protected)] to deploy the complete AK10X suite.");
 		}
 
 		private void AppendLog(string msg)
@@ -264,7 +275,6 @@ namespace AK10XInstaller
 		private async void OnInstallClick(object sender, EventArgs e)
 		{
 			string ntDir = txtNtFolder.Text.Trim();
-			bool protectedMode = rbProtected.Checked;
 			btnInstall.Enabled = false;
 			btnUninstall.Enabled = false;
 
@@ -274,56 +284,88 @@ namespace AK10XInstaller
 				{
 					string customDir = Path.Combine(ntDir, "bin", "Custom");
 					string indDir = Path.Combine(customDir, "Indicators");
+					string addOnsDir = Path.Combine(customDir, "AddOns");
 					string importDir = Path.Combine(ntDir, "import");
+					string wsDir = Path.Combine(ntDir, "workspaces");
+
 					Directory.CreateDirectory(customDir);
 					Directory.CreateDirectory(indDir);
+					Directory.CreateDirectory(addOnsDir);
 					Directory.CreateDirectory(importDir);
+					Directory.CreateDirectory(wsDir);
+
+					// Remove any old plain-text root duplicates or legacy single-indicator DLL
+					string[] legacyFiles = new string[]
+					{
+						Path.Combine(customDir, "AK10XWindowStacker.cs"),
+						Path.Combine(customDir, "INDMarketProfile50Charts.cs"),
+						Path.Combine(customDir, "AK10X.MarketProfile50Charts.dll")
+					};
+					foreach (string lf in legacyFiles)
+					{
+						if (File.Exists(lf))
+						{
+							try { File.Delete(lf); } catch { }
+						}
+					}
 
 					AppendLog("Installing AK10X_Logo.png...");
 					ExtractResourceToFile("AK10X_Logo.png", Path.Combine(indDir, "AK10X_Logo.png"));
 
-					string dllTarget = Path.Combine(customDir, "AK10X.MarketProfile50Charts.dll");
-					string csTarget = Path.Combine(indDir, "MarketProfile50Charts.cs");
-
-					if (protectedMode)
+					string suiteDllTarget = Path.Combine(customDir, "AK10X.Suite.dll");
+					AppendLog("Installing Protected Suite Binary: AK10X.Suite.dll...");
+					try
 					{
-						AppendLog("Installing Protected Binary: AK10X.MarketProfile50Charts.dll...");
-						ExtractResourceToFile("AK10X.MarketProfile50Charts.dll", dllTarget);
-						AppendLog("Installing thin NinjaScript wrapper: MarketProfile50Charts.cs...");
-						ExtractResourceToFile("MarketProfile50Charts_Wrapper.cs", csTarget);
-						RegisterDllInConfigXml(Path.Combine(ntDir, "Config.xml"), true);
-						UpdateCsproj(Path.Combine(customDir, "NinjaTrader.Custom.csproj"), dllTarget, true, true);
+						ExtractResourceToFile("AK10X.Suite.dll", suiteDllTarget);
 					}
-					else
+					catch
 					{
-						if (File.Exists(dllTarget))
-						{
-							try { File.Delete(dllTarget); } catch { }
-						}
-						AppendLog("Installing Full Source: MarketProfile50Charts.cs...");
-						ExtractResourceToFile("MarketProfile50Charts_Full.cs", csTarget);
-						RegisterDllInConfigXml(Path.Combine(ntDir, "Config.xml"), false);
-						UpdateCsproj(Path.Combine(customDir, "NinjaTrader.Custom.csproj"), dllTarget, false, true);
+						string bak = suiteDllTarget + ".old_" + DateTime.Now.ToString("HHmmss");
+						try { if (File.Exists(suiteDllTarget)) File.Move(suiteDllTarget, bak); } catch { }
+						ExtractResourceToFile("AK10X.Suite.dll", suiteDllTarget);
 					}
 
-					// Also place the ready-to-import Add-On ZIP in Documents\NinjaTrader 8\import\
-					string zipTarget = Path.Combine(importDir, "AK10X_MarketProfile50Charts_Protected_NT8_AddOn.zip");
-					ExtractResourceToFile("AK10X_MarketProfile50Charts_Protected_NT8_AddOn.zip", zipTarget);
-					AppendLog("Saved backup Add-On package to: " + zipTarget);
+					AppendLog("Installing Protected Thin Wrappers (Source Code Hidden):");
+					AppendLog("  -> Indicators\\AK10XOrderflow.cs");
+					ExtractResourceToFile("AK10XOrderflow_Wrapper.cs", Path.Combine(indDir, "AK10XOrderflow.cs"));
 
-					// Attempt automatic compilation of NinjaTrader.Custom.csproj if dotnet SDK is available
+					AppendLog("  -> Indicators\\INDMarketProfile50Charts.cs");
+					ExtractResourceToFile("INDMarketProfile50Charts_Wrapper.cs", Path.Combine(indDir, "INDMarketProfile50Charts.cs"));
+
+					AppendLog("  -> Indicators\\MarketProfile50Charts.cs");
+					ExtractResourceToFile("MarketProfile50Charts_Wrapper.cs", Path.Combine(indDir, "MarketProfile50Charts.cs"));
+
+					AppendLog("  -> Indicators\\MarketProfileScanner50Charts.cs");
+					ExtractResourceToFile("MarketProfileScanner50Charts_Wrapper.cs", Path.Combine(indDir, "MarketProfileScanner50Charts.cs"));
+
+					AppendLog("  -> AddOns\\AK10XWindowStacker.cs");
+					ExtractResourceToFile("AK10XWindowStacker_Wrapper.cs", Path.Combine(addOnsDir, "AK10XWindowStacker.cs"));
+
+					try
+					{
+						ExtractResourceToFile("AK10X_Workspace.xml", Path.Combine(wsDir, "AK10X - 2-Screen Stacker.xml"));
+						AppendLog("Installed Workspace: AK10X - 2-Screen Stacker.xml");
+					}
+					catch { }
+
+					RegisterDllInConfigXml(Path.Combine(ntDir, "Config.xml"), true);
+					UpdateCsproj(Path.Combine(customDir, "NinjaTrader.Custom.csproj"), suiteDllTarget, true);
+
+					string zipTarget = Path.Combine(importDir, "AK10X_Protected_NT8_AddOn.zip");
+					ExtractResourceToFile("AK10X_Protected_NT8_AddOn.zip", zipTarget);
+					AppendLog("Saved Protected Add-On ZIP to: " + zipTarget);
+
 					string csprojPath = Path.Combine(customDir, "NinjaTrader.Custom.csproj");
 					if (File.Exists(csprojPath))
 					{
-						AppendLog("Compiling NinjaTrader.Custom.dll...");
+						AppendLog("Compiling NinjaTrader.Custom.dll with AK10X.Suite.dll...");
 						TryBuildCustomDll(customDir, csprojPath);
 					}
 
-					AppendLog("SUCCESS! AK10X Market Profile 50Charts is installed!");
-					AppendLog("Open NinjaTrader 8 -> Right-click Chart -> Indicators -> MarketProfile50Charts.");
+					AppendLog("SUCCESS! All 5 AK10X modules installed in Protected Mode (Source Code Hidden)!");
 					MessageBox.Show(this,
-						"AK10X Market Profile 50Charts has been installed successfully!\n\nOpen NinjaTrader 8 (or press F5 on your chart) and select 'MarketProfile50Charts' under Indicators.",
-						"Installation Complete",
+						"AK10X Complete Suite has been installed in Protected Mode!\n\nIncluded Modules:\n• AK10XOrderflow\n• AK10XChartStackerWindow (AK10X Trading Screen)\n• INDMarketProfile50Charts\n• MarketProfile50Charts\n• MarketProfileScanner50Charts\n\nAll source code is protected inside AK10X.Suite.dll.",
+						"AK10X Suite Installed",
 						MessageBoxButtons.OK,
 						MessageBoxIcon.Information);
 				}
@@ -343,12 +385,12 @@ namespace AK10XInstaller
 			try
 			{
 				string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-				string outZip = Path.Combine(desktop, "AK10X_MarketProfile50Charts_Protected_NT8_AddOn.zip");
-				ExtractResourceToFile("AK10X_MarketProfile50Charts_Protected_NT8_AddOn.zip", outZip);
-				AppendLog("Exported NinjaTrader 8 Add-On ZIP to Desktop: " + outZip);
+				string outZip = Path.Combine(desktop, "AK10X_Protected_NT8_AddOn.zip");
+				ExtractResourceToFile("AK10X_Protected_NT8_AddOn.zip", outZip);
+				AppendLog("Exported Protected NinjaTrader 8 Add-On ZIP to Desktop: " + outZip);
 				MessageBox.Show(this,
-					"Saved Add-On ZIP to Desktop:\n" + outZip + "\n\nAnyone can import this in NinjaTrader 8 via:\nControl Center -> Tools -> Import -> NinjaScript Add-On...",
-					"Add-On ZIP Saved",
+					"Saved Protected Add-On ZIP to Desktop:\n" + outZip + "\n\nContains all 5 modules in Protected Mode (AK10X.Suite.dll).",
+					"Protected Add-On ZIP Saved",
 					MessageBoxButtons.OK,
 					MessageBoxIcon.Information);
 			}
@@ -361,26 +403,32 @@ namespace AK10XInstaller
 		private void OnUninstallClick(object sender, EventArgs e)
 		{
 			string ntDir = txtNtFolder.Text.Trim();
-			if (MessageBox.Show(this, "Remove AK10X Market Profile 50Charts from NinjaTrader 8?", "Confirm Uninstall", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+			if (MessageBox.Show(this, "Remove all 5 AK10X Suite modules from NinjaTrader 8?", "Confirm Uninstall", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
 				return;
 
 			try
 			{
 				string customDir = Path.Combine(ntDir, "bin", "Custom");
 				string indDir = Path.Combine(customDir, "Indicators");
-				string dllTarget = Path.Combine(customDir, "AK10X.MarketProfile50Charts.dll");
-				string csTarget = Path.Combine(indDir, "MarketProfile50Charts.cs");
+				string suiteDll = Path.Combine(customDir, "AK10X.Suite.dll");
+				string oldDll = Path.Combine(customDir, "AK10X.MarketProfile50Charts.dll");
 				string logoTarget = Path.Combine(indDir, "AK10X_Logo.png");
 
-				if (File.Exists(dllTarget)) File.Delete(dllTarget);
-				if (File.Exists(csTarget)) File.Delete(csTarget);
-				if (File.Exists(logoTarget)) File.Delete(logoTarget);
+				if (File.Exists(suiteDll)) try { File.Delete(suiteDll); } catch { }
+				if (File.Exists(oldDll)) try { File.Delete(oldDll); } catch { }
+				if (File.Exists(logoTarget)) try { File.Delete(logoTarget); } catch { }
+
+				foreach (string rel in WrapperFiles)
+				{
+					string fp = Path.Combine(customDir, rel);
+					if (File.Exists(fp)) try { File.Delete(fp); } catch { }
+				}
 
 				RegisterDllInConfigXml(Path.Combine(ntDir, "Config.xml"), false);
-				UpdateCsproj(Path.Combine(customDir, "NinjaTrader.Custom.csproj"), dllTarget, false, false);
+				UpdateCsproj(Path.Combine(customDir, "NinjaTrader.Custom.csproj"), suiteDll, false);
 
-				AppendLog("Uninstalled AK10X Market Profile 50Charts cleanly.");
-				MessageBox.Show(this, "AK10X Market Profile 50Charts has been uninstalled.", "Uninstalled", MessageBoxButtons.OK, MessageBoxIcon.Information);
+				AppendLog("Uninstalled AK10X Complete Suite cleanly.");
+				MessageBox.Show(this, "AK10X Complete Suite has been uninstalled.", "Uninstalled", MessageBoxButtons.OK, MessageBoxIcon.Information);
 			}
 			catch (Exception ex)
 			{
@@ -393,67 +441,72 @@ namespace AK10XInstaller
 			if (!File.Exists(configXmlPath))
 				return;
 			string xml = File.ReadAllText(configXmlPath);
-			string refLine = "      <string>*MyDocuments*\\NinjaTrader 8\\bin\\Custom\\AK10X.MarketProfile50Charts.dll</string>";
+			string oldRef = "      <string>*MyDocuments*\\NinjaTrader 8\\bin\\Custom\\AK10X.MarketProfile50Charts.dll</string>";
+			string newRef = "      <string>*MyDocuments*\\NinjaTrader 8\\bin\\Custom\\AK10X.Suite.dll</string>";
+
+			xml = xml.Replace(oldRef + "\r\n", "").Replace(oldRef + "\n", "").Replace(oldRef, "");
+
 			if (addReference)
 			{
-				if (!xml.Contains("AK10X.MarketProfile50Charts.dll") && xml.Contains("</ArrayOfString>"))
+				if (!xml.Contains("AK10X.Suite.dll") && xml.Contains("</ArrayOfString>"))
 				{
-					xml = xml.Replace("    </ArrayOfString>", refLine + Environment.NewLine + "    </ArrayOfString>");
-					File.WriteAllText(configXmlPath, xml, Encoding.UTF8);
-					AppendLog("Registered AK10X.MarketProfile50Charts.dll in Config.xml.");
+					xml = xml.Replace("    </ArrayOfString>", newRef + Environment.NewLine + "    </ArrayOfString>");
 				}
 			}
 			else
 			{
-				if (xml.Contains("AK10X.MarketProfile50Charts.dll"))
-				{
-					xml = xml.Replace(refLine + "\r\n", "").Replace(refLine + "\n", "").Replace(refLine, "");
-					File.WriteAllText(configXmlPath, xml, Encoding.UTF8);
-				}
+				xml = xml.Replace(newRef + "\r\n", "").Replace(newRef + "\n", "").Replace(newRef, "");
 			}
+			File.WriteAllText(configXmlPath, xml, Encoding.UTF8);
 		}
 
-		private void UpdateCsproj(string csprojPath, string dllFullPath, bool includeDllRef, bool includeCsCompile)
+		private void UpdateCsproj(string csprojPath, string dllFullPath, bool install)
 		{
 			if (!File.Exists(csprojPath))
 				return;
 			string xml = File.ReadAllText(csprojPath);
-			string refBlock = string.Format("    <Reference Include=\"AK10X.MarketProfile50Charts\">\r\n      <HintPath>{0}</HintPath>\r\n    </Reference>", dllFullPath);
 
-			// Clean existing AK10X reference if any
-			int rStart = xml.IndexOf("<Reference Include=\"AK10X.MarketProfile50Charts\">", StringComparison.Ordinal);
-			if (rStart >= 0)
+			string[] oldRefNames = new string[] { "AK10X.MarketProfile50Charts", "AK10X.Suite" };
+			foreach (string rn in oldRefNames)
 			{
-				int rEnd = xml.IndexOf("</Reference>", rStart, StringComparison.Ordinal);
-				if (rEnd > rStart)
-					xml = xml.Remove(rStart, (rEnd + "</Reference>".Length) - rStart);
+				int rStart = xml.IndexOf("<Reference Include=\"" + rn + "\">", StringComparison.Ordinal);
+				if (rStart >= 0)
+				{
+					int rEnd = xml.IndexOf("</Reference>", rStart, StringComparison.Ordinal);
+					if (rEnd > rStart)
+						xml = xml.Remove(rStart, (rEnd + "</Reference>".Length) - rStart);
+				}
 			}
 
-			if (includeDllRef)
+			if (install)
 			{
+				string refBlock = string.Format("    <Reference Include=\"AK10X.Suite\">\r\n      <HintPath>{0}</HintPath>\r\n    </Reference>", dllFullPath);
 				string anchor = "<Reference Include=\"NinjaTrader.Vendor\">";
 				int idx = xml.IndexOf(anchor, StringComparison.Ordinal);
 				if (idx >= 0)
 					xml = xml.Insert(idx, refBlock + "\r\n    ");
 			}
 
-			string compileLine = "<Compile Include=\"Indicators\\MarketProfile50Charts.cs\" />";
-			if (includeCsCompile)
+			foreach (string rel in WrapperFiles)
 			{
-				if (!xml.Contains("Indicators\\MarketProfile50Charts.cs"))
+				string compileLine = string.Format("<Compile Include=\"{0}\" />", rel);
+				if (install)
 				{
-					int cIdx = xml.LastIndexOf("<Compile Include=", StringComparison.Ordinal);
-					if (cIdx >= 0)
+					if (!xml.Contains(compileLine))
 					{
-						int lineEnd = xml.IndexOf("/>", cIdx, StringComparison.Ordinal);
-						if (lineEnd > cIdx)
-							xml = xml.Insert(lineEnd + 2, "\r\n    " + compileLine);
+						int cIdx = xml.LastIndexOf("<Compile Include=", StringComparison.Ordinal);
+						if (cIdx >= 0)
+						{
+							int lineEnd = xml.IndexOf("/>", cIdx, StringComparison.Ordinal);
+							if (lineEnd > cIdx)
+								xml = xml.Insert(lineEnd + 2, "\r\n    " + compileLine);
+						}
 					}
 				}
-			}
-			else
-			{
-				xml = xml.Replace("    " + compileLine + "\r\n", "").Replace(compileLine, "");
+				else
+				{
+					xml = xml.Replace("    " + compileLine + "\r\n", "").Replace(compileLine, "");
+				}
 			}
 
 			File.WriteAllText(csprojPath, xml, Encoding.UTF8);
@@ -475,27 +528,29 @@ namespace AK10XInstaller
 				};
 				using (Process p = Process.Start(psi))
 				{
-					p.WaitForExit(45000);
+					p.WaitForExit(60000);
 					string builtDll = Path.Combine(outDir, "NinjaTrader.Custom.dll");
 					if (p.ExitCode == 0 && File.Exists(builtDll))
 					{
 						string targetDll = Path.Combine(customDir, "NinjaTrader.Custom.dll");
-						string bakDll = targetDll + ".bak_" + DateTime.Now.ToString("yyyyMMdd_HHmmss");
-						try { if (File.Exists(targetDll)) File.Move(targetDll, bakDll); } catch { }
-						File.Copy(builtDll, targetDll, true);
-						try { if (File.Exists(bakDll)) File.Delete(bakDll); } catch { }
+						try
+						{
+							File.Copy(builtDll, targetDll, true);
+						}
+						catch
+						{
+							string bakDll = targetDll + ".bak_" + DateTime.Now.ToString("yyyyMMdd_HHmmss");
+							try { if (File.Exists(targetDll)) File.Move(targetDll, bakDll); } catch { }
+							File.Copy(builtDll, targetDll, true);
+						}
 						AppendLog("Compiled and hot-swapped NinjaTrader.Custom.dll automatically!");
 					}
 					else
 					{
-						AppendLog("Note: Open NinjaScript Editor in NinjaTrader 8 and press F5 to finalize compilation.");
+						AppendLog("Files installed. Press F5 in NinjaScript Editor inside NinjaTrader 8 to finalize compilation.");
 					}
 				}
 
-				string objDir = Path.Combine(customDir, "obj");
-				string binDir = Path.Combine(customDir, "bin");
-				if (Directory.Exists(objDir)) try { Directory.Delete(objDir, true); } catch { }
-				if (Directory.Exists(binDir)) try { Directory.Delete(binDir, true); } catch { }
 				if (Directory.Exists(outDir)) try { Directory.Delete(outDir, true); } catch { }
 			}
 			catch
@@ -505,8 +560,25 @@ namespace AK10XInstaller
 		}
 
 		[STAThread]
-		public static void Main()
+		public static void Main(string[] args)
 		{
+			if (args != null && args.Length > 0 && string.Equals(args[0], "--silent", StringComparison.OrdinalIgnoreCase))
+			{
+				string ntDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NinjaTrader 8");
+				string customDir = Path.Combine(ntDir, "bin", "Custom");
+				string indDir = Path.Combine(customDir, "Indicators");
+				string addOnsDir = Path.Combine(customDir, "AddOns");
+				Directory.CreateDirectory(indDir);
+				Directory.CreateDirectory(addOnsDir);
+				ExtractResourceToFile("AK10X.Suite.dll", Path.Combine(customDir, "AK10X.Suite.dll"));
+				ExtractResourceToFile("AK10XOrderflow_Wrapper.cs", Path.Combine(indDir, "AK10XOrderflow.cs"));
+				ExtractResourceToFile("INDMarketProfile50Charts_Wrapper.cs", Path.Combine(indDir, "INDMarketProfile50Charts.cs"));
+				ExtractResourceToFile("MarketProfile50Charts_Wrapper.cs", Path.Combine(indDir, "MarketProfile50Charts.cs"));
+				ExtractResourceToFile("MarketProfileScanner50Charts_Wrapper.cs", Path.Combine(indDir, "MarketProfileScanner50Charts.cs"));
+				ExtractResourceToFile("AK10XWindowStacker_Wrapper.cs", Path.Combine(addOnsDir, "AK10XWindowStacker.cs"));
+				return;
+			}
+
 			Application.EnableVisualStyles();
 			Application.SetCompatibleTextRenderingDefault(false);
 			Application.Run(new SetupForm());

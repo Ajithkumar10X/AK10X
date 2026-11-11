@@ -1,15 +1,25 @@
-﻿// AK10X Market Profile 50Charts - Protected Binary Wrapper for NinjaTrader 8
-// Core indicator implementation is compiled inside AK10X.MarketProfile50Charts.dll
+﻿// AK10X Suite - Protected Binary Wrapper for NinjaTrader 8 (MarketProfile50Charts)
+// Core implementation is compiled inside AK10X.Suite.dll (Protected Mode - Source Code Hidden)
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Xml.Serialization;
 using NinjaTrader.Cbi;
-using NinjaTrader.Data;
 using NinjaTrader.Gui;
 using NinjaTrader.Gui.Chart;
+using NinjaTrader.Gui.SuperDom;
 using NinjaTrader.Gui.Tools;
+using NinjaTrader.Data;
 using NinjaTrader.NinjaScript;
+using NinjaTrader.Core.FloatingPoint;
+using NinjaTrader.NinjaScript.DrawingTools;
 #region NinjaScript generated code. Neither change nor remove.
 
 namespace NinjaTrader.NinjaScript.Indicators

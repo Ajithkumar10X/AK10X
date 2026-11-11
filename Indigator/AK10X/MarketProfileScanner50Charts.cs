@@ -61,28 +61,42 @@ namespace NinjaTrader.NinjaScript.Indicators
 		BgGrey = 4,
 		FgGreen = 5,
 		FgRed = 6,
-		FgOrange = 7
+		FgOrange = 7,
+		BgLightGreen = 8,
+		BgLightRedOrange = 9,
+		BgDarkGreen = 10,
+		BgDarkRedOrange = 11
 	}
 
 	public sealed class MpScannerRow : INotifyPropertyChanged
 	{
 		public event PropertyChangedEventHandler PropertyChanged;
 
+		private bool _suppressNotify;
+		private int _rowRevision;
+
+		public int RowRevision { get { return _rowRevision; } }
+
 		public void NotifyAllPropertiesChanged()
 		{
+			_rowRevision++;
 			var h = PropertyChanged;
 			if (h != null)
 			{
+				h(this, new PropertyChangedEventArgs("RowRevision"));
 				h(this, new PropertyChangedEventArgs(string.Empty));
 			}
 		}
 
 		private void Notify([CallerMemberName] string prop = null)
 		{
+			if (_suppressNotify)
+				return;
+			_rowRevision++;
 			var h = PropertyChanged;
 			if (h != null)
 			{
-				h(this, new PropertyChangedEventArgs(prop));
+				h(this, new PropertyChangedEventArgs("RowRevision"));
 				h(this, new PropertyChangedEventArgs(string.Empty));
 			}
 		}
@@ -239,83 +253,93 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public string TodayDayType { get { return _todayDayType; } set { if (_todayDayType != value) { _todayDayType = value; Notify(); } } }
 		public MpCellTone TodayDayTypeTone { get { return _todayDayTypeTone; } set { if (_todayDayTypeTone != value) { _todayDayTypeTone = value; Notify(); } } }
 
-		public void CopyFrom(MpScannerRow src)
+		public void CopyFrom(MpScannerRow src, bool includeTicker = false)
 		{
 			if (src == null) return;
-			DateTimeStr = src.DateTimeStr;
-			LastUpdateTime = src.LastUpdateTime;
-			IsLiveConnected = src.IsLiveConnected;
-			TickCount = src.TickCount;
-			LastTickDirection = src.LastTickDirection;
+			_suppressNotify = true;
+			try
+			{
+				if (includeTicker)
+					Ticker = src.Ticker;
+				DateTimeStr = src.DateTimeStr;
+				LastUpdateTime = src.LastUpdateTime;
+				IsLiveConnected = src.IsLiveConnected;
+				TickCount = src.TickCount;
+				LastTickDirection = src.LastTickDirection;
 
-			PrevDayHigh = src.PrevDayHigh;
-			PrevDayLow = src.PrevDayLow;
-			PrevDayClose = src.PrevDayClose;
-			PrevDayVolume = src.PrevDayVolume;
+				PrevDayHigh = src.PrevDayHigh;
+				PrevDayLow = src.PrevDayLow;
+				PrevDayClose = src.PrevDayClose;
+				PrevDayVolume = src.PrevDayVolume;
 
-			TodayVolume = src.TodayVolume;
-			TodayOpen = src.TodayOpen;
-			TodayHigh = src.TodayHigh;
-			TodayLow = src.TodayLow;
+				TodayVolume = src.TodayVolume;
+				TodayOpen = src.TodayOpen;
+				TodayHigh = src.TodayHigh;
+				TodayLow = src.TodayLow;
 
-			OpenEqualHL = src.OpenEqualHL;
-			OpenEqualHLTone = src.OpenEqualHLTone;
+				OpenEqualHL = src.OpenEqualHL;
+				OpenEqualHLTone = src.OpenEqualHLTone;
 
-			Price = src.Price;
-			PercentChange = src.PercentChange;
-			PriceTone = src.PriceTone;
+				Price = src.Price;
+				PercentChange = src.PercentChange;
+				PriceTone = src.PriceTone;
 
-			DailySma = src.DailySma;
-			PriceVsSma = src.PriceVsSma;
-			PriceVsSmaTone = src.PriceVsSmaTone;
+				DailySma = src.DailySma;
+				PriceVsSma = src.PriceVsSma;
+				PriceVsSmaTone = src.PriceVsSmaTone;
 
-			PdTpoSize = src.PdTpoSize;
-			PdVah = src.PdVah;
-			PdPoc = src.PdPoc;
-			PdVal = src.PdVal;
-			PdPocTpoCount = src.PdPocTpoCount;
-			PrevDayType = src.PrevDayType;
-			PrevDayTypeTone = src.PrevDayTypeTone;
-			PdSinglePrint = src.PdSinglePrint;
-			PdSinglePrintTone = src.PdSinglePrintTone;
+				PdTpoSize = src.PdTpoSize;
+				PdVah = src.PdVah;
+				PdPoc = src.PdPoc;
+				PdVal = src.PdVal;
+				PdPocTpoCount = src.PdPocTpoCount;
+				PrevDayType = src.PrevDayType;
+				PrevDayTypeTone = src.PrevDayTypeTone;
+				PdSinglePrint = src.PdSinglePrint;
+				PdSinglePrintTone = src.PdSinglePrintTone;
 
-			OpenVsPdVa = src.OpenVsPdVa;
-			OpenVsPdVaTone = src.OpenVsPdVaTone;
-			OpenVsPdHl = src.OpenVsPdHl;
-			OpenVsPdHlTone = src.OpenVsPdHlTone;
-			OpenType = src.OpenType;
-			OpenTypeTone = src.OpenTypeTone;
+				OpenVsPdVa = src.OpenVsPdVa;
+				OpenVsPdVaTone = src.OpenVsPdVaTone;
+				OpenVsPdHl = src.OpenVsPdHl;
+				OpenVsPdHlTone = src.OpenVsPdHlTone;
+				OpenType = src.OpenType;
+				OpenTypeTone = src.OpenTypeTone;
 
-			PrevDayBreakout = src.PrevDayBreakout;
-			PrevDayBreakoutTone = src.PrevDayBreakoutTone;
+				PrevDayBreakout = src.PrevDayBreakout;
+				PrevDayBreakoutTone = src.PrevDayBreakoutTone;
 
-			DailyAtr = src.DailyAtr;
-			HlRange = src.HlRange;
+				DailyAtr = src.DailyAtr;
+				HlRange = src.HlRange;
 
-			IbHigh = src.IbHigh;
-			IbLow = src.IbLow;
-			IbRange = src.IbRange;
-			IbSize = src.IbSize;
-			IbSizeTone = src.IbSizeTone;
-			IbBreakout = src.IbBreakout;
-			IbBreakoutTone = src.IbBreakoutTone;
-			PriceVsIb = src.PriceVsIb;
-			PriceVsIbTone = src.PriceVsIbTone;
+				IbHigh = src.IbHigh;
+				IbLow = src.IbLow;
+				IbRange = src.IbRange;
+				IbSize = src.IbSize;
+				IbSizeTone = src.IbSizeTone;
+				IbBreakout = src.IbBreakout;
+				IbBreakoutTone = src.IbBreakoutTone;
+				PriceVsIb = src.PriceVsIb;
+				PriceVsIbTone = src.PriceVsIbTone;
 
-			TodayTpoSize = src.TodayTpoSize;
-			TodayVah = src.TodayVah;
-			TodayPoc = src.TodayPoc;
-			TodayVal = src.TodayVal;
-			TodayPocTpoCount = src.TodayPocTpoCount;
+				TodayTpoSize = src.TodayTpoSize;
+				TodayVah = src.TodayVah;
+				TodayPoc = src.TodayPoc;
+				TodayVal = src.TodayVal;
+				TodayPocTpoCount = src.TodayPocTpoCount;
 
-			TodayVaStatus = src.TodayVaStatus;
-			TodayVaTone = src.TodayVaTone;
-			Prev30MinBarStatus = src.Prev30MinBarStatus;
-			Prev30MinBarTone = src.Prev30MinBarTone;
-			TodaySinglePrint = src.TodaySinglePrint;
-			TodaySinglePrintTone = src.TodaySinglePrintTone;
-			TodayDayType = src.TodayDayType;
-			TodayDayTypeTone = src.TodayDayTypeTone;
+				TodayVaStatus = src.TodayVaStatus;
+				TodayVaTone = src.TodayVaTone;
+				Prev30MinBarStatus = src.Prev30MinBarStatus;
+				Prev30MinBarTone = src.Prev30MinBarTone;
+				TodaySinglePrint = src.TodaySinglePrint;
+				TodaySinglePrintTone = src.TodaySinglePrintTone;
+				TodayDayType = src.TodayDayType;
+				TodayDayTypeTone = src.TodayDayTypeTone;
+			}
+			finally
+			{
+				_suppressNotify = false;
+			}
 			NotifyAllPropertiesChanged();
 		}
 
@@ -371,6 +395,32 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 	public sealed class MarketProfileScannerEngine : IDisposable
 	{
+		private sealed class PriorDayCache
+		{
+			public long HistoryVersion;
+			public string ParamsKey;
+			public DateTime TodaySessionDate;
+			public List<MpBarSample> PrevBars;
+			public int ContiguousSessionCount;
+			public double PdHigh;
+			public double PdLow;
+			public double PdClose;
+			public double PdVol;
+			public int SmaWindowCount;
+			public double PriorClosesSumForSma;
+			public double AtrVal;
+			public double Atr10Val;
+			public double TdTpoStep;
+			public double PdTpoStep;
+			public double PdVah;
+			public double PdPoc;
+			public double PdVal;
+			public int PdPocCount;
+			public int PdSinglePrintCode;
+			public string PdDayType;
+			public MpCellTone PdDayTypeTone;
+		}
+
 		private sealed class SymbolSub : IDisposable
 		{
 			public string Symbol;
@@ -379,12 +429,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public List<MpBarSample> Raw1MinBars = new List<MpBarSample>();
 			public List<MpBarSample> CachedBars = new List<MpBarSample>();
 			public object Sync = new object();
+			public long DataVersion = 1;
+			public long HistoryVersion = 1;
+			public long LastComputedVersion = 0;
+			public string LastComputedParamsKey;
+			public bool HasDeepHistoryWarmup;
+			public PriorDayCache PriorCache;
 			public long TickCount;
 			public double LastPrice;
 			public int LastTickDir;
 			public DateTime LastTickTime;
 			public bool HasRealBars;
 			public DateTime LastBarsRequestAttempt;
+			public DateTime LastBarsFetchTime;
+			public DateTime LastFetchedSlotTime;
+			public int PeriodicityMinutes = 30;
 
 			public double TodayOpen;
 			public double TodayHigh;
@@ -392,6 +451,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public double TodayVolume;
 			public double PrevClose;
 			public bool IsMarketDataSubscribed;
+			public bool IsFromOfflineFallback;
 			public Action<string> OnTickReceived;
 
 			public void OnMarketDataUpdate(object sender, MarketDataEventArgs e)
@@ -400,27 +460,93 @@ namespace NinjaTrader.NinjaScript.Indicators
 				bool isLastTick = false;
 				lock (Sync)
 				{
+					bool isNse = IsNseSymbol(Symbol);
 					if (e.MarketDataType == MarketDataType.Last && e.Price > 0)
 					{
-						double oldP = LastPrice;
-						LastPrice = e.Price;
-						LastTickTime = e.Time > DateTime.MinValue ? e.Time : DateTime.Now;
-						TickCount++;
-						if (oldP > 0 && Math.Abs(e.Price - oldP) > 1e-9)
-							LastTickDir = e.Price > oldP ? 1 : -1;
-						isLastTick = true;
+						double price = e.Price;
+						long vol = e.Volume > 0 ? e.Volume : 0;
+						DateTime tickTime = (e.Time > DateTime.MinValue && e.Time.Year >= 2020) ? e.Time : DateTime.Now;
+						bool isWeekday = tickTime.DayOfWeek != DayOfWeek.Saturday && tickTime.DayOfWeek != DayOfWeek.Sunday;
+						TimeSpan tod = tickTime.TimeOfDay;
+						// Include full Accelpix NSE session [09:15:00, 15:45:00) so 15:30..15:40 closing/settlement bars merge into Period M identically to AmiBroker
+						bool inSession = isWeekday && (!isNse || (tod >= new TimeSpan(9, 15, 0) && tod < new TimeSpan(15, 45, 0)));
+
+						if (inSession)
+						{
+							double oldP = LastPrice;
+							LastPrice = price;
+							LastTickTime = tickTime;
+							TickCount++;
+							if (oldP > 0 && Math.Abs(price - oldP) > 1e-9)
+								LastTickDir = price > oldP ? 1 : -1;
+							if (TodayHigh <= 0 || price > TodayHigh) TodayHigh = price;
+							if (TodayLow <= 0 || price < TodayLow) TodayLow = price;
+
+							DateTime min1CloseTime = new DateTime(tickTime.Year, tickTime.Month, tickTime.Day, tickTime.Hour, tickTime.Minute, 0).AddMinutes(1);
+							if (Raw1MinBars.Count > 0)
+							{
+								MpBarSample last1m = Raw1MinBars[Raw1MinBars.Count - 1];
+								if (last1m.Time == min1CloseTime)
+								{
+									if (price > last1m.High) last1m.High = price;
+									if (price < last1m.Low) last1m.Low = price;
+									last1m.Close = price;
+									last1m.Volume += vol;
+								}
+								else if (min1CloseTime > last1m.Time)
+								{
+									Raw1MinBars.Add(new MpBarSample
+									{
+										Time = min1CloseTime,
+										Open = price,
+										High = price,
+										Low = price,
+										Close = price,
+										Volume = vol
+									});
+								}
+							}
+
+							int period = Math.Max(1, PeriodicityMinutes > 0 ? PeriodicityMinutes : 30);
+							DateTime slotTime = GetPeriodicityBarTime(tickTime, period);
+							if (CachedBars.Count > 0)
+							{
+								MpBarSample lastSlot = CachedBars[CachedBars.Count - 1];
+								if (lastSlot.Time == slotTime)
+								{
+									if (price > lastSlot.High) lastSlot.High = price;
+									if (price < lastSlot.Low) lastSlot.Low = price;
+									lastSlot.Close = price;
+									lastSlot.Volume += vol;
+								}
+								else if (slotTime > lastSlot.Time)
+								{
+									if (slotTime.Date > lastSlot.Time.Date)
+										HistoryVersion++;
+									CachedBars.Add(new MpBarSample
+									{
+										Time = slotTime,
+										Open = price,
+										High = price,
+										Low = price,
+										Close = price,
+										Volume = vol
+									});
+									HasRealBars = CachedBars.Count >= 2;
+								}
+							}
+
+							DataVersion++;
+							isLastTick = true;
+						}
 					}
-					else if (e.MarketDataType == MarketDataType.DailyHigh && e.Price > 0)
+					else if (!isNse && e.MarketDataType == MarketDataType.DailyHigh && e.Price > 0)
 					{
 						TodayHigh = e.Price;
 					}
-					else if (e.MarketDataType == MarketDataType.DailyLow && e.Price > 0)
+					else if (!isNse && e.MarketDataType == MarketDataType.DailyLow && e.Price > 0)
 					{
 						TodayLow = e.Price;
-					}
-					else if (e.MarketDataType == MarketDataType.Opening && e.Price > 0)
-					{
-						TodayOpen = e.Price;
 					}
 					else if (e.MarketDataType == MarketDataType.LastClose && e.Price > 0)
 					{
@@ -428,7 +554,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 					}
 					else if (e.MarketDataType == MarketDataType.DailyVolume && e.Volume > 0)
 					{
-						TodayVolume = e.Volume;
+						if (Math.Abs(TodayVolume - e.Volume) > 1e-6)
+						{
+							TodayVolume = e.Volume;
+							DataVersion++;
+						}
 					}
 				}
 
@@ -456,10 +586,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				try
 				{
-					if (Instrument != null && IsMarketDataSubscribed)
+					Instrument instRef = Instrument;
+					if (instRef != null && IsMarketDataSubscribed)
 					{
-						Instrument.MarketDataUpdate -= OnMarketDataUpdate;
 						IsMarketDataSubscribed = false;
+						if (instRef.Dispatcher != null && !instRef.Dispatcher.CheckAccess())
+						{
+							instRef.Dispatcher.InvokeAsync(() =>
+							{
+								try { instRef.MarketDataUpdate -= OnMarketDataUpdate; } catch { }
+							});
+						}
+						else
+						{
+							instRef.MarketDataUpdate -= OnMarketDataUpdate;
+						}
 					}
 				}
 				catch { }
@@ -481,6 +622,36 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public MpWatchlistPreset WatchlistPreset { get; set; }
 
 		public event Action OnRowsUpdated;
+		public event Action OnScanProgressChanged;
+
+		private int scanCompletedCount;
+		private int scanTotalCount;
+		private volatile bool isScanning;
+		private string scanCurrentSymbol = "";
+
+		public bool IsScanning { get { return isScanning; } }
+		public int ScanCompletedCount { get { return scanCompletedCount; } }
+		public int ScanTotalCount { get { return scanTotalCount; } }
+		public string ScanCurrentSymbol { get { return scanCurrentSymbol; } }
+		public double ScanProgressPercent
+		{
+			get
+			{
+				int total = scanTotalCount;
+				int done = scanCompletedCount;
+				if (total <= 0) return 100.0;
+				return Math.Max(0.0, Math.Min(100.0, (done * 100.0) / total));
+			}
+		}
+
+		private void RaiseProgressUpdated()
+		{
+			var handler = OnScanProgressChanged;
+			if (handler != null)
+			{
+				try { handler(); } catch { }
+			}
+		}
 
 		public static DateTime GetPeriodicityBarTime(DateTime time, int periodMinutes)
 		{
@@ -523,11 +694,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public static readonly string[] NseCore44Symbols = new string[]
 		{
 			"ABB_I", "ADANIPORTS_I", "ASIANPAINT_I", "AXISBANK_I", "BAJAJ_AUTO_I", "BAJAJFINSV_I", "BAJFINANCE_I",
-			"BANKNIFTY_I", "BRITANNIA_I", "BHARTIARTL_I", "BPCL_I", "CIPLA_I", "COALINDIA_I", "DIVISLAB_I",
-			"EICHERMOT_I", "DRREDDY_I", "GAIL_I", "GRASIM_I", "HCLTECH_I", "HDFCBANK_I", "HDFCLIFE_I",
-			"HEROMOTOCO_I", "HINDALCO_I", "ICICIBANK_I", "HINDUNILVR_I", "INDUSINDBK_I", "INFY_I", "IOC_I",
+			"BANKNIFTY_I", "BHARTIARTL_I", "BPCL_I", "BRITANNIA_I", "CIPLA_I", "COALINDIA_I", "DIVISLAB_I",
+			"DRREDDY_I", "EICHERMOT_I", "GAIL_I", "GRASIM_I", "HCLTECH_I", "HDFCBANK_I", "HDFCLIFE_I",
+			"HEROMOTOCO_I", "HINDALCO_I", "HINDUNILVR_I", "ICICIBANK_I", "INDUSINDBK_I", "INFY_I", "IOC_I",
 			"ITC_I", "JSWSTEEL_I", "KOTAKBANK_I", "LT_I", "M_M_I", "MARUTI_I", "NESTLEIND_I", "NIFTY_I",
-			"NTPC_I", "ONGC_I", "PNB_I", "POWERGRID_I", "RELIANCE_I", "SBILIFE_I", "SBIN_I", "TATASTEEL_I"
+			"NTPC_I", "ONGC_I", "PNB_I", "POWERGRID_I", "RELIANCE_I", "SBILIFE_I", "SBIN_I", "SHREECEM_I",
+			"SUNPHARMA_I", "TATASTEEL_I", "TCS_I", "TECHM_I", "TITAN_I", "ULTRACEMCO_I", "UPL_I", "WIPRO_I"
 		};
 
 		public static readonly string[] UsFuturesSymbols = new string[]
@@ -714,6 +886,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 		}
 
 		private readonly object subQueueLock = new object();
+		private readonly object instrumentResolveLock = new object();
+		private readonly object providerRequestSubmitLock = new object();
+		private DateTime lastProviderSubmitUtc = DateTime.MinValue;
+		private int scanGeneration;
 		private bool isStaggeredSubRunning;
 
 		public void OnAccelpixConnected()
@@ -721,12 +897,32 @@ namespace NinjaTrader.NinjaScript.Indicators
 			TriggerStaggeredResubscribe(true);
 		}
 
+		private Instrument ResolveScannerInstrument(string symbol)
+		{
+			lock (instrumentResolveLock)
+			{
+				Instrument inst = null;
+				try { inst = Instrument.GetInstrument(symbol, false); } catch { }
+				if (inst == null) { try { inst = Instrument.GetInstrument(symbol, true); } catch { } }
+				if (inst == null) { try { inst = Instrument.GetInstrument(symbol); } catch { } }
+				if (inst == null) { try { inst = Instrument.GetInstrumentFuzzy(symbol); } catch { } }
+				if (inst == null) { try { inst = Instrument.GetInstrument(symbol + " 12-99"); } catch { } }
+				if (inst == null && symbol.EndsWith("_I", StringComparison.OrdinalIgnoreCase))
+				{
+					try { inst = Instrument.GetInstrument(symbol.Substring(0, symbol.Length - 2)); } catch { }
+				}
+				return inst;
+			}
+		}
+
 		public void TriggerStaggeredResubscribe(bool forceResubscribe = false)
 		{
+			int myGen;
 			lock (subQueueLock)
 			{
 				if (isStaggeredSubRunning && !forceResubscribe) return;
 				isStaggeredSubRunning = true;
+				myGen = ++scanGeneration;
 			}
 
 			ThreadPool.QueueUserWorkItem(_ =>
@@ -734,26 +930,182 @@ namespace NinjaTrader.NinjaScript.Indicators
 				try
 				{
 					List<string> targets = GetTargetSymbols();
+					bool liveConn = IsLiveProviderConnected();
+					List<string> pendingFetch = new List<string>(targets.Count);
+
+					// Pre-resolve instruments sequentially (fast & thread-safe) and classify which symbols actually need loading
 					for (int i = 0; i < targets.Count; i++)
 					{
-						if (isDisposed) break;
-						EnsureSubscribedInternal(targets[i], forceResubscribe);
-						Thread.Sleep(30); // 30ms stagger to prevent collection modified in Accelpix NT8 adapter
+						if (isDisposed || myGen != scanGeneration) return;
+						string sym = targets[i];
+						SymbolSub sub = subscriptions.GetOrAdd(sym, s => new SymbolSub { Symbol = s });
+						if (sub.Instrument == null)
+							sub.Instrument = ResolveScannerInstrument(sym);
+
+						bool upgradeFromOffline = sub.IsFromOfflineFallback && liveConn;
+						bool needsFetch = !sub.HasRealBars || forceResubscribe || upgradeFromOffline;
+						if (needsFetch)
+							pendingFetch.Add(sym);
+						else if (!sub.IsMarketDataSubscribed)
+							EnsureSubscribedInternal(sym, false, false);
+					}
+
+					if (pendingFetch.Count == 0)
+						return;
+
+					isScanning = true;
+					scanTotalCount = targets.Count;
+					Interlocked.Exchange(ref scanCompletedCount, Math.Max(0, targets.Count - pendingFetch.Count));
+					scanCurrentSymbol = pendingFetch[0];
+					RaiseProgressUpdated();
+
+					List<SymbolSub> needsDeepWarmup = new List<SymbolSub>();
+					object warmupListLock = new object();
+
+					// Fast parallel scan (6 concurrent workers, -14d Provider + instant local .ncd Repository cache)
+					using (SemaphoreSlim sem = new SemaphoreSlim(6, 6))
+					using (CountdownEvent countdown = new CountdownEvent(pendingFetch.Count))
+					{
+						for (int i = 0; i < pendingFetch.Count; i++)
+						{
+							if (isDisposed || myGen != scanGeneration)
+							{
+								int skipped = pendingFetch.Count - i;
+								for (int k = 0; k < skipped; k++) countdown.Signal();
+								break;
+							}
+
+							string sym = pendingFetch[i];
+							sem.Wait();
+							ThreadPool.QueueUserWorkItem(__ =>
+							{
+								try
+								{
+									if (!isDisposed && myGen == scanGeneration)
+									{
+										scanCurrentSymbol = sym;
+										EnsureSubscribedInternal(sym, forceResubscribe, true);
+										SymbolSub loadedSub;
+										if (liveConn && subscriptions.TryGetValue(sym, out loadedSub) && loadedSub != null && !loadedSub.HasDeepHistoryWarmup)
+										{
+											var pc = loadedSub.PriorCache;
+											if (pc == null || pc.ContiguousSessionCount < 45)
+											{
+												lock (warmupListLock) { needsDeepWarmup.Add(loadedSub); }
+											}
+											else
+											{
+												loadedSub.HasDeepHistoryWarmup = true;
+											}
+										}
+									}
+								}
+								catch { }
+								finally
+								{
+									Interlocked.Increment(ref scanCompletedCount);
+									RaiseProgressUpdated();
+									RequestThrottledUpdate();
+									try { sem.Release(); } catch { }
+									try { countdown.Signal(); } catch { }
+								}
+							});
+						}
+						countdown.Wait(TimeSpan.FromSeconds(25));
+					}
+
+					if (myGen == scanGeneration)
+					{
+						Interlocked.Exchange(ref scanCompletedCount, targets.Count);
+						isScanning = false;
+						scanCurrentSymbol = "";
+						RaiseProgressUpdated();
+						RaiseUpdated();
+					}
+
+					// Quiet low-priority background deep-history warm-up (-180d) ONLY for symbols missing local .ncd history (< 45 days)
+					if (!isDisposed && myGen == scanGeneration && liveConn && needsDeepWarmup.Count > 0)
+					{
+						for (int w = 0; w < needsDeepWarmup.Count; w++)
+						{
+							if (isDisposed || myGen != scanGeneration) break;
+							WarmupDeepHistoryFromProvider(needsDeepWarmup[w]);
+							Thread.Sleep(25);
+						}
 					}
 				}
 				catch { }
 				finally
 				{
-					lock (subQueueLock) { isStaggeredSubRunning = false; }
+					lock (subQueueLock)
+					{
+						if (myGen == scanGeneration)
+						{
+							isStaggeredSubRunning = false;
+							isScanning = false;
+						}
+					}
+					RaiseProgressUpdated();
 					RaiseUpdated();
 				}
 			});
 		}
 
+		private void WarmupDeepHistoryFromProvider(SymbolSub sub)
+		{
+			if (sub == null || sub.Instrument == null || isDisposed || sub.HasDeepHistoryWarmup)
+				return;
+
+			try
+			{
+				bool isNseSym = IsNseSymbol(sub.Symbol);
+				TradingHours reqTh = GetScannerTradingHours(sub.Instrument, isNseSym);
+				DateTime toDate = DateTime.Now.Date.AddDays(1);
+				DateTime fromDate = DateTime.Now.Date.AddDays(-180);
+
+				using (ManualResetEventSlim done = new ManualResetEventSlim(false))
+				{
+					BarsRequest deepReq = new BarsRequest(sub.Instrument, fromDate, toDate);
+					deepReq.BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Minute, Value = 1 };
+					deepReq.LookupPolicy = LookupPolicies.Provider;
+					deepReq.MergePolicy = MergePolicy.DoNotMerge;
+					if (reqTh != null)
+						deepReq.TradingHours = reqTh;
+
+					deepReq.Request((r, err, msg) =>
+					{
+						try
+						{
+							if (err == ErrorCode.NoError && r != null && r.Bars != null && r.Bars.Count > 0)
+							{
+								PrependHistoricalBars(sub, r.Bars);
+								sub.HasDeepHistoryWarmup = true;
+								RefreshSymbol(sub.Symbol, false);
+								RequestThrottledUpdate();
+							}
+						}
+						catch { }
+						finally
+						{
+							try { done.Set(); } catch { }
+							try { deepReq.Dispose(); } catch { }
+						}
+					});
+					done.Wait(3000);
+				}
+			}
+			catch { }
+		}
+
+		public bool PushLiveTickUpdates { get; set; } = false;
+		private long lastExplicitRefreshUtcTicks;
+
 		public void RefreshAll(bool allowSimTick)
 		{
 			if (isDisposed)
 				return;
+
+			Interlocked.Exchange(ref lastExplicitRefreshUtcTicks, DateTime.UtcNow.Ticks);
 
 			List<string> targets = GetTargetSymbols();
 			for (int i = 0; i < targets.Count; i++)
@@ -772,124 +1124,303 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private void RequestThrottledUpdate()
 		{
+			int minMs = isScanning ? 120 : 220;
 			lock (updateThrottleLock)
 			{
-				if ((DateTime.Now - lastUpdateDispatch).TotalMilliseconds < 250)
+				if ((DateTime.Now - lastUpdateDispatch).TotalMilliseconds < minMs)
 					return;
 				lastUpdateDispatch = DateTime.Now;
 			}
 			RaiseUpdated();
 		}
 
+		public static bool IsNseSymbol(string sym)
+		{
+			return !string.IsNullOrEmpty(sym) && (
+				sym.EndsWith("_I", StringComparison.OrdinalIgnoreCase) ||
+				sym.EndsWith("_II", StringComparison.OrdinalIgnoreCase) ||
+				sym.EndsWith("_III", StringComparison.OrdinalIgnoreCase));
+		}
+
+		private static bool IsLiveProviderConnected()
+		{
+			try
+			{
+				if (Connection.Connections != null)
+				{
+					lock (Connection.Connections)
+					{
+						foreach (Connection c in Connection.Connections)
+						{
+							if (c != null && c.Status == ConnectionStatus.Connected)
+								return true;
+						}
+					}
+				}
+			}
+			catch { }
+			return false;
+		}
+
+		private static DateTime GetEffectiveMinuteBarTime(DateTime barTime)
+		{
+			if (barTime.TimeOfDay <= new TimeSpan(9, 15, 0))
+				return barTime;
+			return barTime.Second == 0 ? barTime.AddMinutes(-1) : barTime;
+		}
+
+		private static TradingHours GetScannerTradingHours(Instrument inst, bool isNseSym)
+		{
+			if (isNseSym)
+			{
+				try
+				{
+					// Nse.xml ends at 15:30 and strips Accelpix's 15:31..15:41 closing/settlement bars before ExtractBarsFromRequest runs.
+					// MCX.xml uses the exact same "India Standard Time" timezone with Mon-Fri 09:00-24:00 sessions, allowing 15:30..15:40
+					// closing bars through so RebuildAggregatedBarsLocked merges Period M (15:15-15:44) identically to AmiBroker 50Charts.
+					TradingHours mcxTh = TradingHours.Get("MCX");
+					if (mcxTh != null)
+						return mcxTh;
+				}
+				catch { }
+			}
+			return (inst != null && inst.MasterInstrument != null) ? inst.MasterInstrument.TradingHours : null;
+		}
+
 		private void EnsureSubscribed(string symbol)
 		{
 			subscriptions.GetOrAdd(symbol, s => new SymbolSub { Symbol = s });
-			EnsureSubscribedInternal(symbol);
+			EnsureSubscribedInternal(symbol, false, true);
 		}
 
-		private void EnsureSubscribedInternal(string symbol, bool forceResubscribe = false)
+		private void EnsureSubscribedInternal(string symbol, bool forceResubscribe = false, bool waitForBars = false)
 		{
 			SymbolSub sub = subscriptions.GetOrAdd(symbol, s => new SymbolSub { Symbol = s });
-			if (sub.IsMarketDataSubscribed && sub.HasRealBars && !forceResubscribe)
-				return;
-			if (!forceResubscribe && (DateTime.Now - sub.LastBarsRequestAttempt).TotalSeconds < 8.0)
+			sub.PeriodicityMinutes = PeriodicityMinutes;
+
+			DateTime now = DateTime.Now;
+			bool liveConnected = IsLiveProviderConnected();
+			bool upgradeFromOffline = sub.IsFromOfflineFallback && liveConnected;
+			bool needsBarsFetch = !sub.HasRealBars || forceResubscribe || upgradeFromOffline;
+
+			if (sub.IsMarketDataSubscribed && !needsBarsFetch)
 				return;
 
-			sub.LastBarsRequestAttempt = DateTime.Now;
+			double minCooldownSec = (forceResubscribe || upgradeFromOffline) ? 0.5 : 8.0;
+			if ((now - sub.LastBarsRequestAttempt).TotalSeconds < minCooldownSec)
+				return;
+
+			sub.LastBarsRequestAttempt = now;
 			sub.OnTickReceived = sym =>
 			{
-				RefreshSymbol(sym, false);
-				RequestThrottledUpdate();
+				if (PushLiveTickUpdates || isScanning)
+				{
+					RefreshSymbol(sym, false);
+					RequestThrottledUpdate();
+				}
 			};
 
 			try
 			{
-				Instrument inst = Instrument.GetInstrument(symbol, false);
-				if (inst == null)
-					inst = Instrument.GetInstrument(symbol, true);
-				if (inst == null)
-					inst = Instrument.GetInstrument(symbol);
-				if (inst == null)
-					inst = Instrument.GetInstrumentFuzzy(symbol);
-				if (inst == null)
-					inst = Instrument.GetInstrument(symbol + " 12-99");
-				if (inst == null && symbol.EndsWith("_I", StringComparison.OrdinalIgnoreCase))
-					inst = Instrument.GetInstrument(symbol.Substring(0, symbol.Length - 2));
-
+				Instrument inst = sub.Instrument ?? ResolveScannerInstrument(symbol);
 				if (inst != null)
 				{
 					sub.Instrument = inst;
+					bool isNseSym = IsNseSymbol(symbol);
 
-					// 1. Subscribe to Live Market Data Stream (Ticks, Last, Bid, Ask, Daily High/Low/Vol)
+					// 1. Subscribe to Live Market Data Stream on inst.Dispatcher (required by NinjaTrader 8 so AccelPixNT8 activates live L1 streaming)
+					Action subscribeMarketDataAction = () =>
+					{
+						try
+						{
+							if (isDisposed) return;
+							if (!sub.IsMarketDataSubscribed)
+							{
+								inst.MarketDataUpdate += sub.OnMarketDataUpdate;
+								sub.IsMarketDataSubscribed = true;
+							}
+
+							if (inst.MarketData != null)
+							{
+								lock (sub.Sync)
+								{
+									if (inst.MarketData.Last != null && inst.MarketData.Last.Price > 0)
+									{
+										DateTime lt = inst.MarketData.Last.Time;
+										bool inRth = !isNseSym || (lt.DayOfWeek != DayOfWeek.Saturday && lt.DayOfWeek != DayOfWeek.Sunday &&
+											lt.TimeOfDay >= new TimeSpan(9, 15, 0) && lt.TimeOfDay < new TimeSpan(15, 45, 0));
+										if (inRth && (sub.LastPrice <= 0 || lt > sub.LastTickTime))
+										{
+											sub.LastPrice = inst.MarketData.Last.Price;
+											sub.LastTickTime = lt;
+											sub.DataVersion++;
+										}
+									}
+									if (!isNseSym && inst.MarketData.DailyHigh != null && inst.MarketData.DailyHigh.Price > 0)
+										sub.TodayHigh = inst.MarketData.DailyHigh.Price;
+									if (!isNseSym && inst.MarketData.DailyLow != null && inst.MarketData.DailyLow.Price > 0)
+										sub.TodayLow = inst.MarketData.DailyLow.Price;
+									if (inst.MarketData.LastClose != null && inst.MarketData.LastClose.Price > 0)
+										sub.PrevClose = inst.MarketData.LastClose.Price;
+									if (inst.MarketData.DailyVolume != null && inst.MarketData.DailyVolume.Volume > 0)
+										sub.TodayVolume = inst.MarketData.DailyVolume.Volume;
+								}
+							}
+						}
+						catch { }
+					};
+
 					try
 					{
-						if (!sub.IsMarketDataSubscribed)
-						{
-							inst.MarketDataUpdate += sub.OnMarketDataUpdate;
-							sub.IsMarketDataSubscribed = true;
-						}
-
-						if (inst.MarketData != null)
-						{
-							if (inst.MarketData.Last != null && inst.MarketData.Last.Price > 0)
-							{
-								sub.LastPrice = inst.MarketData.Last.Price;
-								sub.LastTickTime = inst.MarketData.Last.Time;
-							}
-							if (inst.MarketData.DailyHigh != null && inst.MarketData.DailyHigh.Price > 0)
-								sub.TodayHigh = inst.MarketData.DailyHigh.Price;
-							if (inst.MarketData.DailyLow != null && inst.MarketData.DailyLow.Price > 0)
-								sub.TodayLow = inst.MarketData.DailyLow.Price;
-							if (inst.MarketData.Opening != null && inst.MarketData.Opening.Price > 0)
-								sub.TodayOpen = inst.MarketData.Opening.Price;
-							if (inst.MarketData.LastClose != null && inst.MarketData.LastClose.Price > 0)
-								sub.PrevClose = inst.MarketData.LastClose.Price;
-							if (inst.MarketData.DailyVolume != null && inst.MarketData.DailyVolume.Volume > 0)
-								sub.TodayVolume = inst.MarketData.DailyVolume.Volume;
-						}
+						if (inst.Dispatcher != null && !inst.Dispatcher.CheckAccess())
+							inst.Dispatcher.InvokeAsync(subscribeMarketDataAction);
+						else
+							subscribeMarketDataAction();
 					}
 					catch { }
 
-					// 2. Request Real Historical 1-Minute Bars from Accelpix / NT8 and Aggregate to Session-Anchored Periodicity (Default 30-Min TPO)
-					try
+					if (needsBarsFetch)
 					{
-						if (sub.BarsReq30Min != null)
+						try
 						{
-							try { sub.BarsReq30Min.Dispose(); } catch { }
-							sub.BarsReq30Min = null;
-						}
+							DateTime toDate = DateTime.Now.Date.AddDays(1);
+							DateTime deepFromDate = DateTime.Now.Date.AddDays(-180);
+							TradingHours reqTh = GetScannerTradingHours(inst, isNseSym);
 
-						DateTime toDate = DateTime.Now.AddDays(1);
-						DateTime fromDate = DateTime.Now.AddDays(-38);
-						BarsRequest req = new BarsRequest(inst, fromDate, toDate);
-						req.BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Minute, Value = 1 };
-						if (inst.MasterInstrument != null && inst.MasterInstrument.TradingHours != null)
-							req.TradingHours = inst.MasterInstrument.TradingHours;
-						req.Update += (s, e) => OnLiveBarsUpdate(sub, e);
-						sub.BarsReq30Min = req;
-
-						using (ManualResetEventSlim doneEvt = new ManualResetEventSlim(false))
-						{
-							req.Request((r, err, msg) =>
+							// Stage A: Instant SSD Local .ncd Repository Preload (-180 days, ~2-5ms, zero network latency)
+							// Seeds historical daily closes/TrueRanges for exact Wilder ATR(10) & SMA(21) AND populates immediate rows!
+							bool needRepoSeed;
+							lock (sub.Sync) { needRepoSeed = sub.Raw1MinBars.Count == 0; }
+							if (needRepoSeed && liveConnected)
 							{
 								try
 								{
-									if (err == ErrorCode.NoError && r != null && r.Bars != null && r.Bars.Count > 0)
+									using (ManualResetEventSlim repoEvt = new ManualResetEventSlim(false))
 									{
-										ExtractBarsFromRequest(sub, r.Bars);
+										BarsRequest repoReq = new BarsRequest(inst, deepFromDate, toDate);
+										repoReq.BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Minute, Value = 1 };
+										repoReq.LookupPolicy = LookupPolicies.Repository;
+										repoReq.MergePolicy = MergePolicy.DoNotMerge;
+										if (reqTh != null)
+											repoReq.TradingHours = reqTh;
+										repoReq.Request((rRepo, errRepo, msgRepo) =>
+										{
+											try
+											{
+												if (errRepo == ErrorCode.NoError && rRepo != null && rRepo.Bars != null && rRepo.Bars.Count > 0)
+												{
+													ExtractBarsFromRequest(sub, rRepo.Bars);
+													RefreshSymbol(sub.Symbol, false);
+													RequestThrottledUpdate();
+												}
+											}
+											catch { }
+											finally
+											{
+												try { repoEvt.Set(); } catch { }
+												try { repoReq.Dispose(); } catch { }
+											}
+										});
+										repoEvt.Wait(180);
 									}
-									RefreshSymbol(sub.Symbol, false);
-									RequestThrottledUpdate();
 								}
-								finally
+								catch { }
+							}
+
+							// Stage B: Fast Recent Window (-14 calendar days = ~9-10 trading sessions) from Live Provider (13x smaller payload!)
+							BarsRequest prevReq = sub.BarsReq30Min;
+							sub.BarsReq30Min = null;
+							if (prevReq != null)
+							{
+								try { prevReq.Dispose(); } catch { }
+							}
+
+							DateTime providerFromDate = liveConnected ? DateTime.Now.Date.AddDays(-14) : deepFromDate;
+							BarsRequest req = new BarsRequest(inst, providerFromDate, toDate);
+							req.BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Minute, Value = 1 };
+							req.LookupPolicy = liveConnected ? LookupPolicies.Provider : LookupPolicies.Repository;
+							req.MergePolicy = MergePolicy.DoNotMerge;
+							if (reqTh != null)
+								req.TradingHours = reqTh;
+							req.Update += (s, e) => OnLiveBarsUpdate(sub, e);
+							sub.BarsReq30Min = req;
+							sub.IsFromOfflineFallback = !liveConnected;
+
+							// Serialize request submission with a tiny 5ms spacing so AccelPixNT8 internal request map never contends,
+							// while all 6 worker threads await network completion in parallel!
+							if (liveConnected)
+							{
+								lock (providerRequestSubmitLock)
 								{
-									try { doneEvt.Set(); } catch { }
+									double elapsedMs = (DateTime.UtcNow - lastProviderSubmitUtc).TotalMilliseconds;
+									if (elapsedMs < 5.0)
+										Thread.Sleep(Math.Max(1, 5 - (int)elapsedMs));
+									lastProviderSubmitUtc = DateTime.UtcNow;
 								}
-							});
-							doneEvt.Wait(250);
+							}
+
+							using (ManualResetEventSlim doneEvt = new ManualResetEventSlim(false))
+							{
+								req.Request((r, err, msg) =>
+								{
+									bool gotProviderBars = false;
+									try
+									{
+										if (err == ErrorCode.NoError && r != null && r.Bars != null && r.Bars.Count > 0)
+										{
+											gotProviderBars = true;
+											ExtractBarsFromRequest(sub, r.Bars);
+										}
+										RefreshSymbol(sub.Symbol, false);
+										RequestThrottledUpdate();
+									}
+									finally
+									{
+										try { doneEvt.Set(); } catch { }
+									}
+
+									// Offline fallback to local .ncd Repository if Provider returned 0 bars
+									if (!gotProviderBars && liveConnected && !isDisposed)
+									{
+										ThreadPool.QueueUserWorkItem(_ =>
+										{
+											try
+											{
+												if (isDisposed || sub.HasRealBars) return;
+												BarsRequest fbReq = new BarsRequest(inst, deepFromDate, toDate);
+												fbReq.BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Minute, Value = 1 };
+												fbReq.LookupPolicy = LookupPolicies.Repository;
+												fbReq.MergePolicy = MergePolicy.DoNotMerge;
+												if (reqTh != null)
+													fbReq.TradingHours = reqTh;
+												fbReq.Request((r2, err2, msg2) =>
+												{
+													try
+													{
+														if (!sub.HasRealBars && err2 == ErrorCode.NoError && r2 != null && r2.Bars != null && r2.Bars.Count > 0)
+														{
+															sub.IsFromOfflineFallback = true;
+															ExtractBarsFromRequest(sub, r2.Bars);
+															RefreshSymbol(sub.Symbol, false);
+															RequestThrottledUpdate();
+														}
+													}
+													catch { }
+													finally
+													{
+														try { fbReq.Dispose(); } catch { }
+													}
+												});
+											}
+											catch { }
+										});
+									}
+								});
+								doneEvt.Wait(waitForBars ? 2500 : 30);
+							}
 						}
+						catch { }
 					}
-					catch { }
 				}
 			}
 			catch { }
@@ -901,9 +1432,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (sub.Raw1MinBars == null || sub.Raw1MinBars.Count == 0)
 			{
 				sub.HasRealBars = false;
+				sub.HistoryVersion++;
+				sub.DataVersion++;
 				return;
 			}
 
+			bool isNse = IsNseSymbol(sub.Symbol);
 			int period = Math.Max(1, periodMinutes);
 			MpBarSample curSlot = null;
 			for (int i = 0; i < sub.Raw1MinBars.Count; i++)
@@ -911,9 +1445,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 				MpBarSample m = sub.Raw1MinBars[i];
 				if (m.Time.DayOfWeek == DayOfWeek.Saturday || m.Time.DayOfWeek == DayOfWeek.Sunday)
 					continue;
-				// NT8 1-minute bar timestamp is bar close time (e.g. 09:16:00 for 09:15:00-09:15:59).
-				// Subtract 1 second so 09:16..09:45 maps to 09:15 slot (A), 09:46..10:15 maps to 09:45 slot (B), etc.
-				DateTime effTime = m.Time.Second == 0 ? m.Time.AddSeconds(-1) : m.Time;
+				// NT8 / AccelPixNT8 1-minute bar timestamp is bar close time (e.g. 09:16:00 for 09:15:00-09:15:59, 15:41:00 for 15:40:00-15:40:59).
+				DateTime effTime = GetEffectiveMinuteBarTime(m.Time);
+				if (isNse)
+				{
+					TimeSpan tod = effTime.TimeOfDay;
+					if (tod < new TimeSpan(9, 15, 0) || tod >= new TimeSpan(15, 45, 0))
+						continue;
+				}
 				DateTime slotTime = GetPeriodicityBarTime(effTime, period);
 
 				if (curSlot != null && curSlot.Time == slotTime)
@@ -939,37 +1478,122 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 
 			sub.HasRealBars = sub.CachedBars.Count >= 2;
+			sub.HistoryVersion++;
+			sub.DataVersion++;
+		}
+
+		private void PrependHistoricalBars(SymbolSub sub, Bars histBars)
+		{
+			if (histBars == null || histBars.Count == 0)
+				return;
+			lock (sub.Sync)
+			{
+				int count = histBars.Count;
+				DateTime firstExisting = sub.Raw1MinBars.Count > 0 ? sub.Raw1MinBars[0].Time : DateTime.MaxValue;
+				List<MpBarSample> merged = new List<MpBarSample>(Math.Min(80000, count + sub.Raw1MinBars.Count));
+				int start = Math.Max(0, count - 75000);
+				for (int i = start; i < count; i++)
+				{
+					DateTime bt = histBars.GetTime(i);
+					if (bt >= firstExisting)
+						break;
+					merged.Add(new MpBarSample
+					{
+						Time = bt,
+						Open = histBars.GetOpen(i),
+						High = histBars.GetHigh(i),
+						Low = histBars.GetLow(i),
+						Close = histBars.GetClose(i),
+						Volume = histBars.GetVolume(i)
+					});
+				}
+				if (merged.Count == 0)
+					return;
+				merged.AddRange(sub.Raw1MinBars);
+				if (merged.Count > 75000)
+					merged.RemoveRange(0, merged.Count - 75000);
+				sub.Raw1MinBars = merged;
+				sub.PeriodicityMinutes = PeriodicityMinutes;
+				RebuildAggregatedBarsLocked(sub, PeriodicityMinutes);
+			}
 		}
 
 		private void ExtractBarsFromRequest(SymbolSub sub, Bars bars)
 		{
-			if (bars == null)
+			if (bars == null || bars.Count == 0)
 				return;
 			lock (sub.Sync)
 			{
-				sub.Raw1MinBars.Clear();
 				int count = bars.Count;
-				int start = Math.Max(0, count - 15000);
+				DateTime firstReqTime = bars.GetTime(0);
+				DateTime lastReqTime = bars.GetTime(count - 1);
+
+				// Preserve older historical bars (e.g. from local .ncd Repository preload) prior to firstReqTime
+				// AND preserve any live 1-minute bars received via OnMarketDataUpdate newer than lastReqTime!
+				List<MpBarSample> olderHistoryBars = new List<MpBarSample>();
+				List<MpBarSample> newerLive1MinBars = new List<MpBarSample>();
+				MpBarSample sameTimeLiveBar = null;
+				for (int i = 0; i < sub.Raw1MinBars.Count; i++)
+				{
+					MpBarSample existing = sub.Raw1MinBars[i];
+					if (existing.Time < firstReqTime)
+						olderHistoryBars.Add(existing);
+					else if (existing.Time > lastReqTime)
+						newerLive1MinBars.Add(existing);
+					else if (existing.Time == lastReqTime)
+						sameTimeLiveBar = existing;
+				}
+
+				sub.Raw1MinBars.Clear();
+				int maxOlderToKeep = Math.Max(0, 75000 - count - newerLive1MinBars.Count);
+				int olderStart = Math.Max(0, olderHistoryBars.Count - maxOlderToKeep);
+				for (int i = olderStart; i < olderHistoryBars.Count; i++)
+					sub.Raw1MinBars.Add(olderHistoryBars[i]);
+
+				int start = Math.Max(0, count - 75000);
 				for (int i = start; i < count; i++)
 				{
+					DateTime bt = bars.GetTime(i);
+					double bo = bars.GetOpen(i);
+					double bh = bars.GetHigh(i);
+					double bl = bars.GetLow(i);
+					double bc = bars.GetClose(i);
+					double bv = bars.GetVolume(i);
+					if (i == count - 1 && sameTimeLiveBar != null)
+					{
+						if (sameTimeLiveBar.High > bh) bh = sameTimeLiveBar.High;
+						if (sameTimeLiveBar.Low < bl) bl = sameTimeLiveBar.Low;
+						bc = sameTimeLiveBar.Close;
+						if (sameTimeLiveBar.Volume > bv) bv = sameTimeLiveBar.Volume;
+					}
 					sub.Raw1MinBars.Add(new MpBarSample
 					{
-						Time = bars.GetTime(i),
-						Open = bars.GetOpen(i),
-						High = bars.GetHigh(i),
-						Low = bars.GetLow(i),
-						Close = bars.GetClose(i),
-						Volume = bars.GetVolume(i)
+						Time = bt,
+						Open = bo,
+						High = bh,
+						Low = bl,
+						Close = bc,
+						Volume = bv
 					});
 				}
+				for (int i = 0; i < newerLive1MinBars.Count; i++)
+				{
+					sub.Raw1MinBars.Add(newerLive1MinBars[i]);
+				}
+
+				sub.PeriodicityMinutes = PeriodicityMinutes;
 				RebuildAggregatedBarsLocked(sub, PeriodicityMinutes);
+				sub.LastBarsFetchTime = DateTime.Now;
 				if (sub.CachedBars.Count >= 2)
 				{
-					double lastClose = sub.CachedBars[sub.CachedBars.Count - 1].Close;
-					if (sub.LastPrice > 0 && Math.Abs(lastClose - sub.LastPrice) > 1e-9)
-						sub.LastTickDir = lastClose > sub.LastPrice ? 1 : -1;
-					sub.LastPrice = lastClose;
-					sub.LastTickTime = sub.CachedBars[sub.CachedBars.Count - 1].Time;
+					MpBarSample lastSlot = sub.CachedBars[sub.CachedBars.Count - 1];
+					sub.LastFetchedSlotTime = lastSlot.Time;
+					DateTime latestEffBarTime = GetEffectiveMinuteBarTime(lastReqTime);
+					if (sub.LastPrice <= 0 || latestEffBarTime >= sub.LastTickTime)
+					{
+						sub.LastPrice = lastSlot.Close;
+						sub.LastTickTime = latestEffBarTime;
+					}
 				}
 			}
 		}
@@ -981,59 +1605,83 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			try
 			{
+				bool updatedAny = false;
 				lock (sub.Sync)
 				{
-					int idx = Math.Max(0, Math.Min(e.MaxIndex, e.BarsSeries.Count - 1));
-					if (idx >= 0 && e.BarsSeries.Count > 0)
+					int seriesCount = e.BarsSeries.Count;
+					if (seriesCount > 0)
 					{
-						double close = e.BarsSeries.GetClose(idx);
-						if (sub.LastPrice > 0 && Math.Abs(close - sub.LastPrice) > 1e-9)
-							sub.LastTickDir = close > sub.LastPrice ? 1 : -1;
-						sub.LastPrice = close;
-						sub.TickCount++;
-						sub.LastTickTime = DateTime.Now;
+						int maxIdx = Math.Max(0, Math.Min(e.MaxIndex, seriesCount - 1));
+						int minIdx = Math.Max(0, Math.Min(e.MinIndex, maxIdx));
+						if (maxIdx - minIdx > 30)
+							minIdx = maxIdx - 30;
 
-						MpBarSample sample1m = new MpBarSample
+						bool isNse = IsNseSymbol(sub.Symbol);
+						for (int idx = minIdx; idx <= maxIdx; idx++)
 						{
-							Time = e.BarsSeries.GetTime(idx),
-							Open = e.BarsSeries.GetOpen(idx),
-							High = e.BarsSeries.GetHigh(idx),
-							Low = e.BarsSeries.GetLow(idx),
-							Close = close,
-							Volume = e.BarsSeries.GetVolume(idx)
-						};
+							DateTime bt = e.BarsSeries.GetTime(idx);
+							if (bt.DayOfWeek == DayOfWeek.Saturday || bt.DayOfWeek == DayOfWeek.Sunday)
+								continue;
 
-						if (sample1m.Time.DayOfWeek != DayOfWeek.Saturday && sample1m.Time.DayOfWeek != DayOfWeek.Sunday)
-						{
+							DateTime effTime = GetEffectiveMinuteBarTime(bt);
+							if (isNse)
+							{
+								TimeSpan tod = effTime.TimeOfDay;
+								if (tod < new TimeSpan(9, 15, 0) || tod >= new TimeSpan(15, 45, 0))
+									continue;
+							}
+
+							double close = e.BarsSeries.GetClose(idx);
+							if (idx == maxIdx)
+							{
+								if (sub.LastPrice > 0 && Math.Abs(close - sub.LastPrice) > 1e-9)
+									sub.LastTickDir = close > sub.LastPrice ? 1 : -1;
+								sub.LastPrice = close;
+								sub.TickCount++;
+								sub.LastTickTime = effTime;
+							}
+
+							MpBarSample sample1m = new MpBarSample
+							{
+								Time = bt,
+								Open = e.BarsSeries.GetOpen(idx),
+								High = e.BarsSeries.GetHigh(idx),
+								Low = e.BarsSeries.GetLow(idx),
+								Close = close,
+								Volume = e.BarsSeries.GetVolume(idx)
+							};
+
 							if (sub.Raw1MinBars.Count > 0 && sub.Raw1MinBars[sub.Raw1MinBars.Count - 1].Time == sample1m.Time)
 								sub.Raw1MinBars[sub.Raw1MinBars.Count - 1] = sample1m;
-							else
+							else if (sub.Raw1MinBars.Count == 0 || sample1m.Time > sub.Raw1MinBars[sub.Raw1MinBars.Count - 1].Time)
 								sub.Raw1MinBars.Add(sample1m);
-
-							DateTime effTime = sample1m.Time.Second == 0 ? sample1m.Time.AddSeconds(-1) : sample1m.Time;
-							DateTime slotTime = GetPeriodicityBarTime(effTime, PeriodicityMinutes);
-							if (sub.CachedBars.Count > 0 && sub.CachedBars[sub.CachedBars.Count - 1].Time == slotTime)
-							{
-								RebuildAggregatedBarsLocked(sub, PeriodicityMinutes);
-							}
 							else
 							{
-								sub.CachedBars.Add(new MpBarSample
+								for (int r = sub.Raw1MinBars.Count - 1; r >= Math.Max(0, sub.Raw1MinBars.Count - 60); r--)
 								{
-									Time = slotTime,
-									Open = sample1m.Open,
-									High = sample1m.High,
-									Low = sample1m.Low,
-									Close = sample1m.Close,
-									Volume = sample1m.Volume
-								});
+									if (sub.Raw1MinBars[r].Time == sample1m.Time)
+									{
+										sub.Raw1MinBars[r] = sample1m;
+										break;
+									}
+								}
 							}
-							sub.HasRealBars = sub.CachedBars.Count >= 2;
+							updatedAny = true;
+						}
+
+						if (updatedAny)
+						{
+							RebuildAggregatedBarsLocked(sub, PeriodicityMinutes);
+							if (sub.CachedBars.Count >= 2)
+								sub.LastFetchedSlotTime = sub.CachedBars[sub.CachedBars.Count - 1].Time;
 						}
 					}
 				}
-				RefreshSymbol(sub.Symbol, false);
-				RaiseUpdated();
+				if (updatedAny && (PushLiveTickUpdates || isScanning || (DateTime.UtcNow.Ticks - Interlocked.Read(ref lastExplicitRefreshUtcTicks)) < TimeSpan.FromSeconds(10).Ticks))
+				{
+					RefreshSymbol(sub.Symbol, false);
+					RequestThrottledUpdate();
+				}
 			}
 			catch { }
 		}
@@ -1048,6 +1696,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				sub.CachedBars = new List<MpBarSample>(chart30MinSamples);
 				sub.HasRealBars = true;
+				sub.HistoryVersion++;
+				sub.DataVersion++;
 				double close = chart30MinSamples[chart30MinSamples.Count - 1].Close;
 				if (sub.LastPrice > 0 && Math.Abs(close - sub.LastPrice) > 1e-9)
 					sub.LastTickDir = close > sub.LastPrice ? 1 : -1;
@@ -1058,36 +1708,188 @@ namespace NinjaTrader.NinjaScript.Indicators
 			RefreshSymbol(symbol, false);
 		}
 
+		private string GetEngineParamsKey()
+		{
+			return string.Format(
+				CultureInfo.InvariantCulture,
+				"{0}|{1}|{2}|{3}|{4:0.##}|{5:0.####}",
+				PeriodicityMinutes, SmaDays, AtrDays, IbCandleCount, ValueAreaPercent, DefaultMinTickSize);
+		}
+
 		private void RefreshSymbol(string symbol, bool allowSimTick)
 		{
 			SymbolSub sub;
 			subscriptions.TryGetValue(symbol, out sub);
+			if (sub == null || !sub.HasRealBars)
+				return;
 
-			List<MpBarSample> barsSnapshot = null;
-			if (sub != null && sub.HasRealBars)
+			string paramsKey = GetEngineParamsKey();
+			List<MpBarSample> fullSnapshot = null;
+			List<MpBarSample> todaySnapshot = null;
+			PriorDayCache fastPriorCache = null;
+			long usedDataVersion = 0;
+			long usedHistoryVersion = 0;
+
+			lock (sub.Sync)
 			{
-				lock (sub.Sync)
+				try
 				{
-					if (sub.CachedBars.Count >= 2)
-						barsSnapshot = new List<MpBarSample>(sub.CachedBars);
+					if (sub.Instrument != null && sub.Instrument.MarketData != null && sub.Instrument.MarketData.Last != null && sub.Instrument.MarketData.Last.Price > 0)
+					{
+						DateTime lt = sub.Instrument.MarketData.Last.Time;
+						double lp = sub.Instrument.MarketData.Last.Price;
+						bool isNseSym = IsNseSymbol(symbol);
+						bool inRth = !isNseSym || (lt.DayOfWeek != DayOfWeek.Saturday && lt.DayOfWeek != DayOfWeek.Sunday &&
+							lt.TimeOfDay >= new TimeSpan(9, 15, 0) && lt.TimeOfDay < new TimeSpan(15, 45, 0));
+						if (inRth && (lt > sub.LastTickTime || (lt == sub.LastTickTime && Math.Abs(lp - sub.LastPrice) > 1e-9)))
+						{
+							if (sub.LastPrice > 0 && Math.Abs(lp - sub.LastPrice) > 1e-9)
+								sub.LastTickDir = lp > sub.LastPrice ? 1 : -1;
+							sub.LastPrice = lp;
+							sub.LastTickTime = lt;
+							sub.DataVersion++;
+							DateTime min1CloseTime = new DateTime(lt.Year, lt.Month, lt.Day, lt.Hour, lt.Minute, 0).AddMinutes(1);
+							if (sub.Raw1MinBars.Count > 0)
+							{
+								MpBarSample last1m = sub.Raw1MinBars[sub.Raw1MinBars.Count - 1];
+								if (last1m.Time == min1CloseTime)
+								{
+									if (lp > last1m.High) last1m.High = lp;
+									if (lp < last1m.Low) last1m.Low = lp;
+									last1m.Close = lp;
+								}
+								else if (min1CloseTime > last1m.Time)
+								{
+									sub.Raw1MinBars.Add(new MpBarSample
+									{
+										Time = min1CloseTime,
+										Open = lp,
+										High = lp,
+										Low = lp,
+										Close = lp,
+										Volume = 0
+									});
+								}
+							}
+							if (sub.CachedBars.Count > 0)
+							{
+								int period = Math.Max(1, PeriodicityMinutes > 0 ? PeriodicityMinutes : 30);
+								DateTime slotTime = GetPeriodicityBarTime(lt, period);
+								MpBarSample lastSlot = sub.CachedBars[sub.CachedBars.Count - 1];
+								if (lastSlot.Time == slotTime)
+								{
+									if (lp > lastSlot.High) lastSlot.High = lp;
+									if (lp < lastSlot.Low) lastSlot.Low = lp;
+									lastSlot.Close = lp;
+								}
+								else if (slotTime > lastSlot.Time)
+								{
+									if (slotTime.Date > lastSlot.Time.Date)
+										sub.HistoryVersion++;
+									sub.CachedBars.Add(new MpBarSample
+									{
+										Time = slotTime,
+										Open = lp,
+										High = lp,
+										Low = lp,
+										Close = lp,
+										Volume = 0
+									});
+								}
+							}
+						}
+					}
+				}
+				catch { }
+
+				if (sub.LastComputedVersion == sub.DataVersion &&
+					sub.LastComputedParamsKey == paramsKey &&
+					rowsBySymbol.ContainsKey(symbol))
+				{
+					return;
+				}
+
+				usedDataVersion = sub.DataVersion;
+				usedHistoryVersion = sub.HistoryVersion;
+
+				if (sub.CachedBars.Count >= 2)
+				{
+					DateTime latestDate = sub.CachedBars[sub.CachedBars.Count - 1].Time.Date;
+					PriorDayCache pc = sub.PriorCache;
+					if (pc != null &&
+						pc.HistoryVersion == usedHistoryVersion &&
+						pc.ParamsKey == paramsKey &&
+						pc.TodaySessionDate == latestDate)
+					{
+						// Ultra-fast incremental live path: copy ONLY Today's session bars (~1-13 bars instead of 5,000!)
+						int tStart = sub.CachedBars.Count - 1;
+						while (tStart > 0 && sub.CachedBars[tStart - 1].Time.Date == latestDate)
+							tStart--;
+						todaySnapshot = new List<MpBarSample>(sub.CachedBars.Count - tStart);
+						for (int i = tStart; i < sub.CachedBars.Count; i++)
+						{
+							MpBarSample b = sub.CachedBars[i];
+							if (b.Time.DayOfWeek == DayOfWeek.Saturday || b.Time.DayOfWeek == DayOfWeek.Sunday)
+								continue;
+							todaySnapshot.Add(new MpBarSample
+							{
+								Time = b.Time,
+								Open = b.Open,
+								High = b.High,
+								Low = b.Low,
+								Close = b.Close,
+								Volume = b.Volume
+							});
+						}
+						fastPriorCache = pc;
+					}
+					else
+					{
+						fullSnapshot = new List<MpBarSample>(sub.CachedBars.Count);
+						for (int i = 0; i < sub.CachedBars.Count; i++)
+						{
+							MpBarSample b = sub.CachedBars[i];
+							fullSnapshot.Add(new MpBarSample
+							{
+								Time = b.Time,
+								Open = b.Open,
+								High = b.High,
+								Low = b.Low,
+								Close = b.Close,
+								Volume = b.Volume
+							});
+						}
+					}
 				}
 			}
 
-			if (barsSnapshot != null && barsSnapshot.Count >= 2)
+			MpScannerRow computed = null;
+			if (fastPriorCache != null && todaySnapshot != null && todaySnapshot.Count > 0)
 			{
-				MpScannerRow computed = ComputeRowFrom30MinBars(symbol, barsSnapshot, sub);
-				if (computed != null)
+				computed = BuildRowFromTodayAndPriorCache(symbol, todaySnapshot, fastPriorCache, sub);
+			}
+			else if (fullSnapshot != null && fullSnapshot.Count >= 2)
+			{
+				computed = ComputeRowFrom30MinBars(symbol, fullSnapshot, sub, paramsKey, usedHistoryVersion);
+			}
+
+			if (computed != null)
+			{
+				MpScannerRow existing;
+				if (rowsBySymbol.TryGetValue(symbol, out existing))
+					existing.CopyFrom(computed);
+				else
+					rowsBySymbol[symbol] = computed;
+
+				lock (sub.Sync)
 				{
-					MpScannerRow existing;
-					if (rowsBySymbol.TryGetValue(symbol, out existing))
-						existing.CopyFrom(computed);
-					else
-						rowsBySymbol[symbol] = computed;
+					sub.LastComputedVersion = usedDataVersion;
+					sub.LastComputedParamsKey = paramsKey;
 				}
 			}
 		}
 
-		private MpScannerRow ComputeRowFrom30MinBars(string symbol, List<MpBarSample> bars, SymbolSub sub)
+		private MpScannerRow ComputeRowFrom30MinBars(string symbol, List<MpBarSample> bars, SymbolSub sub, string paramsKey = null, long historyVersion = 0)
 		{
 			var dayGroups = bars
 				.Where(b => b.Time.DayOfWeek != DayOfWeek.Saturday && b.Time.DayOfWeek != DayOfWeek.Sunday)
@@ -1100,11 +1902,26 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (dayGroups.Count < 2)
 				return null;
 
+			// Exclude any stale isolated pre-gap .ncd sessions separated by >= 7 calendar days from the contiguous intraday history
+			int contigStart = 0;
+			for (int d = dayGroups.Count - 1; d > 0; d--)
+			{
+				if ((dayGroups[d][0].Time.Date - dayGroups[d - 1][0].Time.Date).TotalDays >= 7.0)
+				{
+					contigStart = d;
+					break;
+				}
+			}
+			if (contigStart > 0 && (dayGroups.Count - contigStart) >= 2)
+				dayGroups = dayGroups.Skip(contigStart).ToList();
+
 			List<MpBarSample> todayBars = dayGroups[dayGroups.Count - 1];
 			List<MpBarSample> prevBars = dayGroups[dayGroups.Count - 2];
 
+			// Match 50ChartsMarketProfileScanner.afl Minimum Tick Size = 0.05 across all NSE symbols
+			// (AccelPixNT8 sets MasterInstrument.TickSize to 0.10 or 0.01 on several NSE symbols, which distorted Auto TPOSize)
 			double tickSize = Math.Max(0.0001, DefaultMinTickSize);
-			if (sub != null && sub.Instrument != null && sub.Instrument.MasterInstrument != null && sub.Instrument.MasterInstrument.TickSize > 0)
+			if (!IsNseSymbol(symbol) && sub != null && sub.Instrument != null && sub.Instrument.MasterInstrument != null && sub.Instrument.MasterInstrument.TickSize > 0)
 				tickSize = sub.Instrument.MasterInstrument.TickSize;
 
 			// 1. Daily OHLCV Series & Wilder ATR / SMA (Exact 50chartsMP.dll 1001C0BA..1001C352)
@@ -1114,8 +1931,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 			for (int d = 0; d < dayGroups.Count; d++)
 			{
 				var dg = dayGroups[d];
-				double dHigh = dg.Max(x => x.High);
-				double dLow = dg.Min(x => x.Low);
+				double dHigh = dg[0].High;
+				double dLow = dg[0].Low;
+				for (int bi = 1; bi < dg.Count; bi++)
+				{
+					if (dg[bi].High > dHigh) dHigh = dg[bi].High;
+					if (dg[bi].Low < dLow) dLow = dg[bi].Low;
+				}
 				double dClose = dg[dg.Count - 1].Close;
 				dailyCloses.Add(dClose);
 				double tr = dHigh - dLow;
@@ -1132,49 +1954,25 @@ namespace NinjaTrader.NinjaScript.Indicators
 			double pdClose = prevBars[prevBars.Count - 1].Close;
 			double pdVol = prevBars.Sum(x => x.Volume);
 
-			double tdOpen = todayBars[0].Open;
-			double tdHigh = todayBars.Max(x => x.High);
-			double tdLow = todayBars.Min(x => x.Low);
-			double tdClose = todayBars[todayBars.Count - 1].Close;
-			double tdVol = todayBars.Sum(x => x.Volume);
-
-			DateTime latestSessionDate = todayBars[todayBars.Count - 1].Time.Date;
-			bool isTodaySession = latestSessionDate == DateTime.Today && sub != null && sub.LastTickTime.Date == latestSessionDate;
-			double livePrice = (isTodaySession && sub != null && sub.LastPrice > 0) ? sub.LastPrice : tdClose;
-			double liveHigh = (isTodaySession && sub != null && sub.TodayHigh > 0) ? Math.Max(tdHigh, sub.TodayHigh) : Math.Max(tdHigh, livePrice);
-			double liveLow = (isTodaySession && sub != null && sub.TodayLow > 0) ? Math.Min(tdLow, sub.TodayLow) : Math.Min(tdLow, livePrice);
-			double liveOpen = (isTodaySession && sub != null && sub.TodayOpen > 0) ? sub.TodayOpen : tdOpen;
-			double liveVol = (isTodaySession && sub != null && sub.TodayVolume > 0) ? Math.Max(tdVol, sub.TodayVolume) : tdVol;
-			double livePrevClose = pdClose;
-
-			// Update latest daily close with livePrice for SMA(N) - Daily
-			if (dailyCloses.Count > 0)
-				dailyCloses[dailyCloses.Count - 1] = livePrice;
-
 			int smaCount = Math.Min(Math.Max(1, SmaDays), dailyCloses.Count);
-			double smaVal = Math.Round(dailyCloses.Skip(dailyCloses.Count - smaCount).Average(), 2);
+			double priorClosesSumForSma = 0.0;
+			for (int cIdx = dailyCloses.Count - smaCount; cIdx < dailyCloses.Count - 1; cIdx++)
+			{
+				if (cIdx >= 0)
+					priorClosesSumForSma += dailyCloses[cIdx];
+			}
 
 			// 50chartsMP.dll uses LastValue(Ref(ATR(N), -1)) (previous trading day's Daily ATR)
 			var prevDayTrueRanges = trueRanges.Count > 1 ? trueRanges.Take(trueRanges.Count - 1).ToList() : trueRanges;
-			double atrVal = Math.Round(ComputeWilderAtr(prevDayTrueRanges, Math.Max(1, AtrDays), tickSize), 2);
-			double atr10Val = Math.Round(ComputeWilderAtr(prevDayTrueRanges, 10, tickSize), 2);
+			double atrRaw = ComputeWilderAtr(prevDayTrueRanges, Math.Max(1, AtrDays), tickSize);
+			double atr10Raw = ComputeWilderAtr(prevDayTrueRanges, 10, tickSize);
+			double atrVal = Math.Round(atrRaw, 2);
+			double atr10Val = atr10Raw;
 
 			// Exact 50chartsMP.dll Auto TPO Size (1001C422..1001C51B):
-			// ONE tpoSize is computed from Ref(ATR(10), -1) and passed to both PrevDay and Today profiles.
-			double tdTpoStep = Compute50ChartsAutoTpoSize(atr10Val, tickSize);
+			// ONE tpoSize is computed from unrounded Ref(ATR(10), -1) ([ebx+50h]) and passed to both PrevDay and Today profiles.
+			double tdTpoStep = Compute50ChartsAutoTpoSize(atr10Raw, tickSize);
 			double pdTpoStep = tdTpoStep;
-
-			// Ensure live high/low are reflected in the current todayBar for real-time profile building
-			if (todayBars.Count > 0)
-			{
-				MpBarSample lastTb = todayBars[todayBars.Count - 1];
-				if (liveHigh > lastTb.High) lastTb.High = liveHigh;
-				if (liveLow < lastTb.Low) lastTb.Low = liveLow;
-				lastTb.Close = livePrice;
-			}
-
-			double pctChange = livePrevClose > 1e-9 ? ((livePrice - livePrevClose) / livePrevClose) * 100.0 : 0.0;
-			double hlRange = Math.Max(0, liveHigh - liveLow);
 
 			double pdVah, pdPoc, pdVal;
 			int pdPocCount;
@@ -1183,6 +1981,103 @@ namespace NinjaTrader.NinjaScript.Indicators
 			MpCellTone pdDayTypeTone;
 			BuildTpoProfileMetrics(prevBars, pdTpoStep, IbCandleCount, ValueAreaPercent, true,
 				out pdVah, out pdPoc, out pdVal, out pdPocCount, out pdSinglePrintCode, out pdDayType, out pdDayTypeTone);
+
+			PriorDayCache pc = new PriorDayCache
+			{
+				HistoryVersion = historyVersion,
+				ParamsKey = paramsKey ?? GetEngineParamsKey(),
+				TodaySessionDate = todayBars[todayBars.Count - 1].Time.Date,
+				PrevBars = prevBars,
+				ContiguousSessionCount = dayGroups.Count,
+				PdHigh = pdHigh,
+				PdLow = pdLow,
+				PdClose = pdClose,
+				PdVol = pdVol,
+				SmaWindowCount = smaCount,
+				PriorClosesSumForSma = priorClosesSumForSma,
+				AtrVal = atrVal,
+				Atr10Val = atr10Val,
+				TdTpoStep = tdTpoStep,
+				PdTpoStep = pdTpoStep,
+				PdVah = pdVah,
+				PdPoc = pdPoc,
+				PdVal = pdVal,
+				PdPocCount = pdPocCount,
+				PdSinglePrintCode = pdSinglePrintCode,
+				PdDayType = pdDayType,
+				PdDayTypeTone = pdDayTypeTone
+			};
+
+			if (sub != null && historyVersion > 0)
+			{
+				lock (sub.Sync)
+				{
+					sub.PriorCache = pc;
+				}
+			}
+
+			return BuildRowFromTodayAndPriorCache(symbol, todayBars, pc, sub);
+		}
+
+		private MpScannerRow BuildRowFromTodayAndPriorCache(string symbol, List<MpBarSample> todayBars, PriorDayCache pc, SymbolSub sub)
+		{
+			if (todayBars == null || todayBars.Count == 0 || pc == null)
+				return null;
+
+			double pdHigh = pc.PdHigh;
+			double pdLow = pc.PdLow;
+			double pdClose = pc.PdClose;
+			double pdVol = pc.PdVol;
+			double atrVal = pc.AtrVal;
+			double atr10Val = pc.Atr10Val;
+			double tdTpoStep = pc.TdTpoStep;
+			double pdTpoStep = pc.PdTpoStep;
+			double pdVah = pc.PdVah;
+			double pdPoc = pc.PdPoc;
+			double pdVal = pc.PdVal;
+			int pdPocCount = pc.PdPocCount;
+			int pdSinglePrintCode = pc.PdSinglePrintCode;
+			string pdDayType = pc.PdDayType;
+			MpCellTone pdDayTypeTone = pc.PdDayTypeTone;
+			List<MpBarSample> prevBars = pc.PrevBars;
+
+			double tdOpen = todayBars[0].Open;
+			double tdHigh = todayBars[0].High;
+			double tdLow = todayBars[0].Low;
+			double tdVol = todayBars[0].Volume;
+			for (int i = 1; i < todayBars.Count; i++)
+			{
+				MpBarSample tb = todayBars[i];
+				if (tb.High > tdHigh) tdHigh = tb.High;
+				if (tb.Low < tdLow) tdLow = tb.Low;
+				tdVol += tb.Volume;
+			}
+			double tdClose = todayBars[todayBars.Count - 1].Close;
+
+			DateTime latestSessionDate = todayBars[todayBars.Count - 1].Time.Date;
+			DateTime latestSlotTime = todayBars[todayBars.Count - 1].Time;
+			bool isTodaySession = latestSessionDate == DateTime.Today && sub != null && sub.LastTickTime.Date == latestSessionDate && sub.LastTickTime >= latestSlotTime;
+			double livePrice = (isTodaySession && sub != null && sub.LastPrice > 0) ? sub.LastPrice : tdClose;
+			double liveHigh = Math.Max(tdHigh, livePrice);
+			double liveLow = Math.Min(tdLow, livePrice);
+			double liveOpen = tdOpen;
+			double liveVol = (isTodaySession && sub != null && sub.TodayVolume > 0) ? Math.Max(tdVol, sub.TodayVolume) : tdVol;
+			double livePrevClose = pdClose;
+
+			int smaCount = Math.Max(1, pc.SmaWindowCount);
+			double smaVal = Math.Round((pc.PriorClosesSumForSma + livePrice) / smaCount, 2);
+
+			// Ensure livePrice is reflected ONLY in the current active todayBar (never stretching lastTb to full day's High/Low)
+			if (todayBars.Count > 0)
+			{
+				MpBarSample lastTb = todayBars[todayBars.Count - 1];
+				if (livePrice > lastTb.High) lastTb.High = livePrice;
+				if (livePrice < lastTb.Low) lastTb.Low = livePrice;
+				lastTb.Close = livePrice;
+			}
+
+			double pctChange = livePrevClose > 1e-9 ? ((livePrice - livePrevClose) / livePrevClose) * 100.0 : 0.0;
+			double hlRange = Math.Max(0, liveHigh - liveLow);
 
 			double tdVah, tdPoc, tdVal;
 			int tdPocCount;
@@ -1241,13 +2136,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			row.PriceTone = row.PercentChange >= 0 ? MpCellTone.FgGreen : MpCellTone.FgRed;
 
-			// Exact 50chartsMP.dll Open=H/L (1001E5D8): exact equality with TodayOpen == TodayHigh / TodayOpen == TodayLow
-			if (Math.Abs(liveOpen - liveHigh) <= tickSize * 0.5 && (liveHigh - liveLow) > tickSize)
+			// Exact 50chartsMP.dll Open=H/L (1001E5D8..1001E67B): IEEE-754 float equality when High > Low
+			if (liveHigh > liveLow && ((float)liveOpen == (float)liveHigh || AlmostEqual50Charts(liveOpen, liveHigh)))
 			{
 				row.OpenEqualHL = "Open = High";
 				row.OpenEqualHLTone = MpCellTone.BgRedOrange;
 			}
-			else if (Math.Abs(liveOpen - liveLow) <= tickSize * 0.5 && (liveHigh - liveLow) > tickSize)
+			else if (liveHigh > liveLow && ((float)liveOpen == (float)liveLow || AlmostEqual50Charts(liveOpen, liveLow)))
 			{
 				row.OpenEqualHL = "Open = Low";
 				row.OpenEqualHLTone = MpCellTone.BgGreen;
@@ -1459,23 +2354,38 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (trueRanges.Count <= n)
 				return Math.Max(minTick, trueRanges.Average());
 
-			double atr = trueRanges.Take(n).Average();
+			float atr = 0f;
+			for (int i = 0; i < n; i++)
+				atr += (float)trueRanges[i];
+			atr /= n;
 			for (int i = n; i < trueRanges.Count; i++)
 			{
-				atr = ((atr * (n - 1)) + trueRanges[i]) / n;
+				atr = ((atr * (n - 1)) + (float)trueRanges[i]) / n;
 			}
-			return Math.Max(minTick, atr);
+			return Math.Max(minTick, (double)atr);
 		}
 
-		// Exact 50chartsMP.dll Auto TPO Size (1001C422):
-		// ceil(((ceil(atr10) * 4.0) / 100.0) / tickSize) * tickSize
+		// Exact 50chartsMP.dll 1005D292 float32 price-to-step floor quantizer:
+		// (float)(floor((double)((float)price / (float)step)) * (double)(float)step)
+		private static float Quantize50Charts(double price, double step)
+		{
+			float fp = (float)price;
+			float fs = (float)Math.Max(1e-5, step);
+			return (float)(Math.Floor((double)(fp / fs)) * (double)fs);
+		}
+
+		// Exact 50chartsMP.dll Auto TPO Size (1001C422..1001C47B):
+		// ceilf(((ceilf((float)atr10) * 4.0f) / 100.0f) / (float)tickSize) * (float)tickSize
 		private static double Compute50ChartsAutoTpoSize(double atr10, double tickSize)
 		{
-			double minTick = Math.Max(0.0001, tickSize);
-			double ceilAtr = Math.Ceiling(Math.Max(minTick, atr10));
-			double raw = (ceilAtr * 4.0) / 100.0;
-			double step = Math.Ceiling((raw / minTick) - 1e-9) * minTick;
-			return Math.Max(minTick, Math.Round(step, 4));
+			float minTick = (float)Math.Max(0.0001, tickSize);
+			float ceilAtr = (float)Math.Ceiling((double)Math.Max(minTick, (float)atr10));
+			float raw = (ceilAtr * 4.0f) / 100.0f;
+			float ratio = raw / minTick;
+			float nearInt = (float)Math.Round(ratio, MidpointRounding.AwayFromZero);
+			float ceilSteps = Math.Abs(ratio - nearInt) <= 1e-5f ? nearInt : (float)Math.Ceiling((double)ratio);
+			float step = ceilSteps * minTick;
+			return Math.Max((double)minTick, (double)step);
 		}
 
 		private static void BuildTpoProfileMetrics(
@@ -1505,39 +2415,35 @@ namespace NinjaTrader.NinjaScript.Indicators
 			double dayHigh = sessionBars.Max(x => x.High);
 			double dayLow = sessionBars.Min(x => x.Low);
 
-			// Exact 50chartsMP.dll Profile Grid Construction (10023E24..1002423A)
-			double step = Math.Max(1e-5, tpoStep);
-			double sessionMinLow = Math.Floor(dayLow / step) * step;
-			double sessionMaxHighFloor = Math.Floor(dayHigh / step) * step;
-			int numBuckets = Math.Max(1, (int)Math.Round(((sessionMaxHighFloor - sessionMinLow) / step) + 1.0, MidpointRounding.AwayFromZero));
+			// Exact 50chartsMP.dll Profile Grid Construction (10023E24..1002423A) using float32 quantization (1005D292)
+			float step = (float)Math.Max(1e-5, tpoStep);
+			float sessionMinLow = Quantize50Charts(dayLow, step);
+			float sessionMaxHighFloor = Quantize50Charts(dayHigh, step);
+			int numBuckets = Math.Max(1, (int)Math.Round((double)((sessionMaxHighFloor - sessionMinLow) / step) + 1.0, MidpointRounding.AwayFromZero));
 			if (numBuckets > 2000)
 			{
-				step = Math.Max(1e-5, (dayHigh - dayLow) / 500.0);
-				sessionMinLow = Math.Floor(dayLow / step) * step;
-				sessionMaxHighFloor = Math.Floor(dayHigh / step) * step;
-				numBuckets = Math.Max(1, (int)Math.Round(((sessionMaxHighFloor - sessionMinLow) / step) + 1.0, MidpointRounding.AwayFromZero));
+				step = (float)Math.Max(1e-5, (dayHigh - dayLow) / 500.0);
+				sessionMinLow = Quantize50Charts(dayLow, step);
+				sessionMaxHighFloor = Quantize50Charts(dayHigh, step);
+				numBuckets = Math.Max(1, (int)Math.Round((double)((sessionMaxHighFloor - sessionMinLow) / step) + 1.0, MidpointRounding.AwayFromZero));
 			}
 
 			int[] tpoCount = new int[numBuckets];
-			bool[] hasLastBar = new bool[numBuckets];
-			int lastBarIdx = sessionBars.Count - 1;
 
 			for (int p = 0; p < sessionBars.Count; p++)
 			{
 				MpBarSample b = sessionBars[p];
-				double bLowFloor = Math.Max(sessionMinLow, Math.Floor(b.Low / step) * step);
-				double bHighFloor = Math.Min(sessionMaxHighFloor, Math.Floor(b.High / step) * step);
+				float bLowFloor = Math.Max(sessionMinLow, Quantize50Charts(b.Low, step));
+				float bHighFloor = Math.Min(sessionMaxHighFloor, Quantize50Charts(b.High, step));
 
 				for (int i = 0; i < numBuckets; i++)
 				{
-					double price = sessionMinLow + i * step;
+					float price = sessionMinLow + i * step;
 					bool geLow = price >= bLowFloor || AlmostEqual50Charts(bLowFloor, price);
 					bool leHigh = price <= bHighFloor || AlmostEqual50Charts(bHighFloor, price);
 					if (geLow && leHigh)
 					{
 						tpoCount[i]++;
-						if (p == lastBarIdx)
-							hasLastBar[i] = true;
 					}
 				}
 			}
@@ -1607,13 +2513,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 			int valIdx = Math.Max(0, valPtr + 1);
 			int vahIdx = Math.Min(numBuckets - 1, vahPtr - 1);
 
-			pocPrice = Math.Round(sessionMinLow + pocIdx * step, 2);
-			vahPrice = Math.Round(sessionMinLow + vahIdx * step, 2);
-			valPrice = Math.Round(sessionMinLow + valIdx * step, 2);
+			pocPrice = Math.Round((double)(sessionMinLow + pocIdx * step), 2);
+			vahPrice = Math.Round((double)(sessionMinLow + vahIdx * step), 2);
+			valPrice = Math.Round((double)(sessionMinLow + valIdx * step), 2);
 
 			// -------------------------------------------------------------
 			// Interior Single Print Detection (50chartsMP.dll 10029AF0, 1001ED19 & 10020203)
-			// Excludes buying tail at bottom and selling tail at top, and for live session excludes unconfirmed extreme of latest bar.
+			// Excludes buying tail at bottom and selling tail at top; detects all interior tpoCount == 1 bins (live and completed).
 			// -------------------------------------------------------------
 			int interiorBottom = 0;
 			while (interiorBottom < numBuckets && tpoCount[interiorBottom] <= 1)
@@ -1623,14 +2529,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 			while (interiorTop >= 0 && tpoCount[interiorTop] <= 1)
 				interiorTop--;
 
-			List<int> spZoneMidBins = new List<int>();
+			int lastSpStartBin = -1;
+			int lastSpEndBin = -1;
 			if (interiorTop > interiorBottom && sessionBars.Count >= 3)
 			{
 				int streak = 0;
 				int streakStart = -1;
 				for (int b = interiorBottom; b <= interiorTop; b++)
 				{
-					bool isSingle = tpoCount[b] == 1 && (isCompletedSession || !hasLastBar[b]);
+					bool isSingle = tpoCount[b] == 1;
 					if (isSingle)
 					{
 						if (streak == 0) streakStart = b;
@@ -1639,77 +2546,75 @@ namespace NinjaTrader.NinjaScript.Indicators
 					else
 					{
 						if (streak >= 1)
-							spZoneMidBins.Add((streakStart + (b - 1)) / 2);
+						{
+							lastSpStartBin = streakStart;
+							lastSpEndBin = b - 1;
+						}
 						streak = 0;
 					}
 				}
 				if (streak >= 1)
-					spZoneMidBins.Add((streakStart + interiorTop) / 2);
+				{
+					lastSpStartBin = streakStart;
+					lastSpEndBin = interiorTop;
+				}
 			}
 
-			if (spZoneMidBins.Count > 0)
+			if (lastSpStartBin >= 0 && lastSpEndBin >= lastSpStartBin)
 			{
-				double lastSpPrice = sessionMinLow + spZoneMidBins[spZoneMidBins.Count - 1] * step;
-				singlePrintCode = dayClose >= lastSpPrice ? 1 : -1;
+				// Exact 50chartsMP.dll (10030E51..10030EA5) Single Print direction classification
+				float spLowPrice = sessionMinLow + lastSpStartBin * step;
+				float spHighPrice = sessionMinLow + lastSpEndBin * step;
+				bool isBuyingSp = (float)dayClose >= (float)dayOpen;
+				if ((float)dayClose > spHighPrice)
+					isBuyingSp = true;
+				else if ((float)dayClose < spLowPrice)
+					isBuyingSp = false;
+				singlePrintCode = isBuyingSp ? 1 : -1;
 			}
 
 			// -------------------------------------------------------------
-			// Exact 50chartsMP.dll Day Type Classification (10027942..10027AC1, 1001EE26, 100202B9)
-			// Only classified once >= 3 TPO periods exist (1001EE5B)
+			// Exact 50chartsMP.dll Day Type Classification & Color Mapping
+			// (10027942..10027AC1, 1001EAEB..1001EB59, 1001EE26..1001EF1E, 100208FB..10020998)
 			// -------------------------------------------------------------
-			if (!isCompletedSession && sessionBars.Count < 3)
-			{
-				dayType = "";
-				dayTypeTone = MpCellTone.Default;
-				return;
-			}
-
 			int ibCnt = Math.Min(Math.Max(1, ibCount), sessionBars.Count);
 			double ibH = sessionBars.Take(ibCnt).Max(x => x.High);
 			double ibL = sessionBars.Take(ibCnt).Min(x => x.Low);
 
 			if (dayHigh > ibH && dayLow < ibL)
 			{
-				// Both sides of IB broken (100279BE..10027A06)
+				// Both sides of IB broken (dayTypeCode == 0 -> Yellow background for all Neutral variants, 100208FB)
 				if (dayClose >= ibL && dayClose <= ibH)
-				{
 					dayType = "Neutral - Centre day";
-					dayTypeTone = MpCellTone.BgYellow;
-				}
 				else if (dayClose > ibH)
-				{
 					dayType = "Neutral - Extreme day - Up";
-					dayTypeTone = MpCellTone.BgGreen;
-				}
 				else
-				{
 					dayType = "Neutral - Extreme day - Down";
-					dayTypeTone = MpCellTone.BgRedOrange;
-				}
+				dayTypeTone = MpCellTone.BgYellow;
 			}
 			else if (dayHigh <= ibH && dayLow >= ibL)
 			{
-				// Neither side of IB broken (10027A13..10027A25)
+				// Neither side of IB broken (Non-Trend day -> Default neutral background, 100208FB)
 				dayType = "Non-Trend day";
-				dayTypeTone = MpCellTone.BgYellow;
+				dayTypeTone = MpCellTone.Default;
 			}
 			else if (dayClose >= ibL && dayClose <= ibH)
 			{
-				// One side of IB broken, Close inside IB (10027A2A..10027A4E)
+				// One side of IB broken, Close inside IB (dayTypeCode == ±1 -> +20% lighter shade, 1001EAEB)
 				if (dayHigh > ibH)
 				{
 					dayType = "Normal day - Up";
-					dayTypeTone = MpCellTone.BgGreen;
+					dayTypeTone = MpCellTone.BgLightGreen;
 				}
 				else
 				{
 					dayType = "Normal day - Down";
-					dayTypeTone = MpCellTone.BgRedOrange;
+					dayTypeTone = MpCellTone.BgLightRedOrange;
 				}
 			}
 			else if (dayClose > ibH && dayHigh >= ibH)
 			{
-				// Close above IB High (10027A50..10027A8B)
+				// Close above IB High (dayTypeCode == +2 Normal Variation vs +3 Trend, 10027A28..10027A71)
 				if (pocTpoCount > 7 || (pocTpoCount == 7 && pocPrice >= ibL && pocPrice <= ibH))
 				{
 					dayType = "Normal Variation day - Up";
@@ -1718,12 +2623,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 				else
 				{
 					dayType = "Trend day - Up";
-					dayTypeTone = MpCellTone.BgGreen;
+					dayTypeTone = MpCellTone.BgDarkGreen;
 				}
 			}
 			else if (dayClose < ibL && dayLow <= ibL)
 			{
-				// Close below IB Low (10027A8D..10027AC1)
+				// Close below IB Low (dayTypeCode == -2 Normal Variation vs -3 Trend, 10027A7D..10027AC1)
 				if (pocTpoCount > 7 || (pocTpoCount == 7 && pocPrice >= ibL && pocPrice <= ibH))
 				{
 					dayType = "Normal Variation day - Down";
@@ -1732,12 +2637,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 				else
 				{
 					dayType = "Trend day - Down";
-					dayTypeTone = MpCellTone.BgRedOrange;
+					dayTypeTone = MpCellTone.BgDarkRedOrange;
 				}
+			}
+
+			// Exact 50chartsMP.dll 1001EE5B..1001EF05: Today's "Day Type" text is always shown,
+			// but uses Default neutral background when lastBarIndexWithinProfile < ibCandleCount + 2 (sessionBars.Count < ibCount + 3).
+			if (!isCompletedSession && sessionBars.Count < Math.Max(1, ibCount) + 3)
+			{
+				dayTypeTone = MpCellTone.Default;
 			}
 		}
 
 		// Exact 50chartsMP.dll OpenType Classification (1001FB95..1001FF40)
+		// Note: 1001FEC0..1001FED0 always renders OpenType with Default neutral cell tone.
 		private static void ClassifyOpenType(
 			List<MpBarSample> todayBars,
 			int openVsPdvaCode,
@@ -1753,107 +2666,85 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (todayBars == null || todayBars.Count < 3)
 				return;
 
-			double s = Math.Max(1e-5, step);
-			double qOpen0 = Math.Floor(todayBars[0].Open / s) * s;
-			double qHigh0 = Math.Floor(todayBars[0].High / s) * s;
-			double qLow0 = Math.Floor(todayBars[0].Low / s) * s;
+			float s = (float)Math.Max(1e-5, step);
+			float qOpen0 = Quantize50Charts(todayBars[0].Open, s);
+			float qHigh0 = Quantize50Charts(todayBars[0].High, s);
+			float qLow0 = Quantize50Charts(todayBars[0].Low, s);
 
-			// [edi+4] = High array (qHigh1), [edi+8] = Low array (qLow1)
-			double qHigh1 = Math.Floor(todayBars[1].High / s) * s;
-			double qLow1 = Math.Floor(todayBars[1].Low / s) * s;
+			// [ebp-4Ch] = qLow1 (Period B), [ebp-50h] = qHigh1 (Period B)
+			float qHigh1 = Quantize50Charts(todayBars[1].High, s);
+			float qLow1 = Quantize50Charts(todayBars[1].Low, s);
 
-			double ib2High = qHigh1;
-			double ib2Low = qLow1;
-			// 1001FCF5: 3rd bar (index 2) is included in ib2High/ib2Low when lastBarIdx > firstBarIdx + 2 (Count > 3)
-			if (todayBars.Count > 3)
-			{
-				double qHigh2 = Math.Floor(todayBars[2].High / s) * s;
-				double qLow2 = Math.Floor(todayBars[2].Low / s) * s;
-				ib2High = Math.Max(qHigh1, qHigh2);
-				ib2Low = Math.Min(qLow1, qLow2);
-			}
+			// 1001FCF5..1001FD8A: [ebp-44h] = qHigh2 (Period C), [ebp-48h] = qLow2 (Period C) when Count > 3
+			bool hasBar2 = todayBars.Count > 3;
+			float qHigh2 = hasBar2 ? Quantize50Charts(todayBars[2].High, s) : qHigh1;
+			float qLow2 = hasBar2 ? Quantize50Charts(todayBars[2].Low, s) : qLow1;
 
-			int aOpenAboveLow = (int)Math.Round((qOpen0 - qLow0) / s, MidpointRounding.AwayFromZero);
-			int aTotalTicks = (int)Math.Round((qHigh0 - qLow0) / s, MidpointRounding.AwayFromZero);
+			int aOpenAboveLow = (int)Math.Round((double)((qOpen0 - qLow0) / s), MidpointRounding.AwayFromZero);
+			int aTotalTicks = (int)Math.Round((double)((qHigh0 - qLow0) / s), MidpointRounding.AwayFromZero);
 			int aHighAboveOpen = aTotalTicks - aOpenAboveLow;
+			float fPdVal = (float)pdVal;
+			float fPdVah = (float)pdVah;
 
 			// Case 1 (1001FDBA): Bullish Open Drive from Open = Low (aOpenAboveLow == 0 && B.Low > A.Open)
 			if (aOpenAboveLow == 0 && qLow1 > qOpen0)
 			{
-				if (openVsPdvaCode == -1 && Math.Max(qHigh0, qHigh1) >= pdVal)
-				{
-					openType = "ORR";
-					tone = MpCellTone.Default;
-				}
-				else
-				{
-					openType = "Open Drive";
-					tone = MpCellTone.BgGreen;
-				}
+				openType = (openVsPdvaCode == -1 && Math.Max(qHigh0, qHigh1) >= fPdVal) ? "ORR" : "Open Drive";
 				return;
 			}
 
 			// Case 2 (1001FDEC): Bearish Open Drive from Open = High (aHighAboveOpen == 0 && A.Open > B.High)
 			if (aHighAboveOpen == 0 && qOpen0 > qHigh1)
 			{
-				if (openVsPdvaCode == 1 && Math.Min(qLow0, qLow1) <= pdVah)
-				{
-					openType = "ORR";
-					tone = MpCellTone.Default;
-				}
-				else
-				{
-					openType = "Open Drive";
-					tone = MpCellTone.BgGreen;
-				}
+				openType = (openVsPdvaCode == 1 && Math.Min(qLow0, qLow1) <= fPdVah) ? "ORR" : "Open Drive";
 				return;
 			}
 
 			// Case 3 (1001FE16): Bullish OpenTest Drive (aOpenAboveLow < aHighAboveOpen && B.Low > A.Open)
 			if (aOpenAboveLow < aHighAboveOpen && qLow1 > qOpen0)
 			{
-				if (openVsPdvaCode == -1 && Math.Max(qHigh0, qHigh1) >= pdVal)
-				{
-					openType = "ORR";
-					tone = MpCellTone.Default;
-				}
-				else
-				{
-					openType = "OpenTest Drive";
-					tone = MpCellTone.BgGreen;
-				}
+				openType = (openVsPdvaCode == -1 && Math.Max(qHigh0, qHigh1) >= fPdVal) ? "ORR" : "OpenTest Drive";
 				return;
 			}
 
 			// Case 4 (1001FE3E): Bearish OpenTest Drive (aOpenAboveLow > aHighAboveOpen && A.Open > B.High)
 			if (aOpenAboveLow > aHighAboveOpen && qOpen0 > qHigh1)
 			{
-				if (openVsPdvaCode == 1 && Math.Min(qLow0, qLow1) <= pdVah)
-				{
-					openType = "ORR";
-					tone = MpCellTone.Default;
-				}
-				else
-				{
-					openType = "OpenTest Drive";
-					tone = MpCellTone.BgGreen;
-				}
+				openType = (openVsPdvaCode == 1 && Math.Min(qLow0, qLow1) <= fPdVah) ? "ORR" : "OpenTest Drive";
 				return;
 			}
 
-			// Case 5 (1001FE63): OAIR / OAOR
-			if ((qOpen0 >= qLow1 && qOpen0 <= qHigh1) || (qOpen0 >= ib2Low && qOpen0 <= ib2High))
+			// Case 5 (1001FE63..1001FE7D): OAIR / OAOR (A.Open inside Period B or Period C)
+			if ((qOpen0 >= qLow1 && qOpen0 <= qHigh1) || (hasBar2 && qOpen0 >= qLow2 && qOpen0 <= qHigh2))
 			{
 				openType = (openVsPdvaCode == 1 || openVsPdvaCode == -1) ? "OAOR" : "OAIR";
-				tone = MpCellTone.Default;
 			}
 		}
 
-		// Exact 50chartsMP.dll Helper 10018AF0 (0.05% price equality check)
+		[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Explicit)]
+		private struct FloatInt32Union
+		{
+			[System.Runtime.InteropServices.FieldOffset(0)]
+			public float FloatValue;
+			[System.Runtime.InteropServices.FieldOffset(0)]
+			public int IntValue;
+		}
+
+		// Exact 50chartsMP.dll Helper 10018AF0 -> AmiBroker AlmostEqual(float x, float y, maxUlps = 5)
 		private static bool AlmostEqual50Charts(double a, double b)
 		{
-			if (Math.Abs(a) < 1e-9) return Math.Abs(b) < 1e-9;
-			return (Math.Abs(a - b) * 100.0 / Math.Abs(a)) <= 0.05;
+			if (double.IsNaN(a) || double.IsNaN(b))
+				return false;
+			float fa = (float)a;
+			float fb = (float)b;
+			if (fa == fb)
+				return true;
+			FloatInt32Union ua = new FloatInt32Union { FloatValue = fa };
+			FloatInt32Union ub = new FloatInt32Union { FloatValue = fb };
+			int ia = ua.IntValue < 0 ? unchecked((int)0x80000000 - ua.IntValue) : ua.IntValue;
+			int ib = ub.IntValue < 0 ? unchecked((int)0x80000000 - ub.IntValue) : ub.IntValue;
+			long diff = Math.Abs((long)ia - (long)ib);
+			return diff <= 5L;
 		}
 
 		// Exact 50chartsMP.dll Today VA Classification (100204E2)
@@ -1961,16 +2852,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private static MpCellTone GetDayTypeTone(string dt)
 		{
-			if (string.IsNullOrEmpty(dt))
+			if (string.IsNullOrEmpty(dt) || dt.StartsWith("Non-Trend", StringComparison.OrdinalIgnoreCase))
 				return MpCellTone.Default;
-			if (dt.StartsWith("Non-Trend", StringComparison.OrdinalIgnoreCase) || dt.StartsWith("Neutral - Centre", StringComparison.OrdinalIgnoreCase))
-				return MpCellTone.BgYellow;
-			if (dt.EndsWith("Up", StringComparison.OrdinalIgnoreCase))
-				return MpCellTone.BgGreen;
-			if (dt.EndsWith("Down", StringComparison.OrdinalIgnoreCase))
-				return MpCellTone.BgRedOrange;
 			if (dt.StartsWith("Neutral", StringComparison.OrdinalIgnoreCase))
 				return MpCellTone.BgYellow;
+			if (dt.StartsWith("Normal Variation", StringComparison.OrdinalIgnoreCase))
+				return dt.EndsWith("Up", StringComparison.OrdinalIgnoreCase) ? MpCellTone.BgGreen : MpCellTone.BgRedOrange;
+			if (dt.StartsWith("Normal day", StringComparison.OrdinalIgnoreCase))
+				return dt.EndsWith("Up", StringComparison.OrdinalIgnoreCase) ? MpCellTone.BgLightGreen : MpCellTone.BgLightRedOrange;
+			if (dt.StartsWith("Trend", StringComparison.OrdinalIgnoreCase))
+				return dt.EndsWith("Up", StringComparison.OrdinalIgnoreCase) ? MpCellTone.BgDarkGreen : MpCellTone.BgDarkRedOrange;
 			return MpCellTone.Default;
 		}
 
@@ -2064,9 +2955,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 				else if (textSelect != null)
 				{
-					query = sortAscending 
-						? query.OrderBy(textSelect, StringComparer.OrdinalIgnoreCase).ThenBy(r => r.Ticker) 
-						: query.OrderByDescending(textSelect, StringComparer.OrdinalIgnoreCase).ThenBy(r => r.Ticker);
+					// Always place non-empty active signal cells FIRST and blank/empty cells at the bottom in both Asc & Desc modes!
+					query = sortAscending
+						? query.OrderBy(r => string.IsNullOrEmpty(textSelect(r)) ? 1 : 0).ThenBy(textSelect, StringComparer.OrdinalIgnoreCase).ThenBy(r => r.Ticker)
+						: query.OrderBy(r => string.IsNullOrEmpty(textSelect(r)) ? 1 : 0).ThenByDescending(textSelect, StringComparer.OrdinalIgnoreCase).ThenBy(r => r.Ticker);
 				}
 			}
 
@@ -2086,77 +2978,71 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			List<MpColumnDef> cols = new List<MpColumnDef>(43);
 
-			cols.Add(new MpColumnDef { Id = "Ticker", Header = "Ticker", Group = "Core", Width = 114f, IsNumeric = false, TextSelector = r => r.Ticker, ToneSelector = r => MpCellTone.Default });
-			cols.Add(new MpColumnDef { Id = "DateTime", Header = "Date/Time", Group = "Core", Width = 152f, IsNumeric = true, TextSelector = r => r.DateTimeStr, SortNumSelector = r => r.LastUpdateTime.Ticks, ToneSelector = r => MpCellTone.Default });
+			cols.Add(new MpColumnDef { Id = "Ticker", Header = "Ticker", Group = "Core", Width = 96f, IsNumeric = false, TextSelector = r => r.Ticker, ToneSelector = r => MpCellTone.Default });
+			cols.Add(new MpColumnDef { Id = "DateTime", Header = "Date/Time", Group = "Core", Width = 136f, IsNumeric = true, TextSelector = r => r.DateTimeStr, SortNumSelector = r => r.LastUpdateTime.Ticks, ToneSelector = r => MpCellTone.Default });
 
 			if (showPrevDayValues)
 			{
-				cols.Add(new MpColumnDef { Id = "PDH", Header = "PrevDay High", Group = "PrevDayValues", Width = 86f, IsNumeric = true, TextSelector = r => r.FormatNum(r.PrevDayHigh), SortNumSelector = r => r.PrevDayHigh, ToneSelector = r => MpCellTone.Default });
-				cols.Add(new MpColumnDef { Id = "PDL", Header = "PrevDay Low", Group = "PrevDayValues", Width = 86f, IsNumeric = true, TextSelector = r => r.FormatNum(r.PrevDayLow), SortNumSelector = r => r.PrevDayLow, ToneSelector = r => MpCellTone.Default });
-				cols.Add(new MpColumnDef { Id = "PDC", Header = "PrevDay Close", Group = "PrevDayValues", Width = 90f, IsNumeric = true, TextSelector = r => r.FormatNum(r.PrevDayClose), SortNumSelector = r => r.PrevDayClose, ToneSelector = r => MpCellTone.Default });
-				cols.Add(new MpColumnDef { Id = "PDV", Header = "PrevDay Volume", Group = "PrevDayValues", Width = 96f, IsNumeric = true, TextSelector = r => r.PrevDayVolume.ToString("0", CultureInfo.InvariantCulture), SortNumSelector = r => r.PrevDayVolume, ToneSelector = r => MpCellTone.Default });
+				cols.Add(new MpColumnDef { Id = "PDH", Header = "PrevDay High", Group = "PrevDayValues", Width = 82f, IsNumeric = true, TextSelector = r => r.FormatNum(r.PrevDayHigh), SortNumSelector = r => r.PrevDayHigh, ToneSelector = r => MpCellTone.Default });
+				cols.Add(new MpColumnDef { Id = "PDL", Header = "PrevDay Low", Group = "PrevDayValues", Width = 82f, IsNumeric = true, TextSelector = r => r.FormatNum(r.PrevDayLow), SortNumSelector = r => r.PrevDayLow, ToneSelector = r => MpCellTone.Default });
+				cols.Add(new MpColumnDef { Id = "PDC", Header = "PrevDay Close", Group = "PrevDayValues", Width = 84f, IsNumeric = true, TextSelector = r => r.FormatNum(r.PrevDayClose), SortNumSelector = r => r.PrevDayClose, ToneSelector = r => MpCellTone.Default });
+				cols.Add(new MpColumnDef { Id = "PDV", Header = "PrevDay Volume", Group = "PrevDayValues", Width = 92f, IsNumeric = true, TextSelector = r => r.PrevDayVolume.ToString("0", CultureInfo.InvariantCulture), SortNumSelector = r => r.PrevDayVolume, ToneSelector = r => MpCellTone.Default });
 			}
 
 			if (showTodayValues)
 			{
-				cols.Add(new MpColumnDef { Id = "Vol", Header = "Volume", Group = "TodayValues", Width = 88f, IsNumeric = true, TextSelector = r => r.TodayVolume.ToString("0", CultureInfo.InvariantCulture), SortNumSelector = r => r.TodayVolume, ToneSelector = r => MpCellTone.Default });
-				cols.Add(new MpColumnDef { Id = "OpenPrice", Header = "Open", Group = "TodayValues", Width = 78f, IsNumeric = true, TextSelector = r => r.FormatNum(r.TodayOpen), SortNumSelector = r => r.TodayOpen, ToneSelector = r => MpCellTone.Default });
-				cols.Add(new MpColumnDef { Id = "HighPrice", Header = "High", Group = "TodayValues", Width = 78f, IsNumeric = true, TextSelector = r => r.FormatNum(r.TodayHigh), SortNumSelector = r => r.TodayHigh, ToneSelector = r => MpCellTone.Default });
-				cols.Add(new MpColumnDef { Id = "LowPrice", Header = "Low", Group = "TodayValues", Width = 78f, IsNumeric = true, TextSelector = r => r.FormatNum(r.TodayLow), SortNumSelector = r => r.TodayLow, ToneSelector = r => MpCellTone.Default });
+				cols.Add(new MpColumnDef { Id = "Vol", Header = "Volume", Group = "TodayValues", Width = 84f, IsNumeric = true, TextSelector = r => r.TodayVolume.ToString("0", CultureInfo.InvariantCulture), SortNumSelector = r => r.TodayVolume, ToneSelector = r => MpCellTone.Default });
+				cols.Add(new MpColumnDef { Id = "OpenPrice", Header = "Open", Group = "TodayValues", Width = 74f, IsNumeric = true, TextSelector = r => r.FormatNum(r.TodayOpen), SortNumSelector = r => r.TodayOpen, ToneSelector = r => MpCellTone.Default });
+				cols.Add(new MpColumnDef { Id = "HighPrice", Header = "High", Group = "TodayValues", Width = 74f, IsNumeric = true, TextSelector = r => r.FormatNum(r.TodayHigh), SortNumSelector = r => r.TodayHigh, ToneSelector = r => MpCellTone.Default });
+				cols.Add(new MpColumnDef { Id = "LowPrice", Header = "Low", Group = "TodayValues", Width = 74f, IsNumeric = true, TextSelector = r => r.FormatNum(r.TodayLow), SortNumSelector = r => r.TodayLow, ToneSelector = r => MpCellTone.Default });
 			}
 
-			cols.Add(new MpColumnDef { Id = "OpenHL", Header = "Open=H/L", Group = "Core", Width = 80f, IsNumeric = false, TextSelector = r => r.OpenEqualHL, ToneSelector = r => r.OpenEqualHLTone });
-			cols.Add(new MpColumnDef { Id = "Price", Header = "Price", Group = "Core", Width = 82f, IsNumeric = true, TextSelector = r => r.FormatNum(r.Price), SortNumSelector = r => r.Price, ToneSelector = r => r.PriceTone });
-			cols.Add(new MpColumnDef { Id = "PctChange", Header = "%Change", Group = "Core", Width = 70f, IsNumeric = true, TextSelector = r => r.FormatNum(r.PercentChange), SortNumSelector = r => r.PercentChange, ToneSelector = r => r.PriceTone });
-
-			if (showDailySma)
-			{
-				cols.Add(new MpColumnDef { Id = "DailySma", Header = "SMA(" + smaDays + ") - Daily", Group = "DailySMA", Width = 96f, IsNumeric = true, TextSelector = r => r.FormatNum(r.DailySma), SortNumSelector = r => r.DailySma, ToneSelector = r => MpCellTone.Default });
-				cols.Add(new MpColumnDef { Id = "PriceVsSma", Header = "Price - SMA(" + smaDays + ")", Group = "DailySMA", Width = 128f, IsNumeric = false, TextSelector = r => r.PriceVsSma, ToneSelector = r => r.PriceVsSmaTone });
-			}
+			cols.Add(new MpColumnDef { Id = "OpenHL", Header = "Open=H/L", Group = "Core", Width = 74f, IsNumeric = false, TextSelector = r => r.OpenEqualHL, ToneSelector = r => r.OpenEqualHLTone });
+			cols.Add(new MpColumnDef { Id = "Price", Header = "Price", Group = "Core", Width = 74f, IsNumeric = true, TextSelector = r => r.FormatNum(r.Price), SortNumSelector = r => r.Price, ToneSelector = r => r.PriceTone });
+			cols.Add(new MpColumnDef { Id = "PctChange", Header = "%Change", Group = "Core", Width = 62f, IsNumeric = true, TextSelector = r => r.FormatNum(r.PercentChange), SortNumSelector = r => r.PercentChange, ToneSelector = r => r.PriceTone });
 
 			if (showPrevDayMpLevels)
 			{
-				cols.Add(new MpColumnDef { Id = "PdTpo", Header = "TPOSize", Group = "PrevDayMP", Width = 64f, IsNumeric = true, TextSelector = r => r.FormatNum(r.PdTpoSize), SortNumSelector = r => r.PdTpoSize, ToneSelector = r => MpCellTone.Default });
-				cols.Add(new MpColumnDef { Id = "PdVah", Header = "PD-VAH", Group = "PrevDayMP", Width = 78f, IsNumeric = true, TextSelector = r => r.FormatNum(r.PdVah), SortNumSelector = r => r.PdVah, ToneSelector = r => MpCellTone.Default });
-				cols.Add(new MpColumnDef { Id = "PdPoc", Header = "PD-POC", Group = "PrevDayMP", Width = 78f, IsNumeric = true, TextSelector = r => r.FormatNum(r.PdPoc), SortNumSelector = r => r.PdPoc, ToneSelector = r => MpCellTone.Default });
-				cols.Add(new MpColumnDef { Id = "PdVal", Header = "PD-VAL", Group = "PrevDayMP", Width = 78f, IsNumeric = true, TextSelector = r => r.FormatNum(r.PdVal), SortNumSelector = r => r.PdVal, ToneSelector = r => MpCellTone.Default });
-				cols.Add(new MpColumnDef { Id = "PdPocCnt", Header = "PD-POC TPOCount", Group = "PrevDayMP", Width = 96f, IsNumeric = true, TextSelector = r => r.PdPocTpoCount.ToString(CultureInfo.InvariantCulture), SortNumSelector = r => r.PdPocTpoCount, ToneSelector = r => MpCellTone.Default });
+				cols.Add(new MpColumnDef { Id = "PdTpo", Header = "TPOSize", Group = "PrevDayMP", Width = 62f, IsNumeric = true, TextSelector = r => r.FormatNum(r.PdTpoSize), SortNumSelector = r => r.PdTpoSize, ToneSelector = r => MpCellTone.Default });
+				cols.Add(new MpColumnDef { Id = "PdVah", Header = "PD-VAH", Group = "PrevDayMP", Width = 74f, IsNumeric = true, TextSelector = r => r.FormatNum(r.PdVah), SortNumSelector = r => r.PdVah, ToneSelector = r => MpCellTone.Default });
+				cols.Add(new MpColumnDef { Id = "PdPoc", Header = "PD-POC", Group = "PrevDayMP", Width = 74f, IsNumeric = true, TextSelector = r => r.FormatNum(r.PdPoc), SortNumSelector = r => r.PdPoc, ToneSelector = r => MpCellTone.Default });
+				cols.Add(new MpColumnDef { Id = "PdVal", Header = "PD-VAL", Group = "PrevDayMP", Width = 74f, IsNumeric = true, TextSelector = r => r.FormatNum(r.PdVal), SortNumSelector = r => r.PdVal, ToneSelector = r => MpCellTone.Default });
+				cols.Add(new MpColumnDef { Id = "PdPocCnt", Header = "PD-POC TPOCount", Group = "PrevDayMP", Width = 92f, IsNumeric = true, TextSelector = r => r.PdPocTpoCount.ToString(CultureInfo.InvariantCulture), SortNumSelector = r => r.PdPocTpoCount, ToneSelector = r => MpCellTone.Default });
 			}
 
-			cols.Add(new MpColumnDef { Id = "PrevDayType", Header = "PrevDay Type", Group = "Core", Width = 148f, IsNumeric = false, TextSelector = r => r.PrevDayType, ToneSelector = r => r.PrevDayTypeTone });
-			cols.Add(new MpColumnDef { Id = "PdSingleP", Header = "PD-SingleP", Group = "Core", Width = 114f, IsNumeric = false, TextSelector = r => r.PdSinglePrint, ToneSelector = r => r.PdSinglePrintTone });
-			cols.Add(new MpColumnDef { Id = "OpenVa", Header = "Open", Group = "Core", Width = 116f, IsNumeric = false, TextSelector = r => r.OpenVsPdVa, ToneSelector = r => r.OpenVsPdVaTone });
-			cols.Add(new MpColumnDef { Id = "OpenHl", Header = "Open", Group = "Core", Width = 116f, IsNumeric = false, TextSelector = r => r.OpenVsPdHl, ToneSelector = r => r.OpenVsPdHlTone });
-			cols.Add(new MpColumnDef { Id = "OpenType", Header = "OpenType", Group = "Core", Width = 102f, IsNumeric = false, TextSelector = r => r.OpenType, ToneSelector = r => r.OpenTypeTone });
-			cols.Add(new MpColumnDef { Id = "PdBreakout", Header = "PrevDay Breakout", Group = "Core", Width = 118f, IsNumeric = false, TextSelector = r => r.PrevDayBreakout, ToneSelector = r => r.PrevDayBreakoutTone });
-			cols.Add(new MpColumnDef { Id = "AtrDaily", Header = "ATR(" + atrDays + ") - Daily", Group = "Core", Width = 92f, IsNumeric = true, TextSelector = r => r.FormatNum(r.DailyAtr), SortNumSelector = r => r.DailyAtr, ToneSelector = r => MpCellTone.Default });
-			cols.Add(new MpColumnDef { Id = "HlRange", Header = "HL Range", Group = "Core", Width = 74f, IsNumeric = true, TextSelector = r => r.FormatNum(r.HlRange), SortNumSelector = r => r.HlRange, ToneSelector = r => MpCellTone.Default });
+			cols.Add(new MpColumnDef { Id = "PrevDayType", Header = "PrevDay Type", Group = "Core", Width = 124f, IsNumeric = false, TextSelector = r => r.PrevDayType, ToneSelector = r => r.PrevDayTypeTone });
+			cols.Add(new MpColumnDef { Id = "PdSingleP", Header = "PD-SingleP", Group = "Core", Width = 88f, IsNumeric = false, TextSelector = r => r.PdSinglePrint, ToneSelector = r => r.PdSinglePrintTone });
+			cols.Add(new MpColumnDef { Id = "OpenVa", Header = "Open", Group = "Core", Width = 100f, IsNumeric = false, TextSelector = r => r.OpenVsPdVa, ToneSelector = r => r.OpenVsPdVaTone });
+			cols.Add(new MpColumnDef { Id = "OpenHl", Header = "Open", Group = "Core", Width = 100f, IsNumeric = false, TextSelector = r => r.OpenVsPdHl, ToneSelector = r => r.OpenVsPdHlTone });
+			cols.Add(new MpColumnDef { Id = "OpenType", Header = "OpenType", Group = "Core", Width = 86f, IsNumeric = false, TextSelector = r => r.OpenType, ToneSelector = r => r.OpenTypeTone });
+			cols.Add(new MpColumnDef { Id = "PdBreakout", Header = "PrevDay Breakout", Group = "Core", Width = 104f, IsNumeric = false, TextSelector = r => r.PrevDayBreakout, ToneSelector = r => r.PrevDayBreakoutTone });
+			cols.Add(new MpColumnDef { Id = "AtrDaily", Header = "ATR(" + atrDays + ") - Daily", Group = "Core", Width = 84f, IsNumeric = true, TextSelector = r => r.FormatNum(r.DailyAtr), SortNumSelector = r => r.DailyAtr, ToneSelector = r => MpCellTone.Default });
+			cols.Add(new MpColumnDef { Id = "HlRange", Header = "HL Range", Group = "Core", Width = 66f, IsNumeric = true, TextSelector = r => r.FormatNum(r.HlRange), SortNumSelector = r => r.HlRange, ToneSelector = r => MpCellTone.Default });
 
 			if (showIbValues)
 			{
-				cols.Add(new MpColumnDef { Id = "IbHigh", Header = "IB - High", Group = "IBValues", Width = 76f, IsNumeric = true, TextSelector = r => r.FormatNum(r.IbHigh), SortNumSelector = r => r.IbHigh, ToneSelector = r => MpCellTone.Default });
-				cols.Add(new MpColumnDef { Id = "IbLow", Header = "IB - Low", Group = "IBValues", Width = 76f, IsNumeric = true, TextSelector = r => r.FormatNum(r.IbLow), SortNumSelector = r => r.IbLow, ToneSelector = r => MpCellTone.Default });
-				cols.Add(new MpColumnDef { Id = "IbRange", Header = "IB Range", Group = "IBValues", Width = 74f, IsNumeric = true, TextSelector = r => r.FormatNum(r.IbRange), SortNumSelector = r => r.IbRange, ToneSelector = r => MpCellTone.Default });
+				cols.Add(new MpColumnDef { Id = "IbHigh", Header = "IB - High", Group = "IBValues", Width = 72f, IsNumeric = true, TextSelector = r => r.FormatNum(r.IbHigh), SortNumSelector = r => r.IbHigh, ToneSelector = r => MpCellTone.Default });
+				cols.Add(new MpColumnDef { Id = "IbLow", Header = "IB - Low", Group = "IBValues", Width = 72f, IsNumeric = true, TextSelector = r => r.FormatNum(r.IbLow), SortNumSelector = r => r.IbLow, ToneSelector = r => MpCellTone.Default });
+				cols.Add(new MpColumnDef { Id = "IbRange", Header = "IB Range", Group = "IBValues", Width = 70f, IsNumeric = true, TextSelector = r => r.FormatNum(r.IbRange), SortNumSelector = r => r.IbRange, ToneSelector = r => MpCellTone.Default });
 			}
 
-			cols.Add(new MpColumnDef { Id = "IbSize", Header = "IB Size", Group = "Core", Width = 72f, IsNumeric = false, TextSelector = r => r.IbSize, ToneSelector = r => r.IbSizeTone });
-			cols.Add(new MpColumnDef { Id = "IbBreakout", Header = "IB Breakout", Group = "Core", Width = 114f, IsNumeric = false, TextSelector = r => r.IbBreakout, ToneSelector = r => r.IbBreakoutTone });
-			cols.Add(new MpColumnDef { Id = "PriceVsIb", Header = "Price - IB", Group = "Core", Width = 104f, IsNumeric = false, TextSelector = r => r.PriceVsIb, ToneSelector = r => r.PriceVsIbTone });
+			cols.Add(new MpColumnDef { Id = "IbSize", Header = "IB Size", Group = "Core", Width = 64f, IsNumeric = false, TextSelector = r => r.IbSize, ToneSelector = r => r.IbSizeTone });
+			cols.Add(new MpColumnDef { Id = "IbBreakout", Header = "IB Breakout", Group = "Core", Width = 98f, IsNumeric = false, TextSelector = r => r.IbBreakout, ToneSelector = r => r.IbBreakoutTone });
+			cols.Add(new MpColumnDef { Id = "PriceVsIb", Header = "Price - IB", Group = "Core", Width = 88f, IsNumeric = false, TextSelector = r => r.PriceVsIb, ToneSelector = r => r.PriceVsIbTone });
 
 			if (showTodayMpLevels)
 			{
-				cols.Add(new MpColumnDef { Id = "TdTpo", Header = "TPOSize", Group = "TodayMP", Width = 64f, IsNumeric = true, TextSelector = r => r.FormatNum(r.TodayTpoSize), SortNumSelector = r => r.TodayTpoSize, ToneSelector = r => MpCellTone.Default });
-				cols.Add(new MpColumnDef { Id = "TdVah", Header = "Today-VAH", Group = "TodayMP", Width = 80f, IsNumeric = true, TextSelector = r => r.FormatNum(r.TodayVah), SortNumSelector = r => r.TodayVah, ToneSelector = r => MpCellTone.Default });
-				cols.Add(new MpColumnDef { Id = "TdPoc", Header = "Today-POC", Group = "TodayMP", Width = 80f, IsNumeric = true, TextSelector = r => r.FormatNum(r.TodayPoc), SortNumSelector = r => r.TodayPoc, ToneSelector = r => MpCellTone.Default });
-				cols.Add(new MpColumnDef { Id = "TdVal", Header = "Today-VAL", Group = "TodayMP", Width = 80f, IsNumeric = true, TextSelector = r => r.FormatNum(r.TodayVal), SortNumSelector = r => r.TodayVal, ToneSelector = r => MpCellTone.Default });
-				cols.Add(new MpColumnDef { Id = "TdPocCnt", Header = "Today-POC TPOCount", Group = "TodayMP", Width = 104f, IsNumeric = true, TextSelector = r => r.TodayPocTpoCount.ToString(CultureInfo.InvariantCulture), SortNumSelector = r => r.TodayPocTpoCount, ToneSelector = r => MpCellTone.Default });
+				cols.Add(new MpColumnDef { Id = "TdTpo", Header = "TPOSize", Group = "TodayMP", Width = 62f, IsNumeric = true, TextSelector = r => r.FormatNum(r.TodayTpoSize), SortNumSelector = r => r.TodayTpoSize, ToneSelector = r => MpCellTone.Default });
+				cols.Add(new MpColumnDef { Id = "TdVah", Header = "Today-VAH", Group = "TodayMP", Width = 76f, IsNumeric = true, TextSelector = r => r.FormatNum(r.TodayVah), SortNumSelector = r => r.TodayVah, ToneSelector = r => MpCellTone.Default });
+				cols.Add(new MpColumnDef { Id = "TdPoc", Header = "Today-POC", Group = "TodayMP", Width = 76f, IsNumeric = true, TextSelector = r => r.FormatNum(r.TodayPoc), SortNumSelector = r => r.TodayPoc, ToneSelector = r => MpCellTone.Default });
+				cols.Add(new MpColumnDef { Id = "TdVal", Header = "Today-VAL", Group = "TodayMP", Width = 76f, IsNumeric = true, TextSelector = r => r.FormatNum(r.TodayVal), SortNumSelector = r => r.TodayVal, ToneSelector = r => MpCellTone.Default });
+				cols.Add(new MpColumnDef { Id = "TdPocCnt", Header = "Today-POC TPOCount", Group = "TodayMP", Width = 96f, IsNumeric = true, TextSelector = r => r.TodayPocTpoCount.ToString(CultureInfo.InvariantCulture), SortNumSelector = r => r.TodayPocTpoCount, ToneSelector = r => MpCellTone.Default });
 			}
 
-			cols.Add(new MpColumnDef { Id = "TodayVa", Header = "Today VA", Group = "Core", Width = 148f, IsNumeric = false, TextSelector = r => r.TodayVaStatus, ToneSelector = r => r.TodayVaTone });
-			cols.Add(new MpColumnDef { Id = "Bar30Min", Header = periodicityMinutes + "-min PreviousBar", Group = "Core", Width = 152f, IsNumeric = false, TextSelector = r => r.Prev30MinBarStatus, ToneSelector = r => r.Prev30MinBarTone });
-			cols.Add(new MpColumnDef { Id = "SingleP", Header = "SingleP", Group = "Core", Width = 114f, IsNumeric = false, TextSelector = r => r.TodaySinglePrint, ToneSelector = r => r.TodaySinglePrintTone });
-			cols.Add(new MpColumnDef { Id = "DayType", Header = "Day Type", Group = "Core", Width = 165f, IsNumeric = false, TextSelector = r => r.TodayDayType, ToneSelector = r => r.TodayDayTypeTone });
+			cols.Add(new MpColumnDef { Id = "TodayVa", Header = "Today VA", Group = "Core", Width = 108f, IsNumeric = false, TextSelector = r => r.TodayVaStatus, ToneSelector = r => r.TodayVaTone });
+			cols.Add(new MpColumnDef { Id = "Bar30Min", Header = periodicityMinutes + "-min PreviousBar", Group = "Core", Width = 112f, IsNumeric = false, TextSelector = r => r.Prev30MinBarStatus, ToneSelector = r => r.Prev30MinBarTone });
+			cols.Add(new MpColumnDef { Id = "SingleP", Header = "SingleP", Group = "Core", Width = 86f, IsNumeric = false, TextSelector = r => r.TodaySinglePrint, ToneSelector = r => r.TodaySinglePrintTone });
+			cols.Add(new MpColumnDef { Id = "DayType", Header = "Day Type", Group = "Core", Width = 122f, IsNumeric = false, TextSelector = r => r.TodayDayType, ToneSelector = r => r.TodayDayTypeTone });
 
 			return cols;
 		}
@@ -2190,6 +3076,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private readonly ObservableCollection<MpScannerRow> observableRows = new ObservableCollection<MpScannerRow>();
 		private DataGrid grid;
 		private TextBlock txtStatus;
+		private StackPanel panelScanProgress;
+		private TextBlock txtScanProgress;
+		private Border borderScanProgressFill;
+		private DateTime lastScanCompletedDisplayTime = DateTime.MinValue;
 		private Border borderLivePill;
 		private TextBlock txtLivePulse;
 		private TextBlock txtHeaderSymbolCount;
@@ -2200,8 +3090,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private ComboBox cmbWatchlist;
 		private ComboBox cmbPeriodicity;
 		private ComboBox cmbFilter;
-		private ComboBox cmbRefreshRate;
-		private CheckBox chkAutoRefresh;
 		private CheckBox chkSimIdle;
 		private CheckBox chkDarkTheme;
 		private CheckBox chkPrevDayHlc;
@@ -2210,6 +3098,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private CheckBox chkPrevMp;
 		private CheckBox chkIbVals;
 		private CheckBox chkTodayMp;
+		private readonly Dictionary<string, string> columnBaseHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+		private Grid scannerRootGrid;
+		private string lastClosedTpoSlotKey;
 		private string sortColId = "Ticker";
 		private bool sortAsc = true;
 		private long refreshCounter;
@@ -2218,31 +3109,53 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public MarketProfileScannerWindow()
 		{
 			Caption = "AK10X Market Profile Live Scanner \u2014 NinjaTrader 8";
-			Width = 1560;
-			Height = 840;
+			Width = 1880;
+			Height = 920;
 			WindowStartupLocation = WindowStartupLocation.CenterScreen;
+			WindowState = System.Windows.WindowState.Maximized;
 
-			engine = new MarketProfileScannerEngine();
+			// Eliminate lingering OS/Aero dropdown popup shadows and slide-fade ghost frames
+			this.Resources[SystemParameters.DropShadowKey] = false;
+			this.Resources[SystemParameters.ComboBoxPopupAnimationKey] = System.Windows.Controls.Primitives.PopupAnimation.None;
+			this.FocusVisualStyle = null;
+
+			engine = new MarketProfileScannerEngine { PushLiveTickUpdates = false };
 			BuildWpfLayout();
+			lastClosedTpoSlotKey = ComputeClosedTpoSlotKey();
 
 			autoRefreshTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
 			{
-				Interval = TimeSpan.FromSeconds(2)
+				Interval = TimeSpan.FromSeconds(1)
 			};
 			autoRefreshTimer.Tick += (s, e) =>
 			{
 				if (txtHeaderClock != null)
 					txtHeaderClock.Text = DateTime.Now.ToString("HH:mm:ss");
 
-				if (chkAutoRefresh != null && chkAutoRefresh.IsChecked == true && !isUpdatingData)
+				UpdateScanProgressBar();
+
+				// Automatic refresh strictly when each TPO Period (e.g. 30-min TPO from 09:15 + 15:30 close) closes!
+				string curTpoSlotKey = ComputeClosedTpoSlotKey();
+				if (!string.IsNullOrEmpty(curTpoSlotKey) &&
+					!string.Equals(curTpoSlotKey, lastClosedTpoSlotKey, StringComparison.Ordinal))
 				{
-					isUpdatingData = true;
-					Task.Run(() =>
+					lastClosedTpoSlotKey = curTpoSlotKey;
+					if (!isUpdatingData)
 					{
-						try { engine.RefreshAll(true); }
-						catch { }
-						finally { isUpdatingData = false; }
-					});
+						isUpdatingData = true;
+						Task.Run(async () =>
+						{
+							try
+							{
+								engine.TriggerStaggeredResubscribe(true);
+								engine.RefreshAll(false);
+								await Task.Delay(3500).ConfigureAwait(false);
+								engine.RefreshAll(false);
+							}
+							catch { }
+							finally { isUpdatingData = false; }
+						});
+					}
 				}
 			};
 
@@ -2251,6 +3164,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (Dispatcher != null && !Dispatcher.HasShutdownStarted)
 				{
 					Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(SyncGridRowsSmoothly));
+				}
+			};
+			engine.OnScanProgressChanged += () =>
+			{
+				if (Dispatcher != null && !Dispatcher.HasShutdownStarted)
+				{
+					Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(UpdateScanProgressBar));
 				}
 			};
 
@@ -2272,19 +3192,110 @@ namespace NinjaTrader.NinjaScript.Indicators
 				catch { }
 			};
 
-			engine.RefreshAll(false);
 			RebuildColumns();
 			UpdateConnectionStatusBadge();
-			SyncGridRowsSmoothly();
+			UpdateScanProgressBar();
 			autoRefreshTimer.Start();
+			Task.Run(() => engine.RefreshAll(false));
+		}
+
+		private string ComputeClosedTpoSlotKey()
+		{
+			if (engine == null)
+				return null;
+
+			DateTime now = DateTime.Now;
+			int periodMin = Math.Max(1, engine.PeriodicityMinutes);
+			int nowSec = now.Hour * 3600 + now.Minute * 60 + now.Second;
+			// 2-second grace buffer after :00 so Accelpix's closing 1-minute bar has arrived
+			int settledSec = Math.Max(0, nowSec - 2);
+
+			if (engine.WatchlistPreset == MpWatchlistPreset.UsFutures)
+			{
+				int slot24 = settledSec / (periodMin * 60);
+				return string.Format(CultureInfo.InvariantCulture, "24H|{0:yyyyMMdd}|{1}|{2}", now.Date, periodMin, slot24);
+			}
+
+			if (now.DayOfWeek == DayOfWeek.Saturday || now.DayOfWeek == DayOfWeek.Sunday)
+				return string.Format(CultureInfo.InvariantCulture, "NSE|{0:yyyyMMdd}|{1}|WEEKEND", now.Date, periodMin);
+
+			const int nseOpenSec = 9 * 3600 + 15 * 60;   // 09:15:00
+			const int nseCloseSec = 15 * 3600 + 30 * 60; // 15:30:00
+
+			int completedSlot;
+			if (settledSec < nseOpenSec)
+			{
+				completedSlot = -1;
+			}
+			else if (settledSec >= nseCloseSec)
+			{
+				completedSlot = 9999; // Final Period M closed at 15:30
+			}
+			else
+			{
+				completedSlot = (settledSec - nseOpenSec) / (periodMin * 60);
+			}
+
+			return string.Format(CultureInfo.InvariantCulture, "NSE|{0:yyyyMMdd}|{1}|{2}", now.Date, periodMin, completedSlot);
+		}
+
+		private void ReleaseScannerControlFocus()
+		{
+			try
+			{
+				Keyboard.ClearFocus();
+				if (scannerRootGrid != null)
+				{
+					scannerRootGrid.Focusable = true;
+					FocusManager.SetFocusedElement(this, scannerRootGrid);
+				}
+				InvalidateVisual();
+			}
+			catch { }
+		}
+
+		private void ConfigureCleanScannerComboBox(ComboBox cb)
+		{
+			if (cb == null)
+				return;
+			cb.FocusVisualStyle = null;
+			cb.Resources[SystemParameters.DropShadowKey] = false;
+			cb.Resources[SystemParameters.ComboBoxPopupAnimationKey] = System.Windows.Controls.Primitives.PopupAnimation.None;
+			Action stripPopupShadow = () =>
+			{
+				try
+				{
+					if (cb.Template != null)
+					{
+						var popup = cb.Template.FindName("PART_Popup", cb) as System.Windows.Controls.Primitives.Popup;
+						if (popup != null)
+						{
+							popup.PopupAnimation = System.Windows.Controls.Primitives.PopupAnimation.None;
+							if (popup.Child is FrameworkElement feChild)
+							{
+								feChild.Resources[SystemParameters.DropShadowKey] = false;
+								var prop = feChild.GetType().GetProperty("Color");
+								if (prop != null && feChild.GetType().Name.IndexOf("Shadow", StringComparison.OrdinalIgnoreCase) >= 0)
+									prop.SetValue(feChild, WpfColors.Transparent, null);
+							}
+						}
+					}
+				}
+				catch { }
+			};
+			cb.Loaded += (s, e) => stripPopupShadow();
+			cb.DropDownOpened += (s, e) => stripPopupShadow();
+			cb.DropDownClosed += (s, e) => ReleaseScannerControlFocus();
 		}
 
 		private void BuildWpfLayout()
 		{
 			Grid root = new Grid
 			{
-				Background = new WpfSolidBrush(WpfColor.FromRgb(11, 15, 23)) // High-tech obsidian dark background
+				Background = new WpfSolidBrush(WpfColor.FromRgb(11, 15, 23)), // High-tech obsidian dark background
+				FocusVisualStyle = null
 			};
+			scannerRootGrid = root;
 			root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Row 0: Top Header with Logo & Status
 			root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Row 1: Primary Toolbar
 			root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // Row 2: Secondary AK10X Columns Pill Bar
@@ -2431,7 +3442,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			};
 			txtHeaderSymbolCount = new TextBlock
 			{
-				Text = "44 TRACKED",
+				Text = "52 TRACKED",
 				FontSize = 11,
 				FontWeight = FontWeights.SemiBold,
 				Foreground = new WpfSolidBrush(WpfColor.FromRgb(56, 189, 248))
@@ -2478,6 +3489,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			DockPanel toolbarDock = new DockPanel { LastChildFill = true };
 
 			Button btnStacker = CreatePillButton("\u26A1 Trading Screen", WpfColor.FromRgb(255, 179, 0), WpfColors.Black, true);
+			this.btnTradingScreen = btnStacker;
 			btnStacker.Margin = new Thickness(10, 0, 0, 0);
 			btnStacker.HorizontalAlignment = HorizontalAlignment.Right;
 			btnStacker.Click += (s, e) =>
@@ -2486,7 +3498,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				{
 					MpScannerRow sel = grid?.SelectedItem as MpScannerRow;
 					string sym = sel != null && !string.IsNullOrWhiteSpace(sel.Ticker) ? sel.Ticker : "NIFTY_I";
-					NinjaTrader.NinjaScript.AddOns.AK10XChartStackerWindow.LoadUnifiedInstrumentPair(sym);
+					OpenTickerInTradingScreen(sym, true);
 				}
 				catch (Exception ex)
 				{
@@ -2501,7 +3513,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 			Button btnExplore = CreatePillButton("\u2714 AK10X Scan Now", WpfColor.FromRgb(16, 185, 129), WpfColors.White, true);
 			btnExplore.Click += (s, e) =>
 			{
-				Task.Run(() => engine.RefreshAll(true));
+				Task.Run(() =>
+				{
+					engine.TriggerStaggeredResubscribe(true);
+					engine.RefreshAll(true);
+				});
 			};
 			wp1.Children.Add(btnExplore);
 
@@ -2516,7 +3532,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				Foreground = new WpfSolidBrush(WpfColor.FromRgb(241, 245, 249)),
 				BorderBrush = new WpfSolidBrush(WpfColor.FromRgb(51, 65, 85))
 			};
-			cmbWatchlist.Items.Add("Accelpix NSE Top 44 (Core F&O)");
+			cmbWatchlist.Items.Add("Accelpix NSE Core 52 (F&O)");
 			cmbWatchlist.Items.Add("Accelpix NSE F&O - Near Month (_I, 227 Stocks)");
 			cmbWatchlist.Items.Add("Accelpix NSE Indices (NIFTY, BANKNIFTY...)");
 			cmbWatchlist.Items.Add("Accelpix All Futures (_I, _II, _III)");
@@ -2524,9 +3540,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 			cmbWatchlist.Items.Add("US Futures (CME / COMEX)");
 			cmbWatchlist.Items.Add("All Tracked Symbols");
 			cmbWatchlist.SelectedIndex = 0;
+			ConfigureCleanScannerComboBox(cmbWatchlist);
 			cmbWatchlist.SelectionChanged += (s, e) =>
 			{
+				ReleaseScannerControlFocus();
 				engine.WatchlistPreset = (MpWatchlistPreset)Math.Max(0, cmbWatchlist.SelectedIndex);
+				lastClosedTpoSlotKey = ComputeClosedTpoSlotKey();
 				Task.Run(() => engine.RefreshAll(false));
 			};
 			wp1.Children.Add(cmbWatchlist);
@@ -2547,8 +3566,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 			cmbPeriodicity.Items.Add("30 min");
 			cmbPeriodicity.Items.Add("60 min");
 			cmbPeriodicity.SelectedIndex = 2; // Default 30 min
+			ConfigureCleanScannerComboBox(cmbPeriodicity);
 			cmbPeriodicity.SelectionChanged += (s, e) =>
 			{
+				ReleaseScannerControlFocus();
 				int period = 30;
 				if (cmbPeriodicity.SelectedIndex == 0) period = 5;
 				else if (cmbPeriodicity.SelectedIndex == 1) period = 15;
@@ -2558,6 +3579,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (engine.PeriodicityMinutes != period)
 				{
 					engine.PeriodicityMinutes = period;
+					lastClosedTpoSlotKey = ComputeClosedTpoSlotKey();
 					engine.ResetSubscriptionsForNewPeriodicity();
 					RebuildColumns();
 					SyncGridRowsSmoothly();
@@ -2585,7 +3607,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 			cmbFilter.Items.Add("30-min Bar Breakout");
 			cmbFilter.Items.Add("Open = High / Low");
 			cmbFilter.SelectedIndex = 0;
-			cmbFilter.SelectionChanged += (s, e) => SyncGridRowsSmoothly();
+			ConfigureCleanScannerComboBox(cmbFilter);
+			cmbFilter.SelectionChanged += (s, e) =>
+			{
+				ReleaseScannerControlFocus();
+				SyncGridRowsSmoothly();
+			};
 			wp1.Children.Add(cmbFilter);
 
 			wp1.Children.Add(CreateToolbarLabel("Search:"));
@@ -2598,38 +3625,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 				Background = new WpfSolidBrush(WpfColor.FromRgb(30, 41, 59)),
 				Foreground = new WpfSolidBrush(WpfColor.FromRgb(248, 250, 252)),
 				BorderBrush = new WpfSolidBrush(WpfColor.FromRgb(51, 65, 85)),
-				Padding = new Thickness(4, 2, 4, 2)
+				Padding = new Thickness(4, 2, 4, 2),
+				FocusVisualStyle = null
 			};
 			txtSearch.TextChanged += (s, e) => SyncGridRowsSmoothly();
 			wp1.Children.Add(txtSearch);
-
-			chkAutoRefresh = CreatePillCheckBox("Live Auto-Refresh", true, WpfColor.FromRgb(16, 185, 129));
-			wp1.Children.Add(chkAutoRefresh);
-
-			cmbRefreshRate = new ComboBox
-			{
-				Width = 72,
-				Height = 28,
-				Margin = new Thickness(2, 0, 10, 0),
-				VerticalContentAlignment = VerticalAlignment.Center,
-				Background = new WpfSolidBrush(WpfColor.FromRgb(30, 41, 59)),
-				Foreground = new WpfSolidBrush(WpfColor.FromRgb(241, 245, 249)),
-				BorderBrush = new WpfSolidBrush(WpfColor.FromRgb(51, 65, 85))
-			};
-			cmbRefreshRate.Items.Add("1 sec");
-			cmbRefreshRate.Items.Add("2 sec");
-			cmbRefreshRate.Items.Add("3 sec");
-			cmbRefreshRate.Items.Add("5 sec");
-			cmbRefreshRate.Items.Add("10 sec");
-			cmbRefreshRate.SelectedIndex = 1;
-			cmbRefreshRate.SelectionChanged += (s, e) =>
-			{
-				int[] secs = new int[] { 1, 2, 3, 5, 10 };
-				int idx = Math.Max(0, Math.Min(secs.Length - 1, cmbRefreshRate.SelectedIndex));
-				if (autoRefreshTimer != null)
-					autoRefreshTimer.Interval = TimeSpan.FromSeconds(secs[idx]);
-			};
-			wp1.Children.Add(cmbRefreshRate);
 
 			toolbarDock.Children.Add(wp1);
 			bar1.Child = toolbarDock;
@@ -2659,7 +3659,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			chkPrevDayHlc = CreateStyledColumnToggle("PrevDay H/L/C/V", false);
 			chkTodayOhl = CreateStyledColumnToggle("Today O/H/L/V", false);
-			chkDailySma = CreateStyledColumnToggle("Daily SMA(21)", false);
 			chkPrevMp = CreateStyledColumnToggle("PrevDay MP Levels", false);
 			chkIbVals = CreateStyledColumnToggle("IB H/L/Range", false);
 			chkTodayMp = CreateStyledColumnToggle("Today MP Levels", false);
@@ -2667,7 +3666,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			wp2.Children.Add(chkPrevDayHlc);
 			wp2.Children.Add(chkTodayOhl);
-			wp2.Children.Add(chkDailySma);
 			wp2.Children.Add(chkPrevMp);
 			wp2.Children.Add(chkIbVals);
 			wp2.Children.Add(chkTodayMp);
@@ -2688,7 +3686,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				CanUserDeleteRows = false,
 				CanUserReorderColumns = true,
 				CanUserResizeColumns = true,
-				CanUserSortColumns = true,
+				CanUserSortColumns = false,
 				GridLinesVisibility = DataGridGridLinesVisibility.All,
 				HorizontalGridLinesBrush = new WpfSolidBrush(WpfColor.FromRgb(30, 41, 59)),
 				VerticalGridLinesBrush = new WpfSolidBrush(WpfColor.FromRgb(30, 41, 59)),
@@ -2699,7 +3697,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ColumnHeaderHeight = 28,
 				SelectionMode = DataGridSelectionMode.Single,
 				SelectionUnit = DataGridSelectionUnit.FullRow,
-				Background = new WpfSolidBrush(WpfColor.FromRgb(11, 15, 23))
+				Background = new WpfSolidBrush(WpfColor.FromRgb(11, 15, 23)),
+				RowBackground = new WpfSolidBrush(WpfColor.FromRgb(15, 23, 42)),
+				AlternatingRowBackground = new WpfSolidBrush(WpfColor.FromRgb(15, 23, 42)),
+				FocusVisualStyle = null
 			};
 
 			// Enable smooth hardware virtualization
@@ -2718,10 +3719,33 @@ namespace NinjaTrader.NinjaScript.Indicators
 			headerStyle.Setters.Add(new Setter(DataGridColumnHeader.BorderBrushProperty, new WpfSolidBrush(WpfColor.FromRgb(51, 65, 85))));
 			headerStyle.Setters.Add(new Setter(DataGridColumnHeader.BorderThicknessProperty, new Thickness(0, 0, 1, 1)));
 			headerStyle.Setters.Add(new Setter(DataGridColumnHeader.PaddingProperty, new Thickness(6, 4, 6, 4)));
-			headerStyle.Setters.Add(new EventSetter(DataGridColumnHeader.PreviewMouseLeftButtonUpEvent, new MouseButtonEventHandler(OnHeaderPreviewMouseLeftButtonUp)));
+			headerStyle.Setters.Add(new Setter(DataGridColumnHeader.FocusVisualStyleProperty, null));
+			headerStyle.Setters.Add(new EventSetter(System.Windows.Controls.Primitives.ButtonBase.ClickEvent, new RoutedEventHandler(OnColumnHeaderClick)));
 			grid.ColumnHeaderStyle = headerStyle;
 
 			grid.Sorting += OnGridSorting;
+			grid.SelectionChanged += (s, e) =>
+			{
+				try
+				{
+					if (btnTradingScreen != null)
+					{
+						MpScannerRow sel = grid?.SelectedItem as MpScannerRow;
+						btnTradingScreen.Content = (sel != null && !string.IsNullOrWhiteSpace(sel.Ticker))
+							? ("\u26A1 Trading Screen: " + sel.Ticker)
+							: "\u26A1 Trading Screen";
+					}
+				}
+				catch { }
+			};
+			grid.PreviewKeyDown += (s, e) =>
+			{
+				if (e.Key == Key.Enter && grid?.SelectedItem is MpScannerRow sel && !string.IsNullOrWhiteSpace(sel.Ticker))
+				{
+					OpenTickerInTradingScreen(sel.Ticker, true);
+					e.Handled = true;
+				}
+			};
 			grid.PreviewMouseLeftButtonUp += OnGridPreviewMouseLeftButtonUp;
 			grid.MouseDoubleClick += OnGridMouseDoubleClick;
 			grid.ItemsSource = observableRows;
@@ -2730,7 +3754,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			root.Children.Add(grid);
 
 			// -------------------------------------------------------------
-			// Row 4: STATUS BAR FOOTER
+			// Row 4: STATUS BAR FOOTER + COMPACT LOADING PROGRESS BAR
 			// -------------------------------------------------------------
 			Border footer = new Border
 			{
@@ -2739,17 +3763,111 @@ namespace NinjaTrader.NinjaScript.Indicators
 				BorderThickness = new Thickness(0, 1, 0, 0),
 				Padding = new Thickness(12, 5, 12, 5)
 			};
+
+			DockPanel footerDock = new DockPanel { LastChildFill = true };
+
+			panelScanProgress = new StackPanel
+			{
+				Orientation = Orientation.Horizontal,
+				VerticalAlignment = VerticalAlignment.Center,
+				Margin = new Thickness(0, 0, 14, 0),
+				Visibility = Visibility.Visible
+			};
+
+			Border progressTrack = new Border
+			{
+				Width = 136,
+				Height = 7,
+				CornerRadius = new CornerRadius(3.5),
+				Background = new WpfSolidBrush(WpfColor.FromRgb(30, 41, 59)),
+				BorderBrush = new WpfSolidBrush(WpfColor.FromRgb(51, 65, 85)),
+				BorderThickness = new Thickness(1),
+				VerticalAlignment = VerticalAlignment.Center,
+				Margin = new Thickness(0, 0, 8, 0),
+				ClipToBounds = true
+			};
+
+			System.Windows.Media.LinearGradientBrush fillGrad = new System.Windows.Media.LinearGradientBrush(
+				WpfColor.FromRgb(6, 182, 212),
+				WpfColor.FromRgb(16, 185, 129),
+				new System.Windows.Point(0, 0.5),
+				new System.Windows.Point(1, 0.5));
+			fillGrad.Freeze();
+
+			borderScanProgressFill = new Border
+			{
+				Width = 8,
+				Height = 7,
+				CornerRadius = new CornerRadius(3),
+				HorizontalAlignment = HorizontalAlignment.Left,
+				Background = fillGrad
+			};
+			progressTrack.Child = borderScanProgressFill;
+
+			txtScanProgress = new TextBlock
+			{
+				Text = "Initializing Scanner...",
+				FontSize = 11.5,
+				FontWeight = FontWeights.SemiBold,
+				VerticalAlignment = VerticalAlignment.Center,
+				Foreground = new WpfSolidBrush(WpfColor.FromRgb(56, 189, 248))
+			};
+
+			panelScanProgress.Children.Add(progressTrack);
+			panelScanProgress.Children.Add(txtScanProgress);
+			DockPanel.SetDock(panelScanProgress, Dock.Left);
+			footerDock.Children.Add(panelScanProgress);
+
 			txtStatus = new TextBlock
 			{
 				Text = "AK10X Market Profile Scanner Engine  |  Accelpix & NT8 Real-time Streaming Feed",
 				FontSize = 11.5,
+				VerticalAlignment = VerticalAlignment.Center,
+				TextTrimming = TextTrimming.CharacterEllipsis,
 				Foreground = new WpfSolidBrush(WpfColor.FromRgb(148, 163, 184))
 			};
-			footer.Child = txtStatus;
+			footerDock.Children.Add(txtStatus);
+
+			footer.Child = footerDock;
 			Grid.SetRow(footer, 4);
 			root.Children.Add(footer);
 
 			Content = root;
+		}
+
+		private void UpdateScanProgressBar()
+		{
+			if (panelScanProgress == null || txtScanProgress == null || borderScanProgressFill == null || engine == null)
+				return;
+
+			bool scanning = engine.IsScanning;
+			int total = engine.ScanTotalCount;
+			int done = engine.ScanCompletedCount;
+			double pct = engine.ScanProgressPercent;
+
+			if (scanning && total > 0)
+			{
+				lastScanCompletedDisplayTime = DateTime.Now;
+				panelScanProgress.Visibility = Visibility.Visible;
+				double fillW = Math.Max(6.0, Math.Min(134.0, (pct / 100.0) * 134.0));
+				borderScanProgressFill.Width = fillW;
+				string curSym = engine.ScanCurrentSymbol;
+				txtScanProgress.Foreground = new WpfSolidBrush(WpfColor.FromRgb(56, 189, 248));
+				txtScanProgress.Text = !string.IsNullOrEmpty(curSym)
+					? string.Format(CultureInfo.InvariantCulture, "Loading {0}/{1} ({2:0}%) \u2022 {3}", done, total, pct, curSym)
+					: string.Format(CultureInfo.InvariantCulture, "Loading {0}/{1} ({2:0}%)", done, total, pct);
+			}
+			else if (total > 0 && (DateTime.Now - lastScanCompletedDisplayTime).TotalSeconds < 3.5)
+			{
+				panelScanProgress.Visibility = Visibility.Visible;
+				borderScanProgressFill.Width = 134.0;
+				txtScanProgress.Foreground = new WpfSolidBrush(WpfColor.FromRgb(16, 185, 129));
+				txtScanProgress.Text = string.Format(CultureInfo.InvariantCulture, "\u2714 Ready {0}/{0} (100%)", total);
+			}
+			else
+			{
+				panelScanProgress.Visibility = Visibility.Collapsed;
+			}
 		}
 
 		private CheckBox CreateStyledColumnToggle(string label, bool defaultVal)
@@ -2763,7 +3881,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 				FontWeight = FontWeights.SemiBold,
 				FontSize = 11.5,
 				Foreground = new WpfSolidBrush(WpfColor.FromRgb(241, 245, 249)), // Crisp white text
-				Cursor = Cursors.Hand
+				Cursor = Cursors.Hand,
+				Focusable = false,
+				FocusVisualStyle = null
 			};
 			cb.Checked += (s, e) => { RebuildColumns(); SyncGridRowsSmoothly(); };
 			cb.Unchecked += (s, e) => { RebuildColumns(); SyncGridRowsSmoothly(); };
@@ -2781,7 +3901,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 				FontWeight = FontWeights.Bold,
 				FontSize = 11.5,
 				Foreground = new WpfSolidBrush(activeColor),
-				Cursor = Cursors.Hand
+				Cursor = Cursors.Hand,
+				Focusable = false,
+				FocusVisualStyle = null
 			};
 			return cb;
 		}
@@ -2810,20 +3932,40 @@ namespace NinjaTrader.NinjaScript.Indicators
 				Foreground = new WpfSolidBrush(fg),
 				FontWeight = bold ? FontWeights.Bold : FontWeights.SemiBold,
 				BorderThickness = new Thickness(0),
-				Cursor = Cursors.Hand
+				Cursor = Cursors.Hand,
+				Focusable = false,
+				FocusVisualStyle = null
 			};
 		}
 
-		private DateTime lastSortTime = DateTime.MinValue;
-		private string lastSortTriggeredCol = null;
+		private void UpdateSortedColumnHeaderLabels()
+		{
+			if (grid == null || grid.Columns == null)
+				return;
+
+			foreach (var c in grid.Columns)
+			{
+				string colId = c.SortMemberPath ?? "";
+				string baseHdr;
+				if (!columnBaseHeaders.TryGetValue(colId, out baseHdr))
+					baseHdr = (c.Header as string) ?? colId;
+
+				if (string.Equals(colId, sortColId, StringComparison.OrdinalIgnoreCase))
+				{
+					c.Header = baseHdr + (sortAsc ? " \u25B2" : " \u25BC");
+					c.SortDirection = sortAsc ? ListSortDirection.Ascending : ListSortDirection.Descending;
+				}
+				else
+				{
+					c.Header = baseHdr;
+					c.SortDirection = null;
+				}
+			}
+		}
 
 		private void TriggerColumnSort(string colId)
 		{
 			if (string.IsNullOrEmpty(colId)) return;
-			if ((DateTime.Now - lastSortTime).TotalMilliseconds < 250 && string.Equals(lastSortTriggeredCol, colId, StringComparison.OrdinalIgnoreCase))
-				return;
-			lastSortTime = DateTime.Now;
-			lastSortTriggeredCol = colId;
 
 			if (string.Equals(sortColId, colId, StringComparison.OrdinalIgnoreCase))
 				sortAsc = !sortAsc;
@@ -2833,23 +3975,34 @@ namespace NinjaTrader.NinjaScript.Indicators
 				sortAsc = true;
 			}
 
-			if (grid != null && grid.Columns != null)
+			UpdateSortedColumnHeaderLabels();
+			SyncGridRowsSmoothly();
+		}
+
+		private void OnColumnHeaderClick(object sender, RoutedEventArgs e)
+		{
+			try
 			{
-				foreach (var c in grid.Columns)
+				DependencyObject dep = e.OriginalSource as DependencyObject;
+				while (dep != null && !(dep is DataGridColumnHeader))
 				{
-					if (string.Equals(c.SortMemberPath, sortColId, StringComparison.OrdinalIgnoreCase) || 
-						string.Equals(c.Header as string, sortColId, StringComparison.OrdinalIgnoreCase))
-					{
-						c.SortDirection = sortAsc ? ListSortDirection.Ascending : ListSortDirection.Descending;
-					}
-					else
-					{
-						c.SortDirection = null;
-					}
+					if (dep is System.Windows.Controls.Primitives.Thumb)
+						return; // Ignore column resize gripper drags
+					dep = VisualTreeHelper.GetParent(dep);
+				}
+
+				DataGridColumnHeader header = (sender as DataGridColumnHeader) ?? (dep as DataGridColumnHeader);
+				if (header != null && header.Column != null)
+				{
+					string colId = header.Column.SortMemberPath;
+					if (string.IsNullOrEmpty(colId))
+						colId = header.Column.Header as string;
+					ReleaseScannerControlFocus();
+					TriggerColumnSort(colId);
+					e.Handled = true;
 				}
 			}
-
-			SyncGridRowsSmoothly();
+			catch { }
 		}
 
 		private void OnGridSorting(object sender, DataGridSortingEventArgs e)
@@ -2861,6 +4014,28 @@ namespace NinjaTrader.NinjaScript.Indicators
 			TriggerColumnSort(colId);
 		}
 
+		private Button btnTradingScreen;
+		private string lastScannerOpenedTicker;
+		private DateTime lastScannerOpenedUtc = DateTime.MinValue;
+
+		private void OpenTickerInTradingScreen(string ticker, bool bypassSameSymbolCooldown = false)
+		{
+			if (string.IsNullOrWhiteSpace(ticker))
+				return;
+			string clean = ticker.Trim();
+			DateTime now = DateTime.UtcNow;
+			// Prevent single-click + double-click bursts from dispatching duplicate chart launches
+			if (!bypassSameSymbolCooldown &&
+				string.Equals(lastScannerOpenedTicker, clean, StringComparison.OrdinalIgnoreCase) &&
+				(now - lastScannerOpenedUtc).TotalMilliseconds < 700.0)
+			{
+				return;
+			}
+			lastScannerOpenedTicker = clean;
+			lastScannerOpenedUtc = now;
+			NinjaTrader.NinjaScript.AddOns.AK10XChartStackerWindow.LoadUnifiedInstrumentPair(clean);
+		}
+
 		private void OnGridPreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
 		{
 			try
@@ -2868,11 +4043,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 				DependencyObject dep = e.OriginalSource as DependencyObject;
 				while (dep != null)
 				{
-					if (dep is DataGridColumnHeader || dep is System.Windows.Controls.Primitives.ScrollBar)
+					if (dep is DataGridColumnHeader ||
+						dep is System.Windows.Controls.Primitives.ScrollBar ||
+						dep is System.Windows.Controls.Primitives.Thumb ||
+						dep is System.Windows.Controls.Primitives.ButtonBase)
+					{
 						return;
+					}
 					if (dep is DataGridRow row && row.Item is MpScannerRow rowItem && !string.IsNullOrWhiteSpace(rowItem.Ticker))
 					{
-						NinjaTrader.NinjaScript.AddOns.AK10XChartStackerWindow.LoadUnifiedInstrumentPair(rowItem.Ticker);
+						OpenTickerInTradingScreen(rowItem.Ticker, false);
 						return;
 					}
 					dep = VisualTreeHelper.GetParent(dep);
@@ -2889,8 +4069,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 				DependencyObject dep = e.OriginalSource as DependencyObject;
 				while (dep != null && !(dep is DataGridRow))
 				{
-					if (dep is DataGridColumnHeader || dep is System.Windows.Controls.Primitives.ScrollBar)
+					if (dep is DataGridColumnHeader ||
+						dep is System.Windows.Controls.Primitives.ScrollBar ||
+						dep is System.Windows.Controls.Primitives.Thumb)
+					{
 						return;
+					}
 					dep = VisualTreeHelper.GetParent(dep);
 				}
 				if (dep is DataGridRow row && row.Item is MpScannerRow rowItem)
@@ -2903,7 +4087,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 				if (item != null && !string.IsNullOrWhiteSpace(item.Ticker))
 				{
-					NinjaTrader.NinjaScript.AddOns.AK10XChartStackerWindow.LoadUnifiedInstrumentPair(item.Ticker);
+					OpenTickerInTradingScreen(item.Ticker, false);
 					e.Handled = true;
 				}
 			}
@@ -2924,15 +4108,43 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
+		private static MultiBinding CreateRowCellMultiBinding(IMultiValueConverter converter)
+		{
+			MultiBinding mb = new MultiBinding
+			{
+				Converter = converter,
+				Mode = BindingMode.OneWay
+			};
+			mb.Bindings.Add(new Binding("."));
+			mb.Bindings.Add(new Binding("RowRevision"));
+			return mb;
+		}
+
 		private void RebuildColumns()
 		{
 			if (grid == null)
 				return;
 
 			bool dark = chkDarkTheme == null || chkDarkTheme.IsChecked == true;
+			WpfSolidBrush rowBg = dark ? new WpfSolidBrush(WpfColor.FromRgb(15, 23, 42)) : new WpfSolidBrush(WpfColor.FromRgb(255, 255, 255));
+			rowBg.Freeze();
 			grid.Background = dark ? new WpfSolidBrush(WpfColor.FromRgb(11, 15, 23)) : new WpfSolidBrush(WpfColor.FromRgb(255, 255, 255));
+			grid.RowBackground = rowBg;
+			grid.AlternatingRowBackground = rowBg;
 			grid.HorizontalGridLinesBrush = dark ? new WpfSolidBrush(WpfColor.FromRgb(30, 41, 59)) : new WpfSolidBrush(WpfColor.FromRgb(218, 222, 228));
 			grid.VerticalGridLinesBrush = dark ? new WpfSolidBrush(WpfColor.FromRgb(30, 41, 59)) : new WpfSolidBrush(WpfColor.FromRgb(218, 222, 228));
+
+			Style rowStyle = new Style(typeof(DataGridRow));
+			rowStyle.Setters.Add(new Setter(DataGridRow.BackgroundProperty, rowBg));
+			rowStyle.Setters.Add(new Setter(DataGridRow.BorderThicknessProperty, new Thickness(0)));
+			rowStyle.Setters.Add(new Setter(DataGridRow.FocusVisualStyleProperty, null));
+			grid.RowStyle = rowStyle;
+
+			Style cellStyle = new Style(typeof(DataGridCell));
+			cellStyle.Setters.Add(new Setter(DataGridCell.BorderThicknessProperty, new Thickness(0)));
+			cellStyle.Setters.Add(new Setter(DataGridCell.PaddingProperty, new Thickness(0)));
+			cellStyle.Setters.Add(new Setter(DataGridCell.FocusVisualStyleProperty, null));
+			grid.CellStyle = cellStyle;
 
 			List<MpColumnDef> defs = MarketProfileScannerEngine.BuildColumnDefinitions(
 				engine.SmaDays,
@@ -2945,34 +4157,36 @@ namespace NinjaTrader.NinjaScript.Indicators
 				chkTodayMp != null && chkTodayMp.IsChecked == true,
 				engine.PeriodicityMinutes);
 
+			columnBaseHeaders.Clear();
 			grid.Columns.Clear();
 			for (int i = 0; i < defs.Count; i++)
 			{
 				MpColumnDef colDef = defs[i];
+				columnBaseHeaders[colDef.Id] = colDef.Header;
+				bool isLastCol = (i == defs.Count - 1);
+				bool isSortedCol = string.Equals(colDef.Id, sortColId, StringComparison.OrdinalIgnoreCase);
+
 				DataGridTemplateColumn col = new DataGridTemplateColumn
 				{
-					Header = colDef.Header,
+					Header = isSortedCol ? (colDef.Header + (sortAsc ? " \u25B2" : " \u25BC")) : colDef.Header,
 					SortMemberPath = colDef.Id,
 					CanUserSort = true,
-					Width = new DataGridLength(colDef.Width)
+					MinWidth = Math.Max(48, isLastCol ? colDef.Width : Math.Min(colDef.Width, 64)),
+					Width = isLastCol
+						? new DataGridLength(1, DataGridLengthUnitType.Star)
+						: new DataGridLength(colDef.Width)
 				};
+				if (isSortedCol)
+					col.SortDirection = sortAsc ? ListSortDirection.Ascending : ListSortDirection.Descending;
 
 				FrameworkElementFactory borderFactory = new FrameworkElementFactory(typeof(Border));
-				borderFactory.SetBinding(Border.BackgroundProperty, new Binding(".")
-				{
-					Converter = new MpCellBrushConverter(colDef, true, dark)
-				});
-				borderFactory.SetValue(Border.PaddingProperty, new Thickness(5, 1, 5, 1));
+				borderFactory.SetBinding(Border.BackgroundProperty, CreateRowCellMultiBinding(new MpCellBrushConverter(colDef, true, dark)));
+				borderFactory.SetBinding(Border.ToolTipProperty, CreateRowCellMultiBinding(new MpCellTextConverter(colDef, true)));
+				borderFactory.SetValue(Border.PaddingProperty, new Thickness(4, 1, 4, 1));
 
 				FrameworkElementFactory textFactory = new FrameworkElementFactory(typeof(TextBlock));
-				textFactory.SetBinding(TextBlock.TextProperty, new Binding(".")
-				{
-					Converter = new MpCellTextConverter(colDef)
-				});
-				textFactory.SetBinding(TextBlock.ForegroundProperty, new Binding(".")
-				{
-					Converter = new MpCellBrushConverter(colDef, false, dark)
-				});
+				textFactory.SetBinding(TextBlock.TextProperty, CreateRowCellMultiBinding(new MpCellTextConverter(colDef)));
+				textFactory.SetBinding(TextBlock.ForegroundProperty, CreateRowCellMultiBinding(new MpCellBrushConverter(colDef, false, dark)));
 				textFactory.SetValue(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center);
 				textFactory.SetValue(TextBlock.TextAlignmentProperty, (colDef.Id == "DateTime" || !colDef.IsNumeric) ? System.Windows.TextAlignment.Left : System.Windows.TextAlignment.Right);
 				textFactory.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
@@ -3003,53 +4217,33 @@ namespace NinjaTrader.NinjaScript.Indicators
 				chkTodayMp != null && chkTodayMp.IsChecked == true,
 				engine.PeriodicityMinutes);
 
-			MpColumnDef sortCol = defs.FirstOrDefault(c => 
-				string.Equals(c.Id, sortColId, StringComparison.OrdinalIgnoreCase) || 
-				string.Equals(c.Header, sortColId, StringComparison.OrdinalIgnoreCase)) ?? defs[0];
+			MpColumnDef sortCol = defs.FirstOrDefault(c => string.Equals(c.Id, sortColId, StringComparison.OrdinalIgnoreCase))
+				?? defs.FirstOrDefault(c => string.Equals(c.Header, sortColId, StringComparison.OrdinalIgnoreCase))
+				?? defs[0];
 			List<MpScannerRow> freshRows = engine.GetFilteredAndSortedRows(
 				fp, q, sortCol.Id, sortAsc, sortCol.TextSelector, sortCol.SortNumSelector, sortCol.IsNumeric);
 
-			// Synchronize observableRows in place to prevent layout churn
-			Dictionary<string, MpScannerRow> existingMap = new Dictionary<string, MpScannerRow>(StringComparer.OrdinalIgnoreCase);
-			for (int i = 0; i < observableRows.Count; i++)
+			// Ultra-fast zero-flicker in-place row synchronization (works for BOTH live ticks AND column sorting without destroying DataGridRow visual elements!)
+			while (observableRows.Count > freshRows.Count)
 			{
-				MpScannerRow r = observableRows[i];
-				if (r != null && !string.IsNullOrEmpty(r.Ticker))
-					existingMap[r.Ticker] = r;
+				observableRows.RemoveAt(observableRows.Count - 1);
 			}
-
-			// If count differs or sorting/filtering changed the list sequence
-			bool orderChanged = observableRows.Count != freshRows.Count;
-			if (!orderChanged)
+			for (int i = 0; i < freshRows.Count; i++)
 			{
-				for (int i = 0; i < freshRows.Count; i++)
+				MpScannerRow fresh = freshRows[i];
+				if (i < observableRows.Count)
 				{
-					if (observableRows[i].Ticker != freshRows[i].Ticker)
-					{
-						orderChanged = true;
-						break;
-					}
+					observableRows[i].CopyFrom(fresh, true);
+				}
+				else
+				{
+					MpScannerRow uiRow = new MpScannerRow();
+					uiRow.CopyFrom(fresh, true);
+					observableRows.Add(uiRow);
 				}
 			}
 
-			if (orderChanged)
-			{
-				observableRows.Clear();
-				for (int i = 0; i < freshRows.Count; i++)
-				{
-					observableRows.Add(freshRows[i]);
-					freshRows[i].NotifyAllPropertiesChanged();
-				}
-			}
-			else
-			{
-				// In-place property update: ultra fast, zero visual flicker!
-				for (int i = 0; i < freshRows.Count; i++)
-				{
-					MpScannerRow fresh = freshRows[i];
-					observableRows[i].CopyFrom(fresh);
-				}
-			}
+			UpdateScanProgressBar();
 
 			if (txtHeaderClock != null)
 				txtHeaderClock.Text = DateTime.Now.ToString("HH:mm:ss");
@@ -3195,27 +4389,39 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
-		private sealed class MpCellTextConverter : IValueConverter
+		private sealed class MpCellTextConverter : IValueConverter, IMultiValueConverter
 		{
 			private readonly MpColumnDef col;
-			public MpCellTextConverter(MpColumnDef c) { col = c; }
+			private readonly bool nullWhenEmpty;
+			public MpCellTextConverter(MpColumnDef c, bool returnNullIfEmpty = false) { col = c; nullWhenEmpty = returnNullIfEmpty; }
 			public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
 			{
 				MpScannerRow r = value as MpScannerRow;
-				if (r == null || col == null || col.TextSelector == null) return "";
-				return col.TextSelector(r) ?? "";
+				if (r == null || col == null || col.TextSelector == null) return nullWhenEmpty ? null : "";
+				string s = col.TextSelector(r) ?? "";
+				return (nullWhenEmpty && s.Length == 0) ? null : s;
+			}
+			public object Convert(object[] values, Type targetType, object parameter, CultureInfo culture)
+			{
+				MpScannerRow r = (values != null && values.Length > 0) ? (values[0] as MpScannerRow) : null;
+				return Convert(r, targetType, parameter, culture);
 			}
 			public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) { throw new NotSupportedException(); }
+			public object[] ConvertBack(object value, Type[] targetTypes, object parameter, CultureInfo culture) { throw new NotSupportedException(); }
 		}
 
-		private sealed class MpCellBrushConverter : IValueConverter
+		private sealed class MpCellBrushConverter : IValueConverter, IMultiValueConverter
 		{
 			private readonly MpColumnDef col;
 			private readonly bool isBackground;
 			private readonly bool isDark;
 
+			private static readonly WpfSolidBrush BrLightGreenBg = Freeze(new WpfSolidBrush(WpfColor.FromRgb(34, 197, 94)));
 			private static readonly WpfSolidBrush BrGreenBg = Freeze(new WpfSolidBrush(WpfColor.FromRgb(0, 168, 68)));
+			private static readonly WpfSolidBrush BrDarkGreenBg = Freeze(new WpfSolidBrush(WpfColor.FromRgb(0, 128, 52)));
+			private static readonly WpfSolidBrush BrLightRedOrangeBg = Freeze(new WpfSolidBrush(WpfColor.FromRgb(249, 115, 52)));
 			private static readonly WpfSolidBrush BrRedOrangeBg = Freeze(new WpfSolidBrush(WpfColor.FromRgb(230, 81, 0)));
+			private static readonly WpfSolidBrush BrDarkRedOrangeBg = Freeze(new WpfSolidBrush(WpfColor.FromRgb(185, 45, 0)));
 			private static readonly WpfSolidBrush BrYellowBg = Freeze(new WpfSolidBrush(WpfColor.FromRgb(250, 204, 21)));
 			private static readonly WpfSolidBrush BrGreyBg = Freeze(new WpfSolidBrush(WpfColor.FromRgb(51, 65, 85)));
 			private static readonly WpfSolidBrush BrWhite = Freeze(new WpfSolidBrush(WpfColors.White));
@@ -3246,8 +4452,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 				{
 					switch (tone)
 					{
+						case MpCellTone.BgLightGreen: return BrLightGreenBg;
 						case MpCellTone.BgGreen: return BrGreenBg;
+						case MpCellTone.BgDarkGreen: return BrDarkGreenBg;
+						case MpCellTone.BgLightRedOrange: return BrLightRedOrangeBg;
 						case MpCellTone.BgRedOrange: return BrRedOrangeBg;
+						case MpCellTone.BgDarkRedOrange: return BrDarkRedOrangeBg;
 						case MpCellTone.BgYellow: return BrYellowBg;
 						case MpCellTone.BgGrey: return BrGreyBg;
 						default: return isDark ? BrDarkBg : BrWhite;
@@ -3257,8 +4467,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 				{
 					switch (tone)
 					{
+						case MpCellTone.BgLightGreen:
 						case MpCellTone.BgGreen:
+						case MpCellTone.BgDarkGreen:
+						case MpCellTone.BgLightRedOrange:
 						case MpCellTone.BgRedOrange:
+						case MpCellTone.BgDarkRedOrange:
 							return BrWhite;
 						case MpCellTone.BgYellow:
 							return BrBlack;
@@ -3276,7 +4490,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 			}
 
+			public object Convert(object[] values, Type targetType, object parameter, CultureInfo culture)
+			{
+				MpScannerRow r = (values != null && values.Length > 0) ? (values[0] as MpScannerRow) : null;
+				return Convert(r, targetType, parameter, culture);
+			}
+
 			public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) { throw new NotSupportedException(); }
+			public object[] ConvertBack(object value, Type[] targetTypes, object parameter, CultureInfo culture) { throw new NotSupportedException(); }
 		}
 	}
 	#endregion
@@ -3470,7 +4691,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 					ValueAreaPercent = ProfileDistributionOneSigma,
 					DefaultMinTickSize = Math.Max(0.0001, MinTickSizeParam)
 				};
-				scannerEngine.RefreshAll(false);
+				scannerEngine.OnScanProgressChanged += () =>
+				{
+					if (ChartControl != null)
+						ChartControl.Dispatcher.InvokeAsync(() => ChartControl?.InvalidateVisual());
+				};
+				scannerEngine.OnRowsUpdated += () =>
+				{
+					if (ChartControl != null)
+						ChartControl.Dispatcher.InvokeAsync(() => ChartControl?.InvalidateVisual());
+				};
+				Task.Run(() =>
+				{
+					try { scannerEngine?.RefreshAll(false); } catch { }
+				});
 
 				if (ChartControl != null)
 				{
@@ -3531,7 +4765,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (AutoRefreshEnabled && scannerEngine != null)
 				{
 					liveRefreshPulse++;
-					scannerEngine.RefreshAll(true);
+					var eng = scannerEngine;
+					Task.Run(() =>
+					{
+						try { eng.RefreshAll(true); } catch { }
+					});
 					if (ChartControl != null)
 						ChartControl.InvalidateVisual();
 				}
@@ -3554,7 +4792,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				return;
 
 			DateTime t = Time[0];
-			DateTime slotBar = MarketProfileScannerEngine.GetPeriodicityBarTime(t, PeriodicityMinutes);
+			DateTime effT = (BarsPeriod != null && BarsPeriod.BarsPeriodType == BarsPeriodType.Minute && t.Second == 0) ? t.AddSeconds(-1) : t;
+			DateTime slotBar = MarketProfileScannerEngine.GetPeriodicityBarTime(effT, PeriodicityMinutes);
 
 			if (primary30MinSamples.Count > 0 && primary30MinSamples[primary30MinSamples.Count - 1].Time == slotBar)
 			{
@@ -3636,6 +4875,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					if (b.ActionId == "SCAN")
 					{
 						liveRefreshPulse++;
+						scannerEngine.TriggerStaggeredResubscribe(true);
 						scannerEngine.RefreshAll(true);
 					}
 					else if (b.ActionId == "AUTO")
@@ -3739,8 +4979,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 			using (DxBrush bgHeader = new DxBrush(RenderTarget, light ? new DxColor(242, 245, 250, 255) : new DxColor(24, 33, 48, 255)))
 			using (DxBrush brGridLine = new DxBrush(RenderTarget, light ? new DxColor(216, 220, 228, 255) : new DxColor(36, 46, 62, 255)))
 			using (DxBrush brRowAlt = new DxBrush(RenderTarget, light ? new DxColor(250, 252, 255, 255) : new DxColor(15, 21, 30, 255)))
+			using (DxBrush brLightGreenBg = new DxBrush(RenderTarget, new DxColor(34, 197, 94, 255)))
 			using (DxBrush brGreenBg = new DxBrush(RenderTarget, new DxColor(0, 168, 68, 255)))
+			using (DxBrush brDarkGreenBg = new DxBrush(RenderTarget, new DxColor(0, 128, 52, 255)))
+			using (DxBrush brLightOrangeBg = new DxBrush(RenderTarget, new DxColor(249, 115, 52, 255)))
 			using (DxBrush brOrangeBg = new DxBrush(RenderTarget, new DxColor(230, 81, 0, 255)))
+			using (DxBrush brDarkOrangeBg = new DxBrush(RenderTarget, new DxColor(185, 45, 0, 255)))
 			using (DxBrush brYellowBg = new DxBrush(RenderTarget, new DxColor(250, 204, 21, 255)))
 			using (DxBrush brGreyBg = new DxBrush(RenderTarget, new DxColor(51, 65, 85, 255)))
 			using (DxBrush brWhite = new DxBrush(RenderTarget, new DxColor(255, 255, 255, 255)))
@@ -3777,7 +5021,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				DrawToolbarBtn(bx, by, 92f, bh, autoTxt, "AUTO", AutoRefreshEnabled ? brBtnActive : brBtn, AutoRefreshEnabled ? brWhite : (light ? brBlack : brLightText), brGridLine, tfHeader);
 				bx += 98f;
 
-				string wlName = scannerEngine.WatchlistPreset == MpWatchlistPreset.AccelpixNseCore44 ? "NSE Core 44"
+				string wlName = scannerEngine.WatchlistPreset == MpWatchlistPreset.AccelpixNseCore44 ? "NSE Core 52"
 					: (scannerEngine.WatchlistPreset == MpWatchlistPreset.AccelpixNseNearMonth ? "NSE NearMonth (_I)"
 					: (scannerEngine.WatchlistPreset == MpWatchlistPreset.AccelpixNseIndices ? "NSE Indices"
 					: (scannerEngine.WatchlistPreset == MpWatchlistPreset.AccelpixAllFutures ? "All Accelpix"
@@ -3790,7 +5034,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				DrawToolbarBtn(bx, by, 142f, bh, fltName, "FILTER", brBtn, light ? brBlack : brLightText, brGridLine, tfHeader);
 				bx += 148f;
 
-				string colMode = DisplayPrevDayMpLevels ? "Cols: Full (38)" : "Cols: Standard (21)";
+				string colMode = DisplayPrevDayMpLevels ? "Cols: Full (36)" : "Cols: Standard (20)";
 				DrawToolbarBtn(bx, by, 124f, bh, colMode, "COLUMNS", brBtn, light ? brBlack : brLightText, brGridLine, tfHeader);
 				bx += 130f;
 
@@ -3868,12 +5112,28 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 							switch (tone)
 							{
+								case MpCellTone.BgLightGreen:
+									cellBg = brLightGreenBg;
+									cellFg = brWhite;
+									break;
 								case MpCellTone.BgGreen:
 									cellBg = brGreenBg;
 									cellFg = brWhite;
 									break;
+								case MpCellTone.BgDarkGreen:
+									cellBg = brDarkGreenBg;
+									cellFg = brWhite;
+									break;
+								case MpCellTone.BgLightRedOrange:
+									cellBg = brLightOrangeBg;
+									cellFg = brWhite;
+									break;
 								case MpCellTone.BgRedOrange:
 									cellBg = brOrangeBg;
+									cellFg = brWhite;
+									break;
+								case MpCellTone.BgDarkRedOrange:
+									cellBg = brDarkOrangeBg;
 									cellFg = brWhite;
 									break;
 								case MpCellTone.BgYellow:
@@ -3911,6 +5171,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 				RenderTarget.FillRectangle(new RectangleF(x0, fy, w, footerH), bgTopBar);
 				RenderTarget.DrawLine(new Vector2(x0, fy), new Vector2(x0 + w, fy), brGridLine, 1f);
 
+				float statusStartX = x0 + 8f;
+				if (scannerEngine != null && scannerEngine.IsScanning && scannerEngine.ScanTotalCount > 0)
+				{
+					float barW = 120f;
+					float barH = 7f;
+					float barY = fy + (footerH - barH) * 0.5f;
+					float pct = (float)(scannerEngine.ScanProgressPercent / 100.0);
+					float fillW = Math.Max(4f, Math.Min(barW - 2f, pct * (barW - 2f)));
+					RenderTarget.DrawRectangle(new RectangleF(statusStartX, barY, barW, barH), brGridLine, 1f);
+					RenderTarget.FillRectangle(new RectangleF(statusStartX + 1f, barY + 1f, fillW, barH - 2f), brGreenBg);
+					string progTxt = string.Format(CultureInfo.InvariantCulture, "Loading {0}/{1} ({2:0}%)", scannerEngine.ScanCompletedCount, scannerEngine.ScanTotalCount, scannerEngine.ScanProgressPercent);
+					DrawClippedText(progTxt, statusStartX + barW + 6f, fy + 3f, 150f, footerH - 4f, tfHeader, brFgGreen, false);
+					statusStartX += barW + 158f;
+				}
+
 				string footerText = string.Format(
 					CultureInfo.InvariantCulture,
 					"AK10X Market Profile Scanner  |  Symbols: {0} (Showing {1}-{2})  |  Periodicity: {3}-min TPO  |  Live Refresh #{4} ({5:HH:mm:ss})  |  MouseWheel: Scroll Rows, Shift+Wheel: Scroll Columns",
@@ -3920,7 +5195,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					PeriodicityMinutes,
 					liveRefreshPulse,
 					DateTime.Now);
-				DrawClippedText(footerText, x0 + 8f, fy + 3f, w - 16f, footerH - 4f, tfHeader, light ? brBlack : brLightText, false);
+				DrawClippedText(footerText, statusStartX, fy + 3f, Math.Max(20f, w - (statusStartX - x0) - 8f), footerH - 4f, tfHeader, light ? brBlack : brLightText, false);
 			}
 		}
 

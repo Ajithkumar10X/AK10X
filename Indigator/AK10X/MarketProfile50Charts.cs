@@ -998,10 +998,22 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
+		private const float MinReadableTpoRowPx = 11.8f;
+		private const float MaxComfortableTpoRowPx = 16.5f;
+
 		public override void OnCalculateMinMax()
 		{
 			double minVal = double.MaxValue;
 			double maxVal = double.MinValue;
+			double baseStep = 1.0;
+			float panelLeft = ChartPanel != null ? (float)ChartPanel.X : 0f;
+			float panelRight = ChartPanel != null ? (float)(ChartPanel.X + ChartPanel.W) : 1800f;
+			float panelH = ChartPanel != null ? (float)ChartPanel.H : 820f;
+			float topPadPx = (ShowTopLeftBox && !IsTopLeftBoxMinimized) ? 108f : 62f;
+			float botPadPx = (ShowSummary && FixSummaryBoxAtBottom)
+				? (IsSummaryBoxMinimized ? 78f : 164f)
+				: 46f;
+			double maxSingleSessionSpan = 0.0;
 
 			lock (profileLock)
 			{
@@ -1011,21 +1023,23 @@ namespace NinjaTrader.NinjaScript.Indicators
 					List<DayProfile> allSessions = BuildDisplaySessions(rawSessions);
 					if (allSessions.Count > 0)
 					{
-						double step = GetPriceStep();
-						float panelLeft = ChartPanel != null ? (float)ChartPanel.X : 0f;
-						float panelRight = ChartPanel != null ? (float)(ChartPanel.X + ChartPanel.W) : 1800f;
-						List<DateColumnGroup> dateGroups = BuildDateColumnGroups(allSessions, step, panelLeft, panelRight);
+						baseStep = GetPriceStep();
+						List<DateColumnGroup> dateGroups = BuildDateColumnGroups(allSessions, baseStep, panelLeft, panelRight);
 
 						for (int g = 0; g < dateGroups.Count; g++)
 						{
 							DateColumnGroup group = dateGroups[g];
-							if (group.RightX < panelLeft || group.LeftX > panelRight)
+							if (group.RightX < panelLeft + 15f || group.LeftX > panelRight - 180f)
 								continue;
 							for (int s = 0; s < group.Sessions.Count; s++)
 							{
 								DayProfile d = group.Sessions[s];
+								if (d.IbX < panelLeft + 4f || d.CollapsedRightX > panelRight - 178f)
+									continue;
 								if (d.Low < minVal) minVal = d.Low;
 								if (d.High > maxVal) maxVal = d.High;
+								double sSpan = Math.Max(0.0, d.High - d.Low);
+								if (sSpan > maxSingleSessionSpan) maxSingleSessionSpan = sSpan;
 							}
 						}
 
@@ -1037,6 +1051,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 								DayProfile d = allSessions[i];
 								if (d.Low < minVal) minVal = d.Low;
 								if (d.High > maxVal) maxVal = d.High;
+								double sSpan = Math.Max(0.0, d.High - d.Low);
+								if (sSpan > maxSingleSessionSpan) maxSingleSessionSpan = sSpan;
 							}
 						}
 					}
@@ -1045,10 +1061,31 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			if (minVal < double.MaxValue && maxVal > double.MinValue)
 			{
-				double step = GetPriceStep();
-				double span = Math.Max(step * 10.0, maxVal - minVal);
-				MinValue = minVal - span * 0.28;
-				MaxValue = maxVal + span * 0.15;
+				float usableH = Math.Max(160f, panelH - topPadPx - botPadPx);
+				double rawPriceSpan = Math.Max(baseStep * 6.0, maxVal - minVal);
+				double rawRows = rawPriceSpan / baseStep + 2.0;
+				float rawPxPerRow = usableH / (float)Math.Max(1.0, rawRows);
+				int groupMult = rawPxPerRow < MinReadableTpoRowPx
+					? Math.Max(1, (int)Math.Ceiling(MinReadableTpoRowPx / Math.Max(0.4f, rawPxPerRow)))
+					: 1;
+				int reqMult = (int)Math.Ceiling((maxSingleSessionSpan / baseStep + 1.0) / Math.Max(12.0, usableH / MinReadableTpoRowPx));
+				if (reqMult > groupMult)
+					groupMult = reqMult;
+				double renderStep = baseStep * groupMult;
+
+				double lowEdge = minVal - renderStep * 0.6;
+				double highEdge = maxVal + renderStep * 0.6;
+				double minComfortableSpan = (usableH / MaxComfortableTpoRowPx) * renderStep;
+				if (highEdge - lowEdge < minComfortableSpan)
+				{
+					double mid = 0.5 * (highEdge + lowEdge);
+					lowEdge = mid - 0.5 * minComfortableSpan;
+					highEdge = mid + 0.5 * minComfortableSpan;
+				}
+
+				double ptsPerPx = (highEdge - lowEdge) / usableH;
+				MaxValue = highEdge + topPadPx * ptsPerPx;
+				MinValue = lowEdge - botPadPx * ptsPerPx;
 			}
 		}
 
@@ -1651,27 +1688,40 @@ namespace NinjaTrader.NinjaScript.Indicators
 			sliceVolVal = low;
 		}
 
-		// Determines whether a single-print bin is a Buying Single Print (true) or Selling Single Print (false)
-		private static bool IsBuyingSinglePrintBin(DayProfile day, int bin, PriceRow row, int minBin, int maxBin, int pocBin)
+		// Exact 50chartsMP.dll (10030E3B..10030EA5) Single Print direction classification:
+		// Compares session Close against the Single Print zone [startBin..endBin], with fallback to period slice and session direction.
+		private static bool IsBuyingSinglePrintZone(DayProfile day, int startBin, int endBin, int periodIndex, int pocBin)
 		{
-			int totalRange = Math.Max(1, maxBin - minBin);
-			// Bottom tail single prints are Buying tail single prints; top tail single prints are Selling tail single prints
-			if (bin <= minBin + Math.Max(1, totalRange / 6))
-				return true;
-			if (bin >= maxBin - Math.Max(1, totalRange / 6))
-				return false;
-
-			if (row != null && row.Periods.Count == 1)
+			if (day != null)
 			{
-				int pIdx = row.Periods.First();
+				double step = day.EffectiveStep;
+				if (step > 0)
+				{
+					int closeBin = PriceToBin(day.Close, step);
+					if (closeBin > endBin)
+						return true;
+					if (closeBin < startBin)
+						return false;
+				}
+
 				PeriodSlice slice;
-				if (day.PeriodSlices.TryGetValue(pIdx, out slice))
+				if (day.PeriodSlices.TryGetValue(periodIndex, out slice))
 				{
 					if (Math.Abs(slice.Close - slice.Open) > 1e-9)
 						return slice.Close > slice.Open;
 				}
+
+				if (Math.Abs(day.Close - day.Open) > 1e-9)
+					return day.Close >= day.Open;
 			}
-			return bin <= pocBin;
+			return ((startBin + endBin) / 2) <= pocBin;
+		}
+
+		// Determines whether a single-print bin is a Buying Single Print (true) or Selling Single Print (false)
+		private static bool IsBuyingSinglePrintBin(DayProfile day, int bin, PriceRow row, int minBin, int maxBin, int pocBin)
+		{
+			int pIdx = (row != null && row.Periods.Count > 0) ? row.Periods.First() : 0;
+			return IsBuyingSinglePrintZone(day, bin, bin, pIdx, pocBin);
 		}
 
 		// Builds contiguous interior Buying & Selling Single Print zones strictly between the multi-TPO profile body
@@ -1712,8 +1762,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (day.Rows.TryGetValue(b, out row) && row.Periods.Count == 1)
 				{
 					int pIdx = row.Periods.First();
-					bool isBuy = IsBuyingSinglePrintBin(day, b, row, minBin, maxBin, pocBin);
-					if (current != null && current.EndBin == b - 1 && current.IsBuying == isBuy && current.PeriodIndex == pIdx)
+					if (current != null && current.EndBin == b - 1 && current.PeriodIndex == pIdx)
 					{
 						current.EndBin = b;
 					}
@@ -1723,7 +1772,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 						{
 							StartBin = b,
 							EndBin = b,
-							IsBuying = isBuy,
 							PeriodIndex = pIdx
 						};
 						zones.Add(current);
@@ -1734,6 +1782,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 					current = null;
 				}
 			}
+
+			for (int i = 0; i < zones.Count; i++)
+			{
+				SinglePrintZone z = zones[i];
+				z.IsBuying = IsBuyingSinglePrintZone(day, z.StartBin, z.EndBin, z.PeriodIndex, pocBin);
+			}
+
 			return zones;
 		}
 
@@ -2288,18 +2343,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return merged;
 		}
 
-		private DayProfile NormalizeSessionRowCount(DayProfile src, double baseStep)
+		private void EnsureSessionRowContinuity(DayProfile src, double baseStep)
 		{
 			if (src == null || src.Rows.Count == 0)
 			{
 				if (src != null)
 					src.EffectiveStep = baseStep;
-				return src;
+				return;
 			}
 
 			int minB = src.Rows.Keys.Min();
 			int maxB = src.Rows.Keys.Max();
-			// Ensure every integer bin between minB and maxB exists in src.Rows so no profile EVER has a missing-row gap
 			for (int b = minB + 1; b < maxB; b++)
 			{
 				if (!src.Rows.ContainsKey(b))
@@ -2319,15 +2373,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 					src.Rows.Add(b, bridgeRow);
 				}
 			}
+			src.EffectiveStep = baseStep;
+		}
 
-			int rawSpan = maxB - minB + 1;
-			if ((TpoSize > 0 && EffectiveProfileMode == MarketProfilePeriodMode.Daily && rawSpan <= 65) || rawSpan <= 44)
+		private static DayProfile BuildRenderSessionProfile(DayProfile src, double baseStep, int groupMult)
+		{
+			if (src == null || src.Rows.Count == 0 || groupMult <= 1)
 			{
-				src.EffectiveStep = baseStep;
+				if (src != null)
+					src.EffectiveStep = baseStep;
 				return src;
 			}
 
-			int groupMult = Math.Max(2, (int)Math.Ceiling(rawSpan / 30.0));
 			double newStep = baseStep * groupMult;
 
 			DayProfile dst = new DayProfile
@@ -2461,6 +2518,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			groups.Sort((a, b) => a.Date.CompareTo(b.Date));
 
+			float charCellW = Math.Max(9.8f, Math.Min(11.6f, FontSize * 0.90f));
+			float volReserveW = ShowVolumeProfile ? 42f : 0f;
+			float minCollapsedW = Math.Max(256f, (float)ProfileWidth);
+
 			float totalStripWidth = 0f;
 			for (int g = 0; g < groups.Count; g++)
 			{
@@ -2478,18 +2539,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 					int maxRowCells = day.Rows.Count > 0
 						? Math.Max(8, day.Rows.Max(kv => kv.Value.Periods.Count + (kv.Key == closeBin ? 1 : 0)))
 						: 12;
-					float collapsedW = Math.Max(238f, maxRowCells * 8.6f + (ShowVolumeProfile ? 38f : 0f) + 24f);
+					float collapsedW = Math.Max(minCollapsedW, maxRowCells * charCellW + volReserveW + 28f);
 					float splitExtraW = 0f;
 					if (day.IsSplitExpanded && day.PeriodSlices.Count > 0)
 					{
 						int sliceCols = Math.Max(5, day.PeriodSlices.Count + 1);
 						int volBarCount = ShowVolumeProfile ? Math.Min(3, Math.Max(1, day.PeriodSlices.Count)) : 0;
 						float volAreaW = volBarCount > 0 ? (volBarCount * 30f + (volBarCount - 1) * 6f + 8f) : 0f;
-						splitExtraW = Math.Max(205f, sliceCols * 9.6f + volAreaW + 26f);
+						splitExtraW = Math.Max(220f, sliceCols * 10.4f + volAreaW + 28f);
 					}
 					groupW += collapsedW + splitExtraW;
 				}
-				grp.Width = Math.Max(238f, groupW);
+				grp.Width = Math.Max(minCollapsedW, groupW);
 				totalStripWidth += grp.Width;
 			}
 
@@ -2551,14 +2612,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 					int maxRowCells = day.Rows.Count > 0
 						? Math.Max(8, day.Rows.Max(kv => kv.Value.Periods.Count + (kv.Key == closeBin ? 1 : 0)))
 						: 12;
-					float collapsedW = Math.Max(238f, maxRowCells * 8.6f + (ShowVolumeProfile ? 38f : 0f) + 24f);
+					float collapsedW = Math.Max(minCollapsedW, maxRowCells * charCellW + volReserveW + 28f);
 					float splitExtraW = 0f;
 					if (day.IsSplitExpanded && day.PeriodSlices.Count > 0)
 					{
 						int sliceCols = Math.Max(5, day.PeriodSlices.Count + 1);
 						int volBarCount = ShowVolumeProfile ? Math.Min(3, Math.Max(1, day.PeriodSlices.Count)) : 0;
 						float volAreaW = volBarCount > 0 ? (volBarCount * 30f + (volBarCount - 1) * 6f + 8f) : 0f;
-						splitExtraW = Math.Max(205f, sliceCols * 9.6f + volAreaW + 26f);
+						splitExtraW = Math.Max(220f, sliceCols * 10.4f + volAreaW + 28f);
 					}
 					float slotWidth = collapsedW + splitExtraW;
 					day.SlotLeftX = slotX;
@@ -2656,18 +2717,80 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (allSessions.Count == 0)
 					return;
 
-				double step = GetPriceStep();
+				double baseStep = GetPriceStep();
 				for (int i = 0; i < allSessions.Count; i++)
-					allSessions[i] = NormalizeSessionRowCount(allSessions[i], step);
+					EnsureSessionRowContinuity(allSessions[i], baseStep);
 
 				float panelLeft = (float)ChartPanel.X;
 				float panelRight = (float)(ChartPanel.X + ChartPanel.W);
 				float panelTop = (float)ChartPanel.Y;
 				float panelBottom = (float)(ChartPanel.Y + ChartPanel.H);
 
-				List<DateColumnGroup> dateGroups = BuildDateColumnGroups(allSessions, step, panelLeft, panelRight);
+				List<DateColumnGroup> dateGroups = BuildDateColumnGroups(allSessions, baseStep, panelLeft, panelRight);
 				if (dateGroups.Count == 0)
 					return;
+
+				double prelimMinPrice = double.MaxValue;
+				double prelimMaxPrice = double.MinValue;
+				for (int g = 0; g < dateGroups.Count; g++)
+				{
+					DateColumnGroup grp = dateGroups[g];
+					if (grp.RightX < panelLeft + 30f || grp.LeftX > panelRight - 180f)
+						continue;
+					for (int s = 0; s < grp.Sessions.Count; s++)
+					{
+						DayProfile d = grp.Sessions[s];
+						if (d.IbX < panelLeft + 4f || d.CollapsedRightX > panelRight - 178f)
+							continue;
+						if (d.Low < prelimMinPrice) prelimMinPrice = d.Low;
+						if (d.High > prelimMaxPrice) prelimMaxPrice = d.High;
+					}
+				}
+				if (prelimMinPrice == double.MaxValue || prelimMaxPrice == double.MinValue)
+				{
+					int tailStart = Math.Max(0, allSessions.Count - 3);
+					for (int i = tailStart; i < allSessions.Count; i++)
+					{
+						DayProfile d = allSessions[i];
+						if (d.Low < prelimMinPrice) prelimMinPrice = d.Low;
+						if (d.High > prelimMaxPrice) prelimMaxPrice = d.High;
+					}
+				}
+
+				float bottomDockReserve = (ShowSummary && FixSummaryBoxAtBottom)
+					? (IsSummaryBoxMinimized ? 78f : 164f)
+					: 46f;
+				float topBoxReserve = (ShowTopLeftBox && !IsTopLeftBoxMinimized) ? 108f : 62f;
+				float usableTopY = panelTop + topBoxReserve;
+				float usableBotY = Math.Max(usableTopY + 160f, panelBottom - bottomDockReserve);
+				float targetSpanPx = usableBotY - usableTopY;
+
+				double prelimSpan = Math.Max(baseStep * 6.0, prelimMaxPrice - prelimMinPrice);
+				double rawRowCount = prelimSpan / baseStep + 2.0;
+				float rawPxPerRow = targetSpanPx / (float)Math.Max(1.0, rawRowCount);
+				int groupMult = rawPxPerRow < MinReadableTpoRowPx
+					? Math.Max(1, (int)Math.Ceiling(MinReadableTpoRowPx / Math.Max(0.4f, rawPxPerRow)))
+					: 1;
+				for (int i = 0; i < allSessions.Count; i++)
+				{
+					DayProfile vd = allSessions[i];
+					if (vd.IbX < panelLeft + 4f || vd.CollapsedRightX > panelRight - 178f || vd.Rows.Count == 0)
+						continue;
+					int daySpanBins = vd.Rows.Keys.Max() - vd.Rows.Keys.Min() + 1;
+					int reqMult = (int)Math.Ceiling(daySpanBins / Math.Max(12.0, targetSpanPx / MinReadableTpoRowPx));
+					if (reqMult > groupMult)
+						groupMult = reqMult;
+				}
+
+				double step = baseStep * groupMult;
+				if (groupMult > 1)
+				{
+					for (int i = 0; i < allSessions.Count; i++)
+						allSessions[i] = BuildRenderSessionProfile(allSessions[i], baseStep, groupMult);
+					dateGroups = BuildDateColumnGroups(allSessions, step, panelLeft, panelRight);
+					if (dateGroups.Count == 0)
+						return;
+				}
 
 				double visMinPrice = double.MaxValue;
 				double visMaxPrice = double.MinValue;
@@ -2679,10 +2802,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 					for (int s = 0; s < grp.Sessions.Count; s++)
 					{
 						DayProfile d = grp.Sessions[s];
-						if (d.IbX < panelLeft + 4f || d.CollapsedRightX > panelRight - 178f)
+						if (d.IbX < panelLeft + 4f || d.CollapsedRightX > panelRight - 178f || d.Rows.Count == 0)
 							continue;
-						if (d.Low < visMinPrice) visMinPrice = d.Low;
-						if (d.High > visMaxPrice) visMaxPrice = d.High;
+						double dStep = d.EffectiveStep > 0 ? d.EffectiveStep : step;
+						double lowEdge = Math.Min(d.Low, d.Rows.Keys.Min() * dStep - dStep * 0.5);
+						double highEdge = Math.Max(d.High, d.Rows.Keys.Max() * dStep + dStep * 0.5);
+						if (lowEdge < visMinPrice) visMinPrice = lowEdge;
+						if (highEdge > visMaxPrice) visMaxPrice = highEdge;
 					}
 				}
 				if (visMinPrice == double.MaxValue || visMaxPrice == double.MinValue)
@@ -2691,41 +2817,31 @@ namespace NinjaTrader.NinjaScript.Indicators
 					for (int i = tailStart; i < allSessions.Count; i++)
 					{
 						DayProfile d = allSessions[i];
-						if (d.Low < visMinPrice) visMinPrice = d.Low;
-						if (d.High > visMaxPrice) visMaxPrice = d.High;
+						if (d.Rows.Count == 0) continue;
+						double dStep = d.EffectiveStep > 0 ? d.EffectiveStep : step;
+						double lowEdge = Math.Min(d.Low, d.Rows.Keys.Min() * dStep - dStep * 0.5);
+						double highEdge = Math.Max(d.High, d.Rows.Keys.Max() * dStep + dStep * 0.5);
+						if (lowEdge < visMinPrice) visMinPrice = lowEdge;
+						if (highEdge > visMaxPrice) visMaxPrice = highEdge;
 					}
 				}
 
-				float bottomDockReserve = (ShowSummary && FixSummaryBoxAtBottom)
-					? (IsSummaryBoxMinimized ? 68f : 168f)
-					: 48f;
-				float topBoxReserve = (ShowTopLeftBox && !IsTopLeftBoxMinimized) ? 114f : 68f;
-				float usableTopY = panelTop + topBoxReserve;
-				float usableBotY = Math.Max(usableTopY + 160f, panelBottom - bottomDockReserve);
-				float targetSpanPx = usableBotY - usableTopY;
+				double safePriceSpan = Math.Max(step * 6.0, visMaxPrice - visMinPrice);
+				double visSteps = Math.Max(6.0, safePriceSpan / step);
+				float fitPxPerStep = targetSpanPx / (float)visSteps;
+				float sharedPxPerStep = Math.Min(MaxComfortableTpoRowPx, Math.Max(MinReadableTpoRowPx, fitPxPerStep));
+				float sharedTotalSpanPx = Math.Min(targetSpanPx, (float)visSteps * sharedPxPerStep);
+				float sharedMidY = 0.5f * (usableTopY + usableBotY);
+				float sharedTopY = Math.Max(usableTopY, sharedMidY - sharedTotalSpanPx * 0.5f);
+				float sharedBotY = Math.Min(usableBotY, sharedTopY + sharedTotalSpanPx);
 
 				float testYHigh = (float)chartScale.GetYByValue(visMaxPrice);
 				float testYLow = (float)chartScale.GetYByValue(visMinPrice);
 				float testSpanPx = Math.Abs(testYLow - testYHigh);
-				// Auto-fit visible sessions to the usable vertical height above the fixed bottom Summary Box dock
-				bool useFallbackYScale = testSpanPx < targetSpanPx * 0.72f
-					|| testYHigh < usableTopY - 25f
-					|| testYHigh > usableTopY + 45f
-					|| testYLow > usableBotY + 4f
-					|| testYLow < usableBotY - 55f;
-
-				double safePriceSpan = Math.Max(step * 8.0, visMaxPrice - visMinPrice);
-				double visSteps = Math.Max(8.0, safePriceSpan / step + 2.0);
-				float fitPxPerStep = targetSpanPx / (float)visSteps;
-				float sharedPxPerStep = Math.Min(11.4f, Math.Max(7.0f, fitPxPerStep));
-				float sharedTotalSpanPx = (float)(safePriceSpan / step) * sharedPxPerStep;
-				float sharedMidY = 0.5f * (usableTopY + usableBotY);
-				float sharedTopY = Math.Max(usableTopY + 2f, sharedMidY - sharedTotalSpanPx * 0.5f);
-				float sharedBotY = Math.Min(usableBotY - 2f, sharedTopY + sharedTotalSpanPx);
-
-				float chartScalePxPerStep = (float)(testSpanPx / Math.Max(1.0, safePriceSpan / step));
-				if (chartScalePxPerStep > 11.8f || chartScalePxPerStep < 7.2f)
-					useFallbackYScale = true;
+				float chartScalePxPerStep = (float)(testSpanPx / Math.Max(1.0, visSteps));
+				bool useFallbackYScale = chartScalePxPerStep < (MinReadableTpoRowPx - 1.2f)
+					|| testYLow < panelTop + 40f
+					|| testYHigh > panelBottom - 40f;
 
 				Func<double, float> priceToY = (double price) =>
 				{
@@ -2757,19 +2873,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 						float sw = rawHighY;
 						rawHighY = rawLowY;
 						rawLowY = sw;
-					}
-					if (EffectiveProfileMode != MarketProfilePeriodMode.Daily)
-					{
-						int dRowCount = Math.Max(1, maxB - minB + 1);
-						float minReqSpan = Math.Min(usableBotY - usableTopY - 8f, dRowCount * 8.8f);
-						if (rawLowY - rawHighY < minReqSpan)
-						{
-							float midY = 0.5f * (rawHighY + rawLowY);
-							rawHighY = Math.Max(usableTopY + 2f, midY - minReqSpan * 0.5f);
-							rawLowY = Math.Min(usableBotY - 2f, rawHighY + minReqSpan);
-							if (rawLowY - rawHighY < minReqSpan)
-								rawHighY = Math.Max(usableTopY + 2f, rawLowY - minReqSpan);
-						}
 					}
 					d.RenderTopY = rawHighY;
 					d.RenderBotY = Math.Max(rawHighY + 4f, rawLowY);
@@ -3320,8 +3423,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 								int maxRowCells = Math.Max(1, day.Rows.Max(kv => kv.Value.Periods.Count + (kv.Key == closeBin ? 1 : 0)));
 								float baseCollapsedSlotW = Math.Max(224f, xCollapsedRight - xIb);
 								float volWidth = ShowVolumeProfile ? 38f : 0f;
-								float availTpoW = baseCollapsedSlotW - volWidth - 14f;
-								float letterWidth = Math.Min(9.4f, Math.Max(8.2f, availTpoW / Math.Max(8, maxRowCells)));
+								float availTpoW = Math.Max(40f, baseCollapsedSlotW - volWidth - 14f);
+								float maxCellW = Math.Max(9.8f, Math.Min(11.6f, FontSize * 0.90f));
+								float letterWidth = Math.Min(maxCellW, Math.Max(6.5f, availTpoW / Math.Max(1, maxRowCells)));
 								float collapsedTpoWidth = maxRowCells * letterWidth;
 
 								float xTpo = xIb + 4f;
@@ -3341,12 +3445,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 								float sampleRowYA = SessionPriceToY(day, poc * dStep + dStep * 0.5, step);
 								float sampleRowYB = SessionPriceToY(day, poc * dStep - dStep * 0.5, step);
-								float sampleRowH = Math.Max(7.5f, Math.Abs(sampleRowYB - sampleRowYA));
-								float letterFontPx = Math.Min((float)Math.Max(10, FontSize), Math.Max(7.5f, sampleRowH * 0.90f));
-								float splitLetterFontPx = Math.Min(9.8f, Math.Max(7.4f, sampleRowH * 0.86f));
+								float sampleRowH = Math.Max(1.0f, Math.Abs(sampleRowYB - sampleRowYA));
+								float letterFontPx = Math.Min(
+									(float)Math.Max(9, FontSize),
+									Math.Min(Math.Max(5.8f, sampleRowH * 0.78f), Math.Max(5.8f, letterWidth * 0.98f)));
+								float splitLetterFontPx = Math.Min(10.0f, Math.Max(5.8f, sampleRowH * 0.76f));
 
-								using (var letterFormat = new DxTextFormat(Core.Globals.DirectWriteFactory, "Arial", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, letterFontPx))
-								using (var splitLetterFormat = new DxTextFormat(Core.Globals.DirectWriteFactory, "Arial", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, splitLetterFontPx))
+								using (var letterFormat = new DxTextFormat(Core.Globals.DirectWriteFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, letterFontPx))
+								using (var splitLetterFormat = new DxTextFormat(Core.Globals.DirectWriteFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, splitLetterFontPx))
 								{
 									letterFormat.TextAlignment = TextAlignment.Center;
 									letterFormat.ParagraphAlignment = ParagraphAlignment.Center;
@@ -3364,7 +3470,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 										float yA = SessionPriceToY(day, bin * dStep + dStep * 0.5, step);
 										float yB = SessionPriceToY(day, bin * dStep - dStep * 0.5, step);
 										float y = Math.Min(yA, yB);
-										float h = Math.Max(7.5f, Math.Abs(yB - yA));
+										float h = Math.Max(1.0f, Math.Abs(yB - yA));
 										if (y > panelBottom - 25f || y + h < panelTop)
 											continue;
 
@@ -3386,7 +3492,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 										if (rowSpZone != null)
 										{
 											bool isBuySp = rowSpZone.IsBuying;
-											RectangleF spRect = new RectangleF(xTpo - 1f, y + 0.3f, collapsedTpoWidth + 2f, Math.Max(1.5f, h - 0.6f));
+											RectangleF spRect = new RectangleF(xTpo - 1f, y + 0.3f, collapsedTpoWidth + 2f, Math.Max(1.0f, h - 0.6f));
 											RenderTarget.FillRectangle(spRect, isBuySp ? singleBuyRowBrush : singleSellRowBrush);
 											RenderTarget.DrawLine(
 												new Vector2(xTpo - 1f, y),
@@ -3396,27 +3502,41 @@ namespace NinjaTrader.NinjaScript.Indicators
 										}
 
 										List<int> sortedPeriods = row.Periods.OrderBy(p => p).ToList();
-										for (int colIdx = 0; colIdx < sortedPeriods.Count; colIdx++)
+										if (h >= 6.5f)
 										{
-											int period = sortedPeriods[colIdx];
-											int safePeriod = Math.Max(0, Math.Min(period, LetterSequence.Length - 1));
-											float lx = xTpo + colIdx * letterWidth;
+											for (int colIdx = 0; colIdx < sortedPeriods.Count; colIdx++)
+											{
+												int period = sortedPeriods[colIdx];
+												int safePeriod = Math.Max(0, Math.Min(period, LetterSequence.Length - 1));
+												float lx = xTpo + colIdx * letterWidth;
 
-											if (bin == openBin && colIdx == 0)
-											{
-												DrawText("O", lx, y, letterWidth, h, letterFormat, whiteBrush);
+												if (bin == openBin && colIdx == 0)
+												{
+													DrawTpoCellText("O", lx, y, letterWidth, h, letterFormat, whiteBrush);
+												}
+												else
+												{
+													string letter = LetterSequence[safePeriod].ToString();
+													DrawTpoCellText(letter, lx, y, letterWidth, h, letterFormat, letterBrushes[safePeriod % letterBrushes.Length]);
+												}
 											}
-											else
+
+											if (bin == closeBin)
 											{
-												string letter = LetterSequence[safePeriod].ToString();
-												DrawText(letter, lx, y, letterWidth, h, letterFormat, letterBrushes[safePeriod % letterBrushes.Length]);
+												float hashX = xTpo + sortedPeriods.Count * letterWidth;
+												DrawTpoCellText("#", hashX, y, letterWidth, h, letterFormat, redBrush);
 											}
 										}
-
-										if (bin == closeBin)
+										else
 										{
-											float hashX = xTpo + sortedPeriods.Count * letterWidth;
-											DrawText("#", hashX, y, letterWidth, h, letterFormat, redBrush);
+											for (int colIdx = 0; colIdx < sortedPeriods.Count; colIdx++)
+											{
+												int period = sortedPeriods[colIdx];
+												int safePeriod = Math.Max(0, Math.Min(period, LetterSequence.Length - 1));
+												float lx = xTpo + colIdx * letterWidth;
+												DxBrush cellBrush = (bin == openBin && colIdx == 0) ? whiteBrush : letterBrushes[safePeriod % letterBrushes.Length];
+												RenderTarget.FillRectangle(new RectangleF(lx + 0.6f, y + 0.4f, Math.Max(1.0f, letterWidth - 1.2f), Math.Max(1.0f, h - 0.8f)), cellBrush);
+											}
 										}
 
 										if (ShowVolumeProfile && volWidth > 0)
@@ -3508,7 +3628,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 											float totalSplitVolW = volBarCount > 0
 												? (volBarCount * singleVolW + (volBarCount - 1) * volColGap)
 												: 0f;
-											float splitColW = Math.Min(10.0f, Math.Max(8.5f, (splitAvailW - totalSplitVolW - 16f) / Math.Max(5, sliceCount + 1)));
+											float splitColW = Math.Min(10.6f, Math.Max(7.0f, (splitAvailW - totalSplitVolW - 16f) / Math.Max(5, sliceCount + 1)));
 											float xSplitVol = Math.Min(xSplitEnd - totalSplitVolW - 2f, xSplitStart + 6f + (sliceCount + 1) * splitColW + 6f);
 
 											// Split Profile Header Banner aligned at headerY (well ABOVE SwingHigh and profileHighY!)
@@ -3554,7 +3674,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 													float yA = SessionPriceToY(day, b * dStep + dStep * 0.5, step);
 													float yB = SessionPriceToY(day, b * dStep - dStep * 0.5, step);
 													float y = Math.Min(yA, yB);
-													float h = Math.Max(7.5f, Math.Abs(yB - yA));
+													float h = Math.Max(1.0f, Math.Abs(yB - yA));
 													if (y > panelBottom - 25f || y + h < panelTop)
 														continue;
 
@@ -3562,16 +3682,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 													DxBrush lBrush = (b == sOpenBin)
 														? whiteBrush
 														: letterBrushes[pIdx % letterBrushes.Length];
-													DrawText(pLetter, cx, y, splitColW, h, splitLetterFormat, lBrush);
+													if (h >= 6.5f)
+														DrawTpoCellText(pLetter, cx, y, splitColW, h, splitLetterFormat, lBrush);
+													else
+														RenderTarget.FillRectangle(new RectangleF(cx + 0.6f, y + 0.4f, Math.Max(1.0f, splitColW - 1.2f), Math.Max(1.0f, h - 0.8f)), lBrush);
 
 													if (b == sMidBin)
 													{
-														float ulY = y + h - 1.2f;
+														float ulY = y + h - 0.8f;
 														RenderTarget.DrawLine(
-															new Vector2(cx + 1.0f, ulY),
-															new Vector2(cx + splitColW - 1.0f, ulY),
+															new Vector2(cx + 1.2f, ulY),
+															new Vector2(cx + splitColW - 1.2f, ulY),
 															whiteBrush,
-															1.6f);
+															1.2f);
 													}
 												}
 
@@ -3580,8 +3703,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 													float yCloseA = SessionPriceToY(day, sCloseBin * dStep + dStep * 0.5, step);
 													float yCloseB = SessionPriceToY(day, sCloseBin * dStep - dStep * 0.5, step);
 													float yClose = Math.Min(yCloseA, yCloseB);
-													float hClose = Math.Max(7.5f, Math.Abs(yCloseB - yCloseA));
-													DrawText("#", cx + splitColW, yClose, splitColW, hClose, splitLetterFormat, redBrush);
+													float hClose = Math.Max(1.0f, Math.Abs(yCloseB - yCloseA));
+													if (hClose >= 6.5f)
+														DrawTpoCellText("#", cx + splitColW, yClose, splitColW, hClose, splitLetterFormat, redBrush);
 												}
 											}
 
@@ -3642,7 +3766,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 														float yA = SessionPriceToY(day, b * dStep + dStep * 0.5, step);
 														float yB = SessionPriceToY(day, b * dStep - dStep * 0.5, step);
 														float y = Math.Min(yA, yB);
-														float h = Math.Max(7.5f, Math.Abs(yB - yA));
+														float h = Math.Max(1.0f, Math.Abs(yB - yA));
 														if (y > panelBottom - 25f || y + h < panelTop)
 															continue;
 
@@ -4348,6 +4472,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 					curX += layout.Metrics.WidthIncludingTrailingWhitespace;
 				}
 			}
+		}
+
+		private void DrawTpoCellText(string text, float x, float y, float width, float height, DxTextFormat format, DxBrush brush)
+		{
+			if (width <= 1.0f || height <= 1.0f || string.IsNullOrEmpty(text))
+				return;
+			float vPad = height >= 10.0f ? 0.4f : 0.1f;
+			float hPad = width >= 8.5f ? 0.3f : 0.0f;
+			RectangleF cellRect = new RectangleF(x + hPad, y + vPad, Math.Max(1.0f, width - hPad * 2f), Math.Max(1.0f, height - vPad * 2f));
+			RenderTarget.DrawText(text, format, cellRect, brush, DrawTextOptions.Clip);
 		}
 
 		private void DrawText(string text, float x, float y, float width, float height, DxTextFormat format, DxBrush brush)
