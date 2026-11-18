@@ -40,7 +40,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		WMA = 3
 	}
 
-	public class INDMarketProfile50Charts : Indicator
+	public class AK10XIndiaMarketProfile : Indicator
 	{
 		private struct DailyOhlcSample
 		{
@@ -96,6 +96,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public int ExpectedPeriodCount;
 			public DateTime EffectiveOpenTime;
 			public DateTime SessionCloseTime;
+			public DateTime LastSampleTime;
 			public int FirstBar = int.MaxValue;
 			public int LastBar = int.MinValue;
 			public int LastPeriod;
@@ -162,6 +163,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public float Height;
 			public string Text;
 			public DxBrush Brush;
+			public DxBrush FillBrush;
+			public DxBrush BorderBrush;
 			public int Priority;
 		}
 
@@ -286,7 +289,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (State == State.SetDefaults)
 			{
 				Description = "AK10X Market Profile for Indian Market (NSE / BSE / MCX). Pure Day Profile trading with no multi-session partitioning.";
-				Name = "INDMarketProfile50Charts";
+				Name = "AK10XIndiaMarketProfile";
 				Calculate = Calculate.OnEachTick;
 				IsOverlay = true;
 				DisplayInDataBox = false;
@@ -2701,6 +2704,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			day.FirstBar = Math.Min(day.FirstBar, sample.BarIndex);
 			day.LastBar = sample.BarIndex;
 			day.LastPeriod = Math.Max(day.LastPeriod, periodIndex);
+			if (sample.Time > day.LastSampleTime)
+				day.LastSampleTime = sample.Time;
 			day.High = Math.Max(day.High, sample.High);
 			day.Low = Math.Min(day.Low, sample.Low);
 			day.Close = sample.Close;
@@ -2828,6 +2833,34 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (tick < 0.005)
 				return price.ToString("0.000", CultureInfo.InvariantCulture);
 			return price.ToString("0.00", CultureInfo.InvariantCulture);
+		}
+
+		// Buying Single Print -> Bottom line & Bottom price (SL below support).
+		// Selling Single Print -> Top line & Top price (SL above resistance).
+		private double GetSinglePrintStopLossPrice(SinglePrintZone spZone, double dStep)
+		{
+			double tick = (Instrument == null || Instrument.MasterInstrument == null || Instrument.MasterInstrument.TickSize <= 0)
+				? 0.05
+				: Instrument.MasterInstrument.TickSize;
+			if (IsIndianNseSymbol() && tick < 0.05)
+				tick = 0.05;
+
+			double rawPrice;
+			if (dStep <= tick * 1.05)
+			{
+				rawPrice = spZone.IsBuying ? (spZone.StartBin * dStep) : (spZone.EndBin * dStep);
+			}
+			else
+			{
+				rawPrice = spZone.IsBuying
+					? (spZone.StartBin * dStep - dStep * 0.5)
+					: (spZone.EndBin * dStep + dStep * 0.5);
+			}
+
+			if (!IsIndianNseSymbol() && Instrument != null && Instrument.MasterInstrument != null && tick > 0)
+				return Instrument.MasterInstrument.RoundToTickSize(rawPrice);
+
+			return Math.Round(rawPrice / tick, MidpointRounding.AwayFromZero) * tick;
 		}
 
 		private static void CalculateTpoValueArea(DayProfile day, double percent, out int poc, out int vah, out int val)
@@ -3003,7 +3036,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			sliceVolVal = low;
 		}
 
-		// Exact 50chartsMP.dll (10030E3B..10030EA5) Single Print direction classification:
+		// Exact AK10X Profile Engine (10030E3B..10030EA5) Single Print direction classification:
 		// Compares session Close against the Single Print zone [startBin..endBin], with fallback to period slice and session direction.
 		private static bool IsBuyingSinglePrintZone(DayProfile day, int startBin, int endBin, int periodIndex, int pocBin)
 		{
@@ -3393,6 +3426,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ExpectedPeriodCount = src.ExpectedPeriodCount,
 				EffectiveOpenTime = src.EffectiveOpenTime,
 				SessionCloseTime = src.SessionCloseTime,
+				LastSampleTime = src.LastSampleTime,
 				FirstBar = src.FirstBar,
 				LastBar = src.LastBar,
 				LastPeriod = src.LastPeriod,
@@ -3550,6 +3584,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					ExpectedPeriodCount = 0,
 					EffectiveOpenTime = first.EffectiveOpenTime,
 					SessionCloseTime = last.SessionCloseTime,
+					LastSampleTime = last.LastSampleTime,
 					FirstBar = first.FirstBar,
 					LastBar = last.LastBar,
 					LastPeriod = 0,
@@ -3798,6 +3833,50 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 
 			return allDays;
+		}
+
+		private bool IsDayRunning(DayProfile day, bool isLatestDay)
+		{
+			if (!isLatestDay || day == null)
+				return false;
+
+			bool isPlayback = false;
+			try
+			{
+				isPlayback = NinjaTrader.Cbi.Connection.PlaybackConnection != null
+					&& NinjaTrader.Cbi.Connection.PlaybackConnection.Status == ConnectionStatus.Connected;
+			}
+			catch { }
+
+			DateTime refNow = (isPlayback && day.LastSampleTime > DateTime.MinValue) ? day.LastSampleTime : DateTime.Now;
+
+			MarketProfilePeriodMode mode = EffectiveProfileMode;
+			if (mode == MarketProfilePeriodMode.Monthly)
+			{
+				DateTime monthEnd = new DateTime(
+					day.SessionDate.Year,
+					day.SessionDate.Month,
+					DateTime.DaysInMonth(day.SessionDate.Year, day.SessionDate.Month),
+					23, 59, 59);
+				return refNow <= monthEnd;
+			}
+			if (mode == MarketProfilePeriodMode.Weekly)
+			{
+				int closeSec = ToSeconds(MarketClose);
+				if (closeSec <= 0)
+					closeSec = 15 * 3600 + 30 * 60;
+				DateTime fridayClose = (!IsIndianNseSymbol() && MarketOpen == 91500 && MarketClose == 153000)
+					? day.SessionDate.Date.AddDays(5)
+					: day.SessionDate.Date.AddDays(4).AddSeconds(closeSec);
+				return refNow < fridayClose;
+			}
+
+			if (day.SessionCloseTime > DateTime.MinValue)
+				return refNow < day.SessionCloseTime;
+
+			int exp = Math.Max(1, day.ExpectedPeriodCount);
+			int prn = Math.Max(day.PeriodSlices.Count, day.LastPeriod + 1);
+			return prn < exp;
 		}
 
 		// Computes how far horizontally a level from allDays[currentIdx] extends:
@@ -4176,22 +4255,28 @@ namespace NinjaTrader.NinjaScript.Indicators
 					using (var textBrush = new DxBrush(RenderTarget, new SharpDX.Color(195, 204, 212)))
 					using (var orangeBrush = new DxBrush(RenderTarget, new SharpDX.Color(245, 155, 35)))
 					using (var yellowBrush = new DxBrush(RenderTarget, new SharpDX.Color(238, 202, 42)))
-					using (var greenBrush = new DxBrush(RenderTarget, new SharpDX.Color(38, 218, 98)))
-					using (var redBrush = new DxBrush(RenderTarget, new SharpDX.Color(242, 72, 72)))
+					using (var greenBrush = new DxBrush(RenderTarget, new SharpDX.Color(38, 224, 102)))
+					using (var redBrush = new DxBrush(RenderTarget, new SharpDX.Color(248, 76, 82)))
 					using (var cyanBrush = new DxBrush(RenderTarget, new SharpDX.Color(72, 198, 222)))
-					using (var abPoorBrush = new DxBrush(RenderTarget, new SharpDX.Color(46, 232, 168)))
-					using (var swingLineBrush = new DxBrush(RenderTarget, new SharpDX.Color(82, 138, 252)))
+					using (var highExtremeBrush = new DxBrush(RenderTarget, new SharpDX.Color(38, 224, 102)))
+					using (var lowExtremeBrush = new DxBrush(RenderTarget, new SharpDX.Color(248, 76, 82)))
+					using (var highSwingLineBrush = new DxBrush(RenderTarget, new SharpDX.Color(38, 224, 102, 200)))
+					using (var lowSwingLineBrush = new DxBrush(RenderTarget, new SharpDX.Color(248, 76, 82, 200)))
+					using (var highExtremeBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(38, 224, 102, 190)))
+					using (var lowExtremeBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(248, 76, 82, 190)))
 					using (var daySepBrush = new DxBrush(RenderTarget, new SharpDX.Color(62, 78, 96)))
 					using (var spineLineBrush = new DxBrush(RenderTarget, new SharpDX.Color(85, 96, 108)))
 					using (var vaFillBrush = new DxBrush(RenderTarget, new SharpDX.Color(16, 48, 66, 130)))
 					using (var vaBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(58, 138, 178)))
 					using (var vaVirginBrush = new DxBrush(RenderTarget, new SharpDX.Color(88, 204, 248)))
-					using (var singleBuyRowBrush = new DxBrush(RenderTarget, new SharpDX.Color(14, 148, 78, 68)))
-					using (var singleSellRowBrush = new DxBrush(RenderTarget, new SharpDX.Color(178, 32, 48, 68)))
-					using (var singleBuyZoneRayBrush = new DxBrush(RenderTarget, new SharpDX.Color(14, 148, 78, 36)))
-					using (var singleSellZoneRayBrush = new DxBrush(RenderTarget, new SharpDX.Color(178, 32, 48, 36)))
-					using (var singleBuyBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(42, 224, 118, 195)))
-					using (var singleSellBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(248, 82, 92, 195)))
+					using (var singleBuyRowBrush = new DxBrush(RenderTarget, new SharpDX.Color(16, 192, 98, 132)))
+					using (var singleSellRowBrush = new DxBrush(RenderTarget, new SharpDX.Color(226, 42, 60, 132)))
+					using (var singleBuyZoneRayBrush = new DxBrush(RenderTarget, new SharpDX.Color(16, 192, 98, 82)))
+					using (var singleSellZoneRayBrush = new DxBrush(RenderTarget, new SharpDX.Color(226, 42, 60, 82)))
+					using (var singleBuyBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(48, 246, 128, 250)))
+					using (var singleSellBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(255, 86, 98, 250)))
+					using (var spBuyPillBgBrush = new DxBrush(RenderTarget, new SharpDX.Color(8, 46, 26, 250)))
+					using (var spSellPillBgBrush = new DxBrush(RenderTarget, new SharpDX.Color(54, 12, 20, 250)))
 					using (var btnBgBrush = new DxBrush(RenderTarget, new SharpDX.Color(22, 34, 48, 248)))
 					using (var btnActiveBgBrush = new DxBrush(RenderTarget, new SharpDX.Color(18, 78, 92, 250)))
 					using (var volumeOutBrush = new DxBrush(RenderTarget, new SharpDX.Color(76, 86, 96)))
@@ -4251,6 +4336,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 						for (int i = 0; i < allDays.Count; i++)
 						{
 							DayProfile day = allDays[i];
+							bool isRunningDay = IsDayRunning(day, i == allDays.Count - 1);
 							double dStep = day.EffectiveStep > 0 ? day.EffectiveStep : step;
 
 							float xSlotLeft = day.SlotLeftX;
@@ -4279,13 +4365,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 							string dateLabel = day.SessionDate.ToString("dd MMM", CultureInfo.InvariantCulture);
 
-							// 1. Extending Single Print Zones (extends until broken; right-edge tag when Virgin)
+							// 1. Extending Single Print Zones (Buying SP -> Bottom SL line & price; Selling SP -> Top SL line & price)
 							if (ShowSinglePrints)
 							{
 								for (int z = 0; z < day.SinglePrintZones.Count; z++)
 								{
 									SinglePrintZone spZone = day.SinglePrintZones[z];
-									double zoneMidPrice = ((spZone.StartBin + spZone.EndBin) * 0.5) * dStep;
+									double spSlPrice = GetSinglePrintStopLossPrice(spZone, dStep);
 									float ySpTop = SessionPriceToY(day, spZone.EndBin * dStep + dStep * 0.5, step);
 									float ySpBot = SessionPriceToY(day, spZone.StartBin * dStep - dStep * 0.5, step);
 									if (ySpTop > ySpBot)
@@ -4294,23 +4380,41 @@ namespace NinjaTrader.NinjaScript.Indicators
 										ySpTop = ySpBot;
 										ySpBot = sw;
 									}
-									float ySpMid = (ySpTop + ySpBot) * 0.5f;
-									float spH = Math.Max(2.5f, ySpBot - ySpTop);
+									float spH = Math.Max(3.0f, ySpBot - ySpTop);
+									float ySpSlLine = spZone.IsBuying ? ySpBot : ySpTop;
+									float ySpOppLine = spZone.IsBuying ? ySpTop : ySpBot;
 
 									float drawEndX;
-									bool isSpVirgin = GetLevelExtensionX(allDays, i, zoneMidPrice, xCollapsedRight, panelRight, out drawEndX);
+									bool isSpVirgin = GetLevelExtensionX(
+										allDays,
+										i,
+										spSlPrice,
+										xCollapsedRight,
+										panelRight,
+										out drawEndX,
+										isHighExtreme: !spZone.IsBuying,
+										isLowExtreme: spZone.IsBuying);
+
 									if (ySpBot >= panelTop && ySpTop <= panelBottom - 25f)
 									{
 										float drawStartX = Math.Max(panelLeft, xIb);
 										if (drawEndX > drawStartX + 2f)
 										{
+											DxBrush spBorder = spZone.IsBuying ? singleBuyBorderBrush : singleSellBorderBrush;
 											RectangleF spRayRect = new RectangleF(drawStartX, ySpTop, drawEndX - drawStartX, spH);
 											RenderTarget.FillRectangle(spRayRect, spZone.IsBuying ? singleBuyZoneRayBrush : singleSellZoneRayBrush);
 											RenderTarget.DrawLine(
-												new Vector2(drawStartX, ySpMid),
-												new Vector2(drawEndX, ySpMid),
-												spZone.IsBuying ? singleBuyBorderBrush : singleSellBorderBrush,
-												1.0f, dashedStroke);
+												new Vector2(drawStartX, ySpOppLine),
+												new Vector2(drawEndX, ySpOppLine),
+												spBorder,
+												1.05f,
+												dashedStroke);
+											// Bold SL Trigger Line: Bottom line for Buying Single Print, Top line for Selling Single Print
+											RenderTarget.DrawLine(
+												new Vector2(drawStartX, ySpSlLine),
+												new Vector2(drawEndX, ySpSlLine),
+												spBorder,
+												1.85f);
 										}
 
 										if (isSpVirgin)
@@ -4318,34 +4422,37 @@ namespace NinjaTrader.NinjaScript.Indicators
 											string spType = spZone.IsBuying ? "Buying SP" : "Selling SP";
 											rightEdgeTags.Add(new RightEdgeTag
 											{
-												Price = zoneMidPrice,
-												IdealY = ySpMid - 7.5f,
+												Price = spSlPrice,
+												IdealY = ySpSlLine - 7.5f,
 												Height = 15f,
-												Text = spType + " " + FormatPrice(zoneMidPrice) + " (" + dateLabel + ")",
-												Brush = spZone.IsBuying ? greenBrush : redBrush,
-												Priority = 2
+												Text = spType + " " + FormatPrice(spSlPrice) + " (" + dateLabel + ")",
+												Brush = spZone.IsBuying ? singleBuyBorderBrush : singleSellBorderBrush,
+												FillBrush = spZone.IsBuying ? spBuyPillBgBrush : spSellPillBgBrush,
+												BorderBrush = spZone.IsBuying ? singleBuyBorderBrush : singleSellBorderBrush,
+												Priority = 3
 											});
 										}
 									}
 								}
 							}
 
-							// 2. Extending Poor/Swing High/Low until broken
+							// 2. Extending Poor/Swing High/Low until broken: ALL Highs (SwingHigh / PoorHigh / ABPoorHigh) = Green; ALL Lows (SwingLow / PoorLow / ABPoorLow) = Red
+							// (Hidden on the Running Day — Running Day only shows Value Area High/Low, POC, and Single Prints)
 							PriceRow topRow = day.Rows[maxBin];
 							bool isAbPoorHigh = topRow.Periods.Contains(0) && topRow.Periods.Contains(1);
 							bool isPoorHigh = !isAbPoorHigh && topRow.Periods.Count >= 2;
 							string highLevelName = isAbPoorHigh ? "ABPoorHigh" : (isPoorHigh ? "PoorHigh" : "SwingHigh");
-							DxBrush highLevelBrush = isAbPoorHigh ? abPoorBrush : (isPoorHigh ? cyanBrush : swingLineBrush);
+							DxBrush highLevelBrush = highExtremeBrush;
 							StrokeStyle highLevelStroke = (isAbPoorHigh || isPoorHigh) ? dashedStroke : null;
-							bool enableThisHigh = ShowPoorHighLow && ((isAbPoorHigh || isPoorHigh) ? ShowPoorHigh : ShowSwingHigh);
+							bool enableThisHigh = !isRunningDay && ShowPoorHighLow && ((isAbPoorHigh || isPoorHigh) ? ShowPoorHigh : ShowSwingHigh);
 
 							PriceRow botRow = day.Rows[minBin];
 							bool isAbPoorLow = botRow.Periods.Contains(0) && botRow.Periods.Contains(1);
 							bool isPoorLow = !isAbPoorLow && botRow.Periods.Count >= 2;
 							string lowLevelName = isAbPoorLow ? "ABPoorLow" : (isPoorLow ? "PoorLow" : "SwingLow");
-							DxBrush lowLevelBrush = isAbPoorLow ? abPoorBrush : (isPoorLow ? cyanBrush : swingLineBrush);
+							DxBrush lowLevelBrush = lowExtremeBrush;
 							StrokeStyle lowLevelStroke = (isAbPoorLow || isPoorLow) ? dashedStroke : null;
-							bool enableThisLow = ShowPoorHighLow && ((isAbPoorLow || isPoorLow) ? ShowPoorLow : ShowSwingLow);
+							bool enableThisLow = !isRunningDay && ShowPoorHighLow && ((isAbPoorLow || isPoorLow) ? ShowPoorLow : ShowSwingLow);
 
 							if (enableThisHigh && profileHighY >= panelTop && profileHighY <= panelBottom - 25f)
 							{
@@ -4353,9 +4460,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 								bool isHighVirgin = GetLevelExtensionX(allDays, i, day.High, xCollapsedRight, panelRight, out drawEndX, isHighExtreme: true);
 								float drawStartX = Math.Max(panelLeft, xIb);
 								if (highLevelStroke != null)
-									RenderTarget.DrawLine(new Vector2(drawStartX, profileHighY), new Vector2(drawEndX, profileHighY), highLevelBrush, 1.15f, highLevelStroke);
+									RenderTarget.DrawLine(new Vector2(drawStartX, profileHighY), new Vector2(drawEndX, profileHighY), highLevelBrush, 1.05f, highLevelStroke);
 								else
-									RenderTarget.DrawLine(new Vector2(drawStartX, profileHighY), new Vector2(drawEndX, profileHighY), highLevelBrush, 1.15f);
+									RenderTarget.DrawLine(new Vector2(drawStartX, profileHighY), new Vector2(drawEndX, profileHighY), highSwingLineBrush, 1.05f);
 
 								if (isHighVirgin)
 								{
@@ -4366,6 +4473,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 										Height = 15f,
 										Text = highLevelName + " " + FormatPrice(day.High) + " (" + dateLabel + ")",
 										Brush = highLevelBrush,
+										BorderBrush = (isAbPoorHigh || isPoorHigh) ? highExtremeBorderBrush : null,
 										Priority = 1
 									});
 								}
@@ -4377,9 +4485,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 								bool isLowVirgin = GetLevelExtensionX(allDays, i, day.Low, xCollapsedRight, panelRight, out drawEndX, isLowExtreme: true);
 								float drawStartX = Math.Max(panelLeft, xIb);
 								if (lowLevelStroke != null)
-									RenderTarget.DrawLine(new Vector2(drawStartX, profileLowY), new Vector2(drawEndX, profileLowY), lowLevelBrush, 1.15f, lowLevelStroke);
+									RenderTarget.DrawLine(new Vector2(drawStartX, profileLowY), new Vector2(drawEndX, profileLowY), lowLevelBrush, 1.05f, lowLevelStroke);
 								else
-									RenderTarget.DrawLine(new Vector2(drawStartX, profileLowY), new Vector2(drawEndX, profileLowY), lowLevelBrush, 1.15f);
+									RenderTarget.DrawLine(new Vector2(drawStartX, profileLowY), new Vector2(drawEndX, profileLowY), lowSwingLineBrush, 1.05f);
 
 								if (isLowVirgin)
 								{
@@ -4390,6 +4498,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 										Height = 15f,
 										Text = lowLevelName + " " + FormatPrice(day.Low) + " (" + dateLabel + ")",
 										Brush = lowLevelBrush,
+										BorderBrush = (isAbPoorLow || isPoorLow) ? lowExtremeBorderBrush : null,
 										Priority = 1
 									});
 								}
@@ -4505,10 +4614,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 								}
 							}
 
-							// 5. Session Midline & Extending Virgin Midline (extends until broken; right-edge tag when Virgin)
+							// 5. Session Midline & Extending Virgin Midline (hidden on Running Day; extends on completed days until broken)
 							double midPrice = (day.High + day.Low) * 0.5;
 							float yMid = (profileHighY + profileLowY) * 0.5f;
-							if (yMid >= panelTop && yMid <= panelBottom - 25f)
+							if (!isRunningDay && yMid >= panelTop && yMid <= panelBottom - 25f)
 							{
 								float midDrawEndX = xCollapsedRight;
 								bool isMidVirgin = false;
@@ -4549,6 +4658,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 							DayProfile day = allDays[i];
 							DayProfile prevDay = i > 0 ? allDays[i - 1] : null;
 							bool isLatestDay = (i == allDays.Count - 1);
+							bool isRunningDay = IsDayRunning(day, isLatestDay);
 							double dStep = day.EffectiveStep > 0 ? day.EffectiveStep : step;
 
 							float xSlotLeft = day.SlotLeftX;
@@ -4573,7 +4683,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 								int expTpos = Math.Max(1, day.ExpectedPeriodCount);
 								int prnTpos = Math.Min(expTpos, Math.Max(day.PeriodSlices.Count, day.LastPeriod + 1));
-								bool isLive = isLatestDay && prnTpos < expTpos;
+								bool isLive = isRunningDay;
 								string tpoPart = isLive ? string.Format(CultureInfo.InvariantCulture, "LIVE: {0}/{1} TPOs", prnTpos, expTpos) : string.Format(CultureInfo.InvariantCulture, "{0}/{1} TPOs", prnTpos, expTpos);
 								string dateBannerText;
 								if (EffectiveProfileMode == MarketProfilePeriodMode.Weekly)
@@ -4698,13 +4808,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 									if (rowSpZone != null)
 									{
 										bool isBuySp = rowSpZone.IsBuying;
-										RectangleF spRect = new RectangleF(xTpo - 1f, y + 0.3f, collapsedTpoWidth + 2f, Math.Max(1.0f, h - 0.6f));
+										DxBrush spRowBorder = isBuySp ? singleBuyBorderBrush : singleSellBorderBrush;
+										RectangleF spRect = new RectangleF(xTpo - 1.5f, y + 0.2f, collapsedTpoWidth + 3f, Math.Max(1.4f, h - 0.4f));
 										RenderTarget.FillRectangle(spRect, isBuySp ? singleBuyRowBrush : singleSellRowBrush);
 										RenderTarget.DrawLine(
-											new Vector2(xTpo - 1f, y),
-											new Vector2(xTpo - 1f, y + h),
-											isBuySp ? singleBuyBorderBrush : singleSellBorderBrush,
-											2.2f);
+											new Vector2(xTpo - 1.5f, y),
+											new Vector2(xTpo - 1.5f, y + h),
+											spRowBorder,
+											3.2f);
 									}
 
 									List<int> sortedPeriods = row.Periods.OrderBy(p => p).ToList();
@@ -4758,33 +4869,63 @@ namespace NinjaTrader.NinjaScript.Indicators
 									}
 								}
 
-								// Inline Single Print Badges
-								if (ShowSinglePrints && day.PeriodSlices.Count >= 4)
+								// Prominent Single Print SL Lines & Inline Badges (Buying SP = Bottom line & price; Selling SP = Top line & price)
+								if (ShowSinglePrints && day.SinglePrintZones.Count > 0)
 								{
 									for (int z = 0; z < day.SinglePrintZones.Count; z++)
 									{
 										SinglePrintZone spz = day.SinglePrintZones[z];
-										int midBin = (spz.StartBin + spz.EndBin) / 2;
-										int maxNearCells = 1;
-										for (int nb = midBin - 1; nb <= midBin + 1; nb++)
+										double spSlPrice = GetSinglePrintStopLossPrice(spz, dStep);
+										float ySpTop = SessionPriceToY(day, spz.EndBin * dStep + dStep * 0.5, step);
+										float ySpBot = SessionPriceToY(day, spz.StartBin * dStep - dStep * 0.5, step);
+										if (ySpTop > ySpBot)
 										{
-											PriceRow nr;
-											if (day.Rows.TryGetValue(nb, out nr))
-												maxNearCells = Math.Max(maxNearCells, nr.Periods.Count + (nb == closeBin ? 1 : 0));
+											float sw = ySpTop;
+											ySpTop = ySpBot;
+											ySpBot = sw;
 										}
-										double zMidPrice = ((spz.StartBin + spz.EndBin) * 0.5) * dStep;
-										float yZ = SessionPriceToY(day, zMidPrice, step) - 5.5f;
-										if (yZ >= profileHighY + 8f && yZ <= profileLowY - 18f)
+										float ySpSlLine = spz.IsBuying ? ySpBot : ySpTop;
+										DxBrush spBorder = spz.IsBuying ? singleBuyBorderBrush : singleSellBorderBrush;
+
+										if (ySpSlLine >= panelTop && ySpSlLine <= panelBottom - 25f)
 										{
-											float spTagW = 48f;
-											float spTagX = xVol - spTagW - 3f;
-											if (spTagX > xTpo + maxNearCells * letterWidth + 8f)
+											RenderTarget.DrawLine(
+												new Vector2(xTpo - 1.5f, ySpSlLine),
+												new Vector2(xCollapsedRight, ySpSlLine),
+												spBorder,
+												1.9f);
+										}
+
+										if (day.PeriodSlices.Count >= 3)
+										{
+											int anchorBin = spz.IsBuying ? spz.StartBin : spz.EndBin;
+											int maxNearCells = 1;
+											for (int nb = anchorBin - 1; nb <= anchorBin + 1; nb++)
 											{
-												string spLabel = spz.IsBuying ? "Buy SP" : "Sell SP";
-												RectangleF spPill = new RectangleF(spTagX, yZ, spTagW, 11.5f);
-												RenderTarget.FillRectangle(spPill, pillBgBrush);
-												RenderTarget.DrawRectangle(spPill, spz.IsBuying ? singleBuyBorderBrush : singleSellBorderBrush, 0.8f);
-												DrawText(spLabel, spTagX + 3f, yZ, spTagW - 5f, 11.5f, spTagFormat, spz.IsBuying ? greenBrush : redBrush);
+												PriceRow nr;
+												if (day.Rows.TryGetValue(nb, out nr))
+													maxNearCells = Math.Max(maxNearCells, nr.Periods.Count + (nb == closeBin ? 1 : 0));
+											}
+
+											float yZ = spz.IsBuying ? (ySpBot - 12.5f) : (ySpTop + 0.5f);
+											yZ = Math.Max(profileHighY + 4f, Math.Min(profileLowY - 14f, yZ));
+											if (yZ >= panelTop + 4f && yZ <= panelBottom - 36f)
+											{
+												float availRightW = (xVol - 3f) - (xTpo + maxNearCells * letterWidth + 6f);
+												if (availRightW >= 46f)
+												{
+													string priceStr = FormatPrice(spSlPrice);
+													bool showFullPrice = availRightW >= 88f;
+													string spLabel = showFullPrice
+														? ((spz.IsBuying ? "Buy SP " : "Sell SP ") + priceStr)
+														: (spz.IsBuying ? "Buy SP" : "Sell SP");
+													float spTagW = showFullPrice ? Math.Min(availRightW, 98f) : 48f;
+													float spTagX = xVol - spTagW - 3f;
+													RectangleF spPill = new RectangleF(spTagX, yZ, spTagW, 12.5f);
+													RenderTarget.FillRectangle(spPill, spz.IsBuying ? spBuyPillBgBrush : spSellPillBgBrush);
+													RenderTarget.DrawRectangle(spPill, spBorder, 1.0f);
+													DrawText(spLabel, spTagX + 3f, yZ, spTagW - 5f, 12.5f, spTagFormat, spBorder);
+												}
 											}
 										}
 									}
@@ -4809,12 +4950,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 								PriceRow topRow = day.Rows[maxBin];
 								bool isAbPoorHigh = topRow.Periods.Contains(0) && topRow.Periods.Contains(1);
 								bool isPoorHigh = !isAbPoorHigh && topRow.Periods.Count >= 2;
-								bool enableThisHigh = ShowPoorHighLow && ((isAbPoorHigh || isPoorHigh) ? ShowPoorHigh : ShowSwingHigh);
-								string highLevelName = isAbPoorHigh ? "ABPoorHigh" : (isPoorHigh ? "PoorHigh" : "SwingHigh");
-								DxBrush highLevelBrush = isAbPoorHigh ? abPoorBrush : (isPoorHigh ? cyanBrush : swingLineBrush);
+								bool showTopPoorBox = !isRunningDay && ShowPoorHighLow && ShowPoorHigh && (isAbPoorHigh || isPoorHigh);
+								string highLevelName = isAbPoorHigh ? "ABPoorHigh" : "PoorHigh";
+								DxBrush highLevelBrush = highExtremeBrush;
 
 								float topTagY = profileHighY - 17f;
-								float headerY = Math.Max(panelTop + 6f, (enableThisHigh ? topTagY - 36f : profileHighY - 38f));
+								float headerY = Math.Max(panelTop + 6f, (showTopPoorBox ? topTagY - 36f : profileHighY - 36f));
 								float btnRowY = headerY + 17f;
 
 								// Split Profile (Expanded)
@@ -4844,7 +4985,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 											? Math.Max(0, Math.Min(orderedSlices[orderedSlices.Count - 1].PeriodIndex, LetterSequence.Length - 1))
 											: 0;
 										char endSliceChar = LetterSequence[maxSliceIdx];
-										bool isSplitDayLive = isLatestDay && (maxSliceIdx + 1) < Math.Max(1, day.ExpectedPeriodCount);
+										bool isSplitDayLive = isRunningDay;
 										string splitHdrTitle = isSplitDayLive
 											? string.Format(CultureInfo.InvariantCulture, "SPLIT PROFILE (A..{0}) LIVE", endSliceChar)
 											: string.Format(CultureInfo.InvariantCulture, "SPLIT PROFILE (A..{0})", endSliceChar);
@@ -4864,6 +5005,36 @@ namespace NinjaTrader.NinjaScript.Indicators
 											vaFillBrush);
 										RenderTarget.DrawLine(new Vector2(xSplitStart, yVaTop), new Vector2(xSplitEnd, yVaTop), vaBorderBrush, 1.0f, dashedStroke);
 										RenderTarget.DrawLine(new Vector2(xSplitStart, yVaBot), new Vector2(xSplitEnd, yVaBot), vaBorderBrush, 1.0f, dashedStroke);
+
+										// Highlight Single Print Zones & SL lines inside Split Profile as well
+										if (ShowSinglePrints && day.SinglePrintZones.Count > 0)
+										{
+											for (int z = 0; z < day.SinglePrintZones.Count; z++)
+											{
+												SinglePrintZone spz = day.SinglePrintZones[z];
+												float ySpTop = SessionPriceToY(day, spz.EndBin * dStep + dStep * 0.5, step);
+												float ySpBot = SessionPriceToY(day, spz.StartBin * dStep - dStep * 0.5, step);
+												if (ySpTop > ySpBot)
+												{
+													float sw = ySpTop;
+													ySpTop = ySpBot;
+													ySpBot = sw;
+												}
+												float spH = Math.Max(3.0f, ySpBot - ySpTop);
+												float ySpSlLine = spz.IsBuying ? ySpBot : ySpTop;
+												if (ySpBot >= panelTop && ySpTop <= panelBottom - 25f)
+												{
+													RenderTarget.FillRectangle(
+														new RectangleF(xSplitStart, ySpTop, Math.Max(10f, xSplitEnd - xSplitStart), spH),
+														spz.IsBuying ? singleBuyRowBrush : singleSellRowBrush);
+													RenderTarget.DrawLine(
+														new Vector2(xSplitStart, ySpSlLine),
+														new Vector2(xSplitEnd, ySpSlLine),
+														spz.IsBuying ? singleBuyBorderBrush : singleSellBorderBrush,
+														1.75f);
+												}
+											}
+										}
 
 										if (ShowInitialBalance && day.InitialBalanceHigh != double.MinValue && day.InitialBalanceLow != double.MaxValue)
 										{
@@ -5021,21 +5192,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 									}
 								}
 
-								// Top Extreme Pill
-								if (enableThisHigh)
+								// Top Extreme Pill (PoorHigh / ABPoorHigh only — SwingHigh box removed)
+								if (showTopPoorBox)
 								{
 									float tagW = 84f;
 									float tagX = (xIb + xCollapsedRight) * 0.5f - tagW * 0.5f;
 									RectangleF tagPill = new RectangleF(tagX, topTagY, tagW, 15f);
 									RenderTarget.FillRectangle(tagPill, pillBgBrush);
-									RenderTarget.DrawRectangle(tagPill, cardBorderBrush, 0.8f);
+									RenderTarget.DrawRectangle(tagPill, highExtremeBorderBrush, 1.0f);
 									DrawText(highLevelName, tagX, topTagY, tagW, 15f, tagCenterFormat, highLevelBrush);
 								}
 
 								// Day Header Pill
 								int expectedTpos = Math.Max(1, day.ExpectedPeriodCount);
 								int printedTpos = Math.Min(expectedTpos, Math.Max(day.PeriodSlices.Count, day.LastPeriod + 1));
-								bool isDayLive = isLatestDay && printedTpos < expectedTpos;
+								bool isDayLive = isRunningDay;
 								string tpoStatus = isDayLive
 									? string.Format(CultureInfo.InvariantCulture, "LIVE: {0}/{1} TPO", printedTpos, expectedTpos)
 									: string.Format(CultureInfo.InvariantCulture, "{0}/{1} TPO", printedTpos, expectedTpos);
@@ -5068,22 +5239,22 @@ namespace NinjaTrader.NinjaScript.Indicators
 									});
 								}
 
-								// Bottom Extreme Pill
+								// Bottom Extreme Pill (PoorLow / ABPoorLow only — SwingLow box removed)
 								PriceRow botRow = day.Rows[minBin];
 								bool isAbPoorLow = botRow.Periods.Contains(0) && botRow.Periods.Contains(1);
 								bool isPoorLow = !isAbPoorLow && botRow.Periods.Count >= 2;
-								bool enableThisLow = ShowPoorHighLow && ((isAbPoorLow || isPoorLow) ? ShowPoorLow : ShowSwingLow);
-								string lowLevelName = isAbPoorLow ? "ABPoorLow" : (isPoorLow ? "PoorLow" : "SwingLow");
-								DxBrush lowLevelBrush = isAbPoorLow ? abPoorBrush : (isPoorLow ? cyanBrush : swingLineBrush);
+								bool showBotPoorBox = !isRunningDay && ShowPoorHighLow && ShowPoorLow && (isAbPoorLow || isPoorLow);
+								string lowLevelName = isAbPoorLow ? "ABPoorLow" : "PoorLow";
+								DxBrush lowLevelBrush = lowExtremeBrush;
 
 								float botTagY = profileLowY + 3f;
-								if (enableThisLow)
+								if (showBotPoorBox)
 								{
 									float tagW = 84f;
 									float tagX = (xIb + xCollapsedRight) * 0.5f - tagW * 0.5f;
 									RectangleF tagPill = new RectangleF(tagX, botTagY, tagW, 15f);
 									RenderTarget.FillRectangle(tagPill, pillBgBrush);
-									RenderTarget.DrawRectangle(tagPill, cardBorderBrush, 0.8f);
+									RenderTarget.DrawRectangle(tagPill, lowExtremeBorderBrush, 1.0f);
 									DrawText(lowLevelName, tagX, botTagY, tagW, 15f, tagCenterFormat, lowLevelBrush);
 								}
 
@@ -5093,11 +5264,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 									bool sumMinimized = IsSummaryBoxMinimized;
 									float summaryCardH = sumMinimized ? (2f * 12.2f + 8f) : (9f * 12.2f + 8f);
 									float fixedBottomTopY = dateBannerY - summaryCardH - 4f;
-									float floatingTopY = enableThisLow ? (botTagY + 18f) : (profileLowY + 8f);
+									float floatingTopY = showBotPoorBox ? (botTagY + 18f) : (profileLowY + 8f);
 									float summaryStartTopY = FixSummaryBoxAtBottom ? fixedBottomTopY : floatingTopY;
 									float summaryCardW = Math.Min(234f, Math.Max(195f, slotWidth - 12f));
 
-									Draw50ChartsSummaryCard(
+									DrawAK10XSummaryCard(
 										day, prevDay, allDays, i,
 										poc, vah, val, dStep, avgIbRange,
 										xIb, summaryStartTopY, summaryCardW,
@@ -5214,13 +5385,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 					continue;
 
 				RectangleF bgRect = new RectangleF(boxLeft, t.DrawY, boxWidth, t.Height);
-				RenderTarget.FillRectangle(bgRect, bgBrush);
-				RenderTarget.DrawRectangle(bgRect, borderBrush, 0.7f);
+				RenderTarget.FillRectangle(bgRect, t.FillBrush ?? bgBrush);
+				RenderTarget.DrawRectangle(bgRect, t.BorderBrush ?? borderBrush, t.BorderBrush != null ? 1.0f : 0.7f);
 				DrawText(t.Text, boxLeft + 2f, t.DrawY, boxWidth - 5f, t.Height, rightFormat, t.Brush);
 			}
 		}
 
-		private void Draw50ChartsSummaryCard(
+		private void DrawAK10XSummaryCard(
 			DayProfile day, DayProfile prevDay, List<DayProfile> allDays, int idx,
 			int poc, int vah, int val, double step, double avgIbRange,
 			float xLeft, float desiredTopY, float cardWidth,
@@ -5345,7 +5516,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			Tuple<string, DxBrush>[] line1Segments = new Tuple<string, DxBrush>[]
 			{
-				Tuple.Create("Market Profile: ", textBrush),
+				Tuple.Create("AK10X Market Profile: ", textBrush),
 				Tuple.Create(instName, orangeBrush),
 				Tuple.Create(" ● LIVE ACCELPIX", greenBrush),
 				Tuple.Create(", TPOSize: ", textBrush),
@@ -5373,7 +5544,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				string shortMode = TpoSize <= 0 ? " (Auto)" : " (Man)";
 				line1Segments = new Tuple<string, DxBrush>[]
 				{
-					Tuple.Create("MP: ", textBrush),
+					Tuple.Create("AK10X MP: ", textBrush),
 					Tuple.Create(instName, orangeBrush),
 					Tuple.Create(" ● LIVE", greenBrush),
 					Tuple.Create(", Step: ", textBrush),
@@ -5886,19 +6057,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 {
 	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
 	{
-		private INDMarketProfile50Charts[] cacheINDMarketProfile50Charts;
-		public INDMarketProfile50Charts INDMarketProfile50Charts(double tpoSize, int tpoIntervalMinutes, int valueAreaPercent, int initialBalanceMinutes, int daysToDisplay, bool filterByTradingHours, int marketOpen, int marketClose, string sessionLabel, bool splitLatestDay, bool showVolumeProfile, bool showInitialBalance, bool showSinglePrints, bool showPoorHighLow, int profileWidth, int fontSize, bool showPoorHigh, bool showPoorLow, bool showSwingHigh, bool showSwingLow, bool showVirginVAH, bool showVirginVAL, bool showVirginVPoC, bool showVirginVPPoC, bool showSummary, bool fixSummaryBoxAtBottom, bool minimizeSummaryBoxes, bool showTopLeftBox, bool showLogoInTopBox, bool minimizeTopLeftBox, bool showChartButtons)
+		private AK10XIndiaMarketProfile[] cacheAK10XIndiaMarketProfile;
+		public AK10XIndiaMarketProfile AK10XIndiaMarketProfile(double tpoSize, int tpoIntervalMinutes, int valueAreaPercent, int initialBalanceMinutes, int daysToDisplay, bool filterByTradingHours, int marketOpen, int marketClose, string sessionLabel, bool splitLatestDay, bool showVolumeProfile, bool showInitialBalance, bool showSinglePrints, bool showPoorHighLow, int profileWidth, int fontSize, bool showPoorHigh, bool showPoorLow, bool showSwingHigh, bool showSwingLow, bool showVirginVAH, bool showVirginVAL, bool showVirginVPoC, bool showVirginVPPoC, bool showSummary, bool fixSummaryBoxAtBottom, bool minimizeSummaryBoxes, bool showTopLeftBox, bool showLogoInTopBox, bool minimizeTopLeftBox, bool showChartButtons)
 		{
-			return INDMarketProfile50Charts(Input, tpoSize, tpoIntervalMinutes, valueAreaPercent, initialBalanceMinutes, daysToDisplay, filterByTradingHours, marketOpen, marketClose, sessionLabel, splitLatestDay, showVolumeProfile, showInitialBalance, showSinglePrints, showPoorHighLow, profileWidth, fontSize, showPoorHigh, showPoorLow, showSwingHigh, showSwingLow, showVirginVAH, showVirginVAL, showVirginVPoC, showVirginVPPoC, showSummary, fixSummaryBoxAtBottom, minimizeSummaryBoxes, showTopLeftBox, showLogoInTopBox, minimizeTopLeftBox, showChartButtons);
+			return AK10XIndiaMarketProfile(Input, tpoSize, tpoIntervalMinutes, valueAreaPercent, initialBalanceMinutes, daysToDisplay, filterByTradingHours, marketOpen, marketClose, sessionLabel, splitLatestDay, showVolumeProfile, showInitialBalance, showSinglePrints, showPoorHighLow, profileWidth, fontSize, showPoorHigh, showPoorLow, showSwingHigh, showSwingLow, showVirginVAH, showVirginVAL, showVirginVPoC, showVirginVPPoC, showSummary, fixSummaryBoxAtBottom, minimizeSummaryBoxes, showTopLeftBox, showLogoInTopBox, minimizeTopLeftBox, showChartButtons);
 		}
 
-		public INDMarketProfile50Charts INDMarketProfile50Charts(ISeries<double> input, double tpoSize, int tpoIntervalMinutes, int valueAreaPercent, int initialBalanceMinutes, int daysToDisplay, bool filterByTradingHours, int marketOpen, int marketClose, string sessionLabel, bool splitLatestDay, bool showVolumeProfile, bool showInitialBalance, bool showSinglePrints, bool showPoorHighLow, int profileWidth, int fontSize, bool showPoorHigh, bool showPoorLow, bool showSwingHigh, bool showSwingLow, bool showVirginVAH, bool showVirginVAL, bool showVirginVPoC, bool showVirginVPPoC, bool showSummary, bool fixSummaryBoxAtBottom, bool minimizeSummaryBoxes, bool showTopLeftBox, bool showLogoInTopBox, bool minimizeTopLeftBox, bool showChartButtons)
+		public AK10XIndiaMarketProfile AK10XIndiaMarketProfile(ISeries<double> input, double tpoSize, int tpoIntervalMinutes, int valueAreaPercent, int initialBalanceMinutes, int daysToDisplay, bool filterByTradingHours, int marketOpen, int marketClose, string sessionLabel, bool splitLatestDay, bool showVolumeProfile, bool showInitialBalance, bool showSinglePrints, bool showPoorHighLow, int profileWidth, int fontSize, bool showPoorHigh, bool showPoorLow, bool showSwingHigh, bool showSwingLow, bool showVirginVAH, bool showVirginVAL, bool showVirginVPoC, bool showVirginVPPoC, bool showSummary, bool fixSummaryBoxAtBottom, bool minimizeSummaryBoxes, bool showTopLeftBox, bool showLogoInTopBox, bool minimizeTopLeftBox, bool showChartButtons)
 		{
-			if (cacheINDMarketProfile50Charts != null)
-				for (int idx = 0; idx < cacheINDMarketProfile50Charts.Length; idx++)
-					if (cacheINDMarketProfile50Charts[idx] != null && cacheINDMarketProfile50Charts[idx].TpoSize == tpoSize && cacheINDMarketProfile50Charts[idx].TpoIntervalMinutes == tpoIntervalMinutes && cacheINDMarketProfile50Charts[idx].ValueAreaPercent == valueAreaPercent && cacheINDMarketProfile50Charts[idx].InitialBalanceMinutes == initialBalanceMinutes && cacheINDMarketProfile50Charts[idx].DaysToDisplay == daysToDisplay && cacheINDMarketProfile50Charts[idx].FilterByTradingHours == filterByTradingHours && cacheINDMarketProfile50Charts[idx].MarketOpen == marketOpen && cacheINDMarketProfile50Charts[idx].MarketClose == marketClose && cacheINDMarketProfile50Charts[idx].SessionLabel == sessionLabel && cacheINDMarketProfile50Charts[idx].SplitLatestDay == splitLatestDay && cacheINDMarketProfile50Charts[idx].ShowVolumeProfile == showVolumeProfile && cacheINDMarketProfile50Charts[idx].ShowInitialBalance == showInitialBalance && cacheINDMarketProfile50Charts[idx].ShowSinglePrints == showSinglePrints && cacheINDMarketProfile50Charts[idx].ShowPoorHighLow == showPoorHighLow && cacheINDMarketProfile50Charts[idx].ProfileWidth == profileWidth && cacheINDMarketProfile50Charts[idx].FontSize == fontSize && cacheINDMarketProfile50Charts[idx].ShowPoorHigh == showPoorHigh && cacheINDMarketProfile50Charts[idx].ShowPoorLow == showPoorLow && cacheINDMarketProfile50Charts[idx].ShowSwingHigh == showSwingHigh && cacheINDMarketProfile50Charts[idx].ShowSwingLow == showSwingLow && cacheINDMarketProfile50Charts[idx].ShowVirginVAH == showVirginVAH && cacheINDMarketProfile50Charts[idx].ShowVirginVAL == showVirginVAL && cacheINDMarketProfile50Charts[idx].ShowVirginVPoC == showVirginVPoC && cacheINDMarketProfile50Charts[idx].ShowVirginVPPoC == showVirginVPPoC && cacheINDMarketProfile50Charts[idx].ShowSummary == showSummary && cacheINDMarketProfile50Charts[idx].FixSummaryBoxAtBottom == fixSummaryBoxAtBottom && cacheINDMarketProfile50Charts[idx].MinimizeSummaryBoxes == minimizeSummaryBoxes && cacheINDMarketProfile50Charts[idx].ShowTopLeftBox == showTopLeftBox && cacheINDMarketProfile50Charts[idx].ShowLogoInTopBox == showLogoInTopBox && cacheINDMarketProfile50Charts[idx].MinimizeTopLeftBox == minimizeTopLeftBox && cacheINDMarketProfile50Charts[idx].ShowChartButtons == showChartButtons && cacheINDMarketProfile50Charts[idx].EqualsInput(input))
-						return cacheINDMarketProfile50Charts[idx];
-			return CacheIndicator<INDMarketProfile50Charts>(new INDMarketProfile50Charts(){ TpoSize = tpoSize, TpoIntervalMinutes = tpoIntervalMinutes, ValueAreaPercent = valueAreaPercent, InitialBalanceMinutes = initialBalanceMinutes, DaysToDisplay = daysToDisplay, FilterByTradingHours = filterByTradingHours, MarketOpen = marketOpen, MarketClose = marketClose, SessionLabel = sessionLabel, SplitLatestDay = splitLatestDay, ShowVolumeProfile = showVolumeProfile, ShowInitialBalance = showInitialBalance, ShowSinglePrints = showSinglePrints, ShowPoorHighLow = showPoorHighLow, ProfileWidth = profileWidth, FontSize = fontSize, ShowPoorHigh = showPoorHigh, ShowPoorLow = showPoorLow, ShowSwingHigh = showSwingHigh, ShowSwingLow = showSwingLow, ShowVirginVAH = showVirginVAH, ShowVirginVAL = showVirginVAL, ShowVirginVPoC = showVirginVPoC, ShowVirginVPPoC = showVirginVPPoC, ShowSummary = showSummary, FixSummaryBoxAtBottom = fixSummaryBoxAtBottom, MinimizeSummaryBoxes = minimizeSummaryBoxes, ShowTopLeftBox = showTopLeftBox, ShowLogoInTopBox = showLogoInTopBox, MinimizeTopLeftBox = minimizeTopLeftBox, ShowChartButtons = showChartButtons }, input, ref cacheINDMarketProfile50Charts);
+			if (cacheAK10XIndiaMarketProfile != null)
+				for (int idx = 0; idx < cacheAK10XIndiaMarketProfile.Length; idx++)
+					if (cacheAK10XIndiaMarketProfile[idx] != null && cacheAK10XIndiaMarketProfile[idx].TpoSize == tpoSize && cacheAK10XIndiaMarketProfile[idx].TpoIntervalMinutes == tpoIntervalMinutes && cacheAK10XIndiaMarketProfile[idx].ValueAreaPercent == valueAreaPercent && cacheAK10XIndiaMarketProfile[idx].InitialBalanceMinutes == initialBalanceMinutes && cacheAK10XIndiaMarketProfile[idx].DaysToDisplay == daysToDisplay && cacheAK10XIndiaMarketProfile[idx].FilterByTradingHours == filterByTradingHours && cacheAK10XIndiaMarketProfile[idx].MarketOpen == marketOpen && cacheAK10XIndiaMarketProfile[idx].MarketClose == marketClose && cacheAK10XIndiaMarketProfile[idx].SessionLabel == sessionLabel && cacheAK10XIndiaMarketProfile[idx].SplitLatestDay == splitLatestDay && cacheAK10XIndiaMarketProfile[idx].ShowVolumeProfile == showVolumeProfile && cacheAK10XIndiaMarketProfile[idx].ShowInitialBalance == showInitialBalance && cacheAK10XIndiaMarketProfile[idx].ShowSinglePrints == showSinglePrints && cacheAK10XIndiaMarketProfile[idx].ShowPoorHighLow == showPoorHighLow && cacheAK10XIndiaMarketProfile[idx].ProfileWidth == profileWidth && cacheAK10XIndiaMarketProfile[idx].FontSize == fontSize && cacheAK10XIndiaMarketProfile[idx].ShowPoorHigh == showPoorHigh && cacheAK10XIndiaMarketProfile[idx].ShowPoorLow == showPoorLow && cacheAK10XIndiaMarketProfile[idx].ShowSwingHigh == showSwingHigh && cacheAK10XIndiaMarketProfile[idx].ShowSwingLow == showSwingLow && cacheAK10XIndiaMarketProfile[idx].ShowVirginVAH == showVirginVAH && cacheAK10XIndiaMarketProfile[idx].ShowVirginVAL == showVirginVAL && cacheAK10XIndiaMarketProfile[idx].ShowVirginVPoC == showVirginVPoC && cacheAK10XIndiaMarketProfile[idx].ShowVirginVPPoC == showVirginVPPoC && cacheAK10XIndiaMarketProfile[idx].ShowSummary == showSummary && cacheAK10XIndiaMarketProfile[idx].FixSummaryBoxAtBottom == fixSummaryBoxAtBottom && cacheAK10XIndiaMarketProfile[idx].MinimizeSummaryBoxes == minimizeSummaryBoxes && cacheAK10XIndiaMarketProfile[idx].ShowTopLeftBox == showTopLeftBox && cacheAK10XIndiaMarketProfile[idx].ShowLogoInTopBox == showLogoInTopBox && cacheAK10XIndiaMarketProfile[idx].MinimizeTopLeftBox == minimizeTopLeftBox && cacheAK10XIndiaMarketProfile[idx].ShowChartButtons == showChartButtons && cacheAK10XIndiaMarketProfile[idx].EqualsInput(input))
+						return cacheAK10XIndiaMarketProfile[idx];
+			return CacheIndicator<AK10XIndiaMarketProfile>(new AK10XIndiaMarketProfile(){ TpoSize = tpoSize, TpoIntervalMinutes = tpoIntervalMinutes, ValueAreaPercent = valueAreaPercent, InitialBalanceMinutes = initialBalanceMinutes, DaysToDisplay = daysToDisplay, FilterByTradingHours = filterByTradingHours, MarketOpen = marketOpen, MarketClose = marketClose, SessionLabel = sessionLabel, SplitLatestDay = splitLatestDay, ShowVolumeProfile = showVolumeProfile, ShowInitialBalance = showInitialBalance, ShowSinglePrints = showSinglePrints, ShowPoorHighLow = showPoorHighLow, ProfileWidth = profileWidth, FontSize = fontSize, ShowPoorHigh = showPoorHigh, ShowPoorLow = showPoorLow, ShowSwingHigh = showSwingHigh, ShowSwingLow = showSwingLow, ShowVirginVAH = showVirginVAH, ShowVirginVAL = showVirginVAL, ShowVirginVPoC = showVirginVPoC, ShowVirginVPPoC = showVirginVPPoC, ShowSummary = showSummary, FixSummaryBoxAtBottom = fixSummaryBoxAtBottom, MinimizeSummaryBoxes = minimizeSummaryBoxes, ShowTopLeftBox = showTopLeftBox, ShowLogoInTopBox = showLogoInTopBox, MinimizeTopLeftBox = minimizeTopLeftBox, ShowChartButtons = showChartButtons }, input, ref cacheAK10XIndiaMarketProfile);
 		}
 	}
 }
@@ -5907,14 +6078,14 @@ namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
 {
 	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
 	{
-		public Indicators.INDMarketProfile50Charts INDMarketProfile50Charts(double tpoSize, int tpoIntervalMinutes, int valueAreaPercent, int initialBalanceMinutes, int daysToDisplay, bool filterByTradingHours, int marketOpen, int marketClose, string sessionLabel, bool splitLatestDay, bool showVolumeProfile, bool showInitialBalance, bool showSinglePrints, bool showPoorHighLow, int profileWidth, int fontSize, bool showPoorHigh, bool showPoorLow, bool showSwingHigh, bool showSwingLow, bool showVirginVAH, bool showVirginVAL, bool showVirginVPoC, bool showVirginVPPoC, bool showSummary, bool fixSummaryBoxAtBottom, bool minimizeSummaryBoxes, bool showTopLeftBox, bool showLogoInTopBox, bool minimizeTopLeftBox, bool showChartButtons)
+		public Indicators.AK10XIndiaMarketProfile AK10XIndiaMarketProfile(double tpoSize, int tpoIntervalMinutes, int valueAreaPercent, int initialBalanceMinutes, int daysToDisplay, bool filterByTradingHours, int marketOpen, int marketClose, string sessionLabel, bool splitLatestDay, bool showVolumeProfile, bool showInitialBalance, bool showSinglePrints, bool showPoorHighLow, int profileWidth, int fontSize, bool showPoorHigh, bool showPoorLow, bool showSwingHigh, bool showSwingLow, bool showVirginVAH, bool showVirginVAL, bool showVirginVPoC, bool showVirginVPPoC, bool showSummary, bool fixSummaryBoxAtBottom, bool minimizeSummaryBoxes, bool showTopLeftBox, bool showLogoInTopBox, bool minimizeTopLeftBox, bool showChartButtons)
 		{
-			return indicator.INDMarketProfile50Charts(Input, tpoSize, tpoIntervalMinutes, valueAreaPercent, initialBalanceMinutes, daysToDisplay, filterByTradingHours, marketOpen, marketClose, sessionLabel, splitLatestDay, showVolumeProfile, showInitialBalance, showSinglePrints, showPoorHighLow, profileWidth, fontSize, showPoorHigh, showPoorLow, showSwingHigh, showSwingLow, showVirginVAH, showVirginVAL, showVirginVPoC, showVirginVPPoC, showSummary, fixSummaryBoxAtBottom, minimizeSummaryBoxes, showTopLeftBox, showLogoInTopBox, minimizeTopLeftBox, showChartButtons);
+			return indicator.AK10XIndiaMarketProfile(Input, tpoSize, tpoIntervalMinutes, valueAreaPercent, initialBalanceMinutes, daysToDisplay, filterByTradingHours, marketOpen, marketClose, sessionLabel, splitLatestDay, showVolumeProfile, showInitialBalance, showSinglePrints, showPoorHighLow, profileWidth, fontSize, showPoorHigh, showPoorLow, showSwingHigh, showSwingLow, showVirginVAH, showVirginVAL, showVirginVPoC, showVirginVPPoC, showSummary, fixSummaryBoxAtBottom, minimizeSummaryBoxes, showTopLeftBox, showLogoInTopBox, minimizeTopLeftBox, showChartButtons);
 		}
 
-		public Indicators.INDMarketProfile50Charts INDMarketProfile50Charts(ISeries<double> input , double tpoSize, int tpoIntervalMinutes, int valueAreaPercent, int initialBalanceMinutes, int daysToDisplay, bool filterByTradingHours, int marketOpen, int marketClose, string sessionLabel, bool splitLatestDay, bool showVolumeProfile, bool showInitialBalance, bool showSinglePrints, bool showPoorHighLow, int profileWidth, int fontSize, bool showPoorHigh, bool showPoorLow, bool showSwingHigh, bool showSwingLow, bool showVirginVAH, bool showVirginVAL, bool showVirginVPoC, bool showVirginVPPoC, bool showSummary, bool fixSummaryBoxAtBottom, bool minimizeSummaryBoxes, bool showTopLeftBox, bool showLogoInTopBox, bool minimizeTopLeftBox, bool showChartButtons)
+		public Indicators.AK10XIndiaMarketProfile AK10XIndiaMarketProfile(ISeries<double> input , double tpoSize, int tpoIntervalMinutes, int valueAreaPercent, int initialBalanceMinutes, int daysToDisplay, bool filterByTradingHours, int marketOpen, int marketClose, string sessionLabel, bool splitLatestDay, bool showVolumeProfile, bool showInitialBalance, bool showSinglePrints, bool showPoorHighLow, int profileWidth, int fontSize, bool showPoorHigh, bool showPoorLow, bool showSwingHigh, bool showSwingLow, bool showVirginVAH, bool showVirginVAL, bool showVirginVPoC, bool showVirginVPPoC, bool showSummary, bool fixSummaryBoxAtBottom, bool minimizeSummaryBoxes, bool showTopLeftBox, bool showLogoInTopBox, bool minimizeTopLeftBox, bool showChartButtons)
 		{
-			return indicator.INDMarketProfile50Charts(input, tpoSize, tpoIntervalMinutes, valueAreaPercent, initialBalanceMinutes, daysToDisplay, filterByTradingHours, marketOpen, marketClose, sessionLabel, splitLatestDay, showVolumeProfile, showInitialBalance, showSinglePrints, showPoorHighLow, profileWidth, fontSize, showPoorHigh, showPoorLow, showSwingHigh, showSwingLow, showVirginVAH, showVirginVAL, showVirginVPoC, showVirginVPPoC, showSummary, fixSummaryBoxAtBottom, minimizeSummaryBoxes, showTopLeftBox, showLogoInTopBox, minimizeTopLeftBox, showChartButtons);
+			return indicator.AK10XIndiaMarketProfile(input, tpoSize, tpoIntervalMinutes, valueAreaPercent, initialBalanceMinutes, daysToDisplay, filterByTradingHours, marketOpen, marketClose, sessionLabel, splitLatestDay, showVolumeProfile, showInitialBalance, showSinglePrints, showPoorHighLow, profileWidth, fontSize, showPoorHigh, showPoorLow, showSwingHigh, showSwingLow, showVirginVAH, showVirginVAL, showVirginVPoC, showVirginVPPoC, showSummary, fixSummaryBoxAtBottom, minimizeSummaryBoxes, showTopLeftBox, showLogoInTopBox, minimizeTopLeftBox, showChartButtons);
 		}
 	}
 }
@@ -5923,14 +6094,14 @@ namespace NinjaTrader.NinjaScript.Strategies
 {
 	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
 	{
-		public Indicators.INDMarketProfile50Charts INDMarketProfile50Charts(double tpoSize, int tpoIntervalMinutes, int valueAreaPercent, int initialBalanceMinutes, int daysToDisplay, bool filterByTradingHours, int marketOpen, int marketClose, string sessionLabel, bool splitLatestDay, bool showVolumeProfile, bool showInitialBalance, bool showSinglePrints, bool showPoorHighLow, int profileWidth, int fontSize, bool showPoorHigh, bool showPoorLow, bool showSwingHigh, bool showSwingLow, bool showVirginVAH, bool showVirginVAL, bool showVirginVPoC, bool showVirginVPPoC, bool showSummary, bool fixSummaryBoxAtBottom, bool minimizeSummaryBoxes, bool showTopLeftBox, bool showLogoInTopBox, bool minimizeTopLeftBox, bool showChartButtons)
+		public Indicators.AK10XIndiaMarketProfile AK10XIndiaMarketProfile(double tpoSize, int tpoIntervalMinutes, int valueAreaPercent, int initialBalanceMinutes, int daysToDisplay, bool filterByTradingHours, int marketOpen, int marketClose, string sessionLabel, bool splitLatestDay, bool showVolumeProfile, bool showInitialBalance, bool showSinglePrints, bool showPoorHighLow, int profileWidth, int fontSize, bool showPoorHigh, bool showPoorLow, bool showSwingHigh, bool showSwingLow, bool showVirginVAH, bool showVirginVAL, bool showVirginVPoC, bool showVirginVPPoC, bool showSummary, bool fixSummaryBoxAtBottom, bool minimizeSummaryBoxes, bool showTopLeftBox, bool showLogoInTopBox, bool minimizeTopLeftBox, bool showChartButtons)
 		{
-			return indicator.INDMarketProfile50Charts(Input, tpoSize, tpoIntervalMinutes, valueAreaPercent, initialBalanceMinutes, daysToDisplay, filterByTradingHours, marketOpen, marketClose, sessionLabel, splitLatestDay, showVolumeProfile, showInitialBalance, showSinglePrints, showPoorHighLow, profileWidth, fontSize, showPoorHigh, showPoorLow, showSwingHigh, showSwingLow, showVirginVAH, showVirginVAL, showVirginVPoC, showVirginVPPoC, showSummary, fixSummaryBoxAtBottom, minimizeSummaryBoxes, showTopLeftBox, showLogoInTopBox, minimizeTopLeftBox, showChartButtons);
+			return indicator.AK10XIndiaMarketProfile(Input, tpoSize, tpoIntervalMinutes, valueAreaPercent, initialBalanceMinutes, daysToDisplay, filterByTradingHours, marketOpen, marketClose, sessionLabel, splitLatestDay, showVolumeProfile, showInitialBalance, showSinglePrints, showPoorHighLow, profileWidth, fontSize, showPoorHigh, showPoorLow, showSwingHigh, showSwingLow, showVirginVAH, showVirginVAL, showVirginVPoC, showVirginVPPoC, showSummary, fixSummaryBoxAtBottom, minimizeSummaryBoxes, showTopLeftBox, showLogoInTopBox, minimizeTopLeftBox, showChartButtons);
 		}
 
-		public Indicators.INDMarketProfile50Charts INDMarketProfile50Charts(ISeries<double> input , double tpoSize, int tpoIntervalMinutes, int valueAreaPercent, int initialBalanceMinutes, int daysToDisplay, bool filterByTradingHours, int marketOpen, int marketClose, string sessionLabel, bool splitLatestDay, bool showVolumeProfile, bool showInitialBalance, bool showSinglePrints, bool showPoorHighLow, int profileWidth, int fontSize, bool showPoorHigh, bool showPoorLow, bool showSwingHigh, bool showSwingLow, bool showVirginVAH, bool showVirginVAL, bool showVirginVPoC, bool showVirginVPPoC, bool showSummary, bool fixSummaryBoxAtBottom, bool minimizeSummaryBoxes, bool showTopLeftBox, bool showLogoInTopBox, bool minimizeTopLeftBox, bool showChartButtons)
+		public Indicators.AK10XIndiaMarketProfile AK10XIndiaMarketProfile(ISeries<double> input , double tpoSize, int tpoIntervalMinutes, int valueAreaPercent, int initialBalanceMinutes, int daysToDisplay, bool filterByTradingHours, int marketOpen, int marketClose, string sessionLabel, bool splitLatestDay, bool showVolumeProfile, bool showInitialBalance, bool showSinglePrints, bool showPoorHighLow, int profileWidth, int fontSize, bool showPoorHigh, bool showPoorLow, bool showSwingHigh, bool showSwingLow, bool showVirginVAH, bool showVirginVAL, bool showVirginVPoC, bool showVirginVPPoC, bool showSummary, bool fixSummaryBoxAtBottom, bool minimizeSummaryBoxes, bool showTopLeftBox, bool showLogoInTopBox, bool minimizeTopLeftBox, bool showChartButtons)
 		{
-			return indicator.INDMarketProfile50Charts(input, tpoSize, tpoIntervalMinutes, valueAreaPercent, initialBalanceMinutes, daysToDisplay, filterByTradingHours, marketOpen, marketClose, sessionLabel, splitLatestDay, showVolumeProfile, showInitialBalance, showSinglePrints, showPoorHighLow, profileWidth, fontSize, showPoorHigh, showPoorLow, showSwingHigh, showSwingLow, showVirginVAH, showVirginVAL, showVirginVPoC, showVirginVPPoC, showSummary, fixSummaryBoxAtBottom, minimizeSummaryBoxes, showTopLeftBox, showLogoInTopBox, minimizeTopLeftBox, showChartButtons);
+			return indicator.AK10XIndiaMarketProfile(input, tpoSize, tpoIntervalMinutes, valueAreaPercent, initialBalanceMinutes, daysToDisplay, filterByTradingHours, marketOpen, marketClose, sessionLabel, splitLatestDay, showVolumeProfile, showInitialBalance, showSinglePrints, showPoorHighLow, profileWidth, fontSize, showPoorHigh, showPoorLow, showSwingHigh, showSwingLow, showVirginVAH, showVirginVAL, showVirginVPoC, showVirginVPPoC, showSummary, fixSummaryBoxAtBottom, minimizeSummaryBoxes, showTopLeftBox, showLogoInTopBox, minimizeTopLeftBox, showChartButtons);
 		}
 	}
 }

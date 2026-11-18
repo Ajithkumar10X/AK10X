@@ -27,18 +27,12 @@ using SharpDX.DirectWrite;
 namespace NinjaTrader.NinjaScript.Indicators
 {
 	/// <summary>
-	/// AK10XOrderflow — Institutional 5-Minute Orderflow Footprint Indicator (MZpack mzFootprint Style)
-	/// Modeled directly after STOCK_USER.xml:
-	/// - Left Cluster (Bid/Sell) x Right Cluster (Ask/Buy) with Volume Filter Tiers (Teal, Gray, RoyalBlue, Red)
-	/// - TicksPerLevel = 20 with smart auto-scaling so clusters never overlap on any instrument
-	/// - Bar POC (Yellow #FFFF00 box) and 70% Bar Value Area (Aquamarine #7FFFD4 20% opacity)
-	/// - Developing Session POC (Orange #FFA500) and Developing Session 70% VA (RoyalBlue #4169E1)
-	/// - 400% Diagonal Bid/Ask Imbalances (DeepPink #FF1493 Bid / Lime #00FF00 Ask, Filter 10+)
-	/// - Stacked Imbalance S/R Zones (2+ consecutive levels extended until broken by bar High/Low or Session end)
-	/// - Bottom 6-Row Statistic Grid (Buy Vol, Sell Vol, Delta, Cum. Delta, Min Delta, Max Delta) with Left Legend
-	/// - Works 100% standalone on standard 5-Minute charts without requiring NinjaTrader OrderFlow+ license
+	/// AK10XGlobalOrderflow — Institutional Orderflow Footprint Indicator for Global Markets (CME / Forex / Indices / Commodities)
+	/// Features selectable Data Feed (Default: NinjaTrader Feed, or Accelpix), Bid x Ask Clusters,
+	/// Bar POC & 70% Value Area, Developing Session VA/POC, Diagonal & Stacked Imbalance S/R Zones,
+	/// and Bottom 7-Row Statistic Grid (1:2 Logic, Buy Vol, Sell Vol, Delta, Cum. Delta, Min/Max Delta).
 	/// </summary>
-	public class AK10XOrderflow : Indicator
+	public class AK10XGlobalOrderflow : Indicator
 	{
 		#region Data Structures
 		private sealed class FootprintLevel
@@ -127,7 +121,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		#region Fields
 		private readonly Dictionary<int, FootprintBarData> barCache = new Dictionary<int, FootprintBarData>();
 		private readonly Dictionary<int, LiveTickAccumulator> liveAccumulators = new Dictionary<int, LiveTickAccumulator>();
-		private readonly Dictionary<DateTime, List<SubBar1M>> accelpixSubBarsBy5MSlot = new Dictionary<DateTime, List<SubBar1M>>();
+		private readonly Dictionary<DateTime, LiveTickAccumulator> historicalTickBySlot = new Dictionary<DateTime, LiveTickAccumulator>();
+		private readonly Dictionary<DateTime, List<SubBar1M>> subBarsBySlot = new Dictionary<DateTime, List<SubBar1M>>();
 		private readonly object dataLock = new object();
 
 		private double lastBidPrice;
@@ -142,6 +137,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private bool runtimeAutoStep = true;
 		private bool runtimeShowStatGrid = true;
 		private bool runtimeShowImbZones = true;
+		private AK10XOrderflowDataFeed? runtimeDataFeedOverride;
 		private bool initialBarWidthApplied = false;
 
 		// Interactive UI button rects (SharpDX coordinates)
@@ -153,6 +149,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private RectangleF btnGridToggleRect;
 		private RectangleF btnZonesToggleRect;
 		private RectangleF btnReloadLiveRect;
+		private RectangleF btnFeedToggleRect;
 		private bool mouseSubscribed = false;
 		private UIElement subscribedElement = null;
 		private ChartControl hookedOrderflowCC = null;
@@ -167,10 +164,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private int lastHandledOfMouseTimestamp = -1;
 		private DateTime lastBtnClickUtc = DateTime.MinValue;
 
-		private BarsRequest activeAccelpix1MReq;
+		private BarsRequest activeFeed1MReq;
+		private Instrument subscribedLiveInstrument;
 		private bool isConnectionStatusHooked;
 		private bool liveStreamInitialized;
 		private DateTime lastLiveRefreshUtc = DateTime.MinValue;
+
+		private AK10XOrderflowDataFeed EffectiveDataFeed
+		{
+			get { return runtimeDataFeedOverride.HasValue ? runtimeDataFeedOverride.Value : DataFeed; }
+		}
 
 		public override string DisplayName
 		{
@@ -179,6 +182,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 		#endregion
 
 		#region Properties
+		[NinjaScriptProperty]
+		[Display(Name = "Data Feed", Description = "Choose Accelpix Feed (NSE/BSE/MCX) or NinjaTrader Feed (CME/Forex/Global)", Order = 0, GroupName = "0. Data Feed")]
+		public AK10XOrderflowDataFeed DataFeed { get; set; }
+
 		[NinjaScriptProperty]
 		[Range(1, 500)]
 		[Display(Name = "Ticks Per Level", Description = "Price grouping in ticks (STOCK_USER.xml default = 20)", Order = 1, GroupName = "1. Footprint Core")]
@@ -242,13 +249,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public bool ShowStatisticGrid { get; set; }
 		#endregion
 
-		#region Lifecycle
+		#region Lifecycle & Dual Data Feed Engine (Accelpix / NinjaTrader)
 		protected override void OnStateChange()
 		{
 			if (State == State.SetDefaults)
 			{
-				Description = "AK10X 5-Minute Orderflow Footprint Indicator (MZpack mzFootprint Style from STOCK_USER.xml)";
-				Name = "AK10XOrderflow";
+				Description = "AK10X Global Orderflow Footprint Indicator (Selectable Data Feed: NinjaTrader Feed Default or Accelpix)";
+				Name = "AK10XGlobalOrderflow";
 				Calculate = Calculate.OnEachTick;
 				IsOverlay = true;
 				DisplayInDataBox = false;
@@ -256,6 +263,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				PaintPriceMarkers = true;
 				IsSuspendedWhileInactive = false;
 
+				DataFeed = AK10XOrderflowDataFeed.NinjaTrader;
 				TicksPerLevel = 20;
 				AutoScalePriceStep = true;
 				BarSpacePx = 110;
@@ -280,32 +288,89 @@ namespace NinjaTrader.NinjaScript.Indicators
 				{
 					barCache.Clear();
 					liveAccumulators.Clear();
-					accelpixSubBarsBy5MSlot.Clear();
+					historicalTickBySlot.Clear();
+					subBarsBySlot.Clear();
 					lastComputedBarCount = -1;
 					lastComputedLastClose = double.NaN;
 					lastComputedLastVol = -1;
 				}
+				runtimeDataFeedOverride = null;
 				runtimeTicksPerLevel = Math.Max(1, TicksPerLevel);
 				runtimeAutoStep = AutoScalePriceStep;
 				runtimeShowStatGrid = ShowStatisticGrid;
 				runtimeShowImbZones = ShowImbalanceSRZones;
-				liveStreamInitialized = false;
+				liveStreamInitialized = true;
 				EnsureMouseEventsSubscribed();
+				AttachSelectedDataFeedStream();
+				RequestSelectedDataFeedBarsAsync();
 			}
 			else if (State == State.Realtime)
 			{
 				if (!liveStreamInitialized)
 				{
 					liveStreamInitialized = true;
-					AttachAccelpixLiveStream();
-					RequestAccelpixLiveBarsAsync();
+					AttachSelectedDataFeedStream();
+					RequestSelectedDataFeedBarsAsync();
 				}
 			}
 			else if (State == State.Terminated)
 			{
-				DetachAccelpixLiveStream();
+				DetachSelectedDataFeedStream();
 				UnsubscribeMouseEvents();
 			}
+		}
+
+		private int GetChartPeriodMinutes()
+		{
+			try
+			{
+				if (BarsPeriod != null && BarsPeriod.BarsPeriodType == BarsPeriodType.Minute && BarsPeriod.Value > 0)
+					return BarsPeriod.Value;
+				if (ChartBars != null && ChartBars.Properties != null && ChartBars.Properties.BarsPeriod != null
+					&& ChartBars.Properties.BarsPeriod.BarsPeriodType == BarsPeriodType.Minute && ChartBars.Properties.BarsPeriod.Value > 0)
+					return ChartBars.Properties.BarsPeriod.Value;
+			}
+			catch { }
+			return 5;
+		}
+
+		private DateTime GetBarSlotKey(DateTime t)
+		{
+			int pMin = Math.Max(1, GetChartPeriodMinutes());
+			if (pMin <= 1)
+				return new DateTime(t.Year, t.Month, t.Day, t.Hour, t.Minute, 0, t.Kind);
+			int totalMin = t.Hour * 60 + t.Minute;
+			int rem = totalMin % pMin;
+			int slotMin = rem == 0 ? totalMin : (totalMin + (pMin - rem));
+			return t.Date.AddMinutes(slotMin);
+		}
+
+		private DateTime GetTickSlotKey(DateTime tickTime)
+		{
+			int pMin = Math.Max(1, GetChartPeriodMinutes());
+			int totalMin = tickTime.Hour * 60 + tickTime.Minute;
+			int slotMin = ((totalMin / pMin) + 1) * pMin;
+			if (tickTime.Second == 0 && tickTime.Millisecond == 0 && (totalMin % pMin == 0) && totalMin > 0)
+				slotMin = totalMin;
+			return tickTime.Date.AddMinutes(slotMin);
+		}
+
+		private void SwitchDataFeedLive(AK10XOrderflowDataFeed nextFeed)
+		{
+			DetachSelectedDataFeedStream();
+			lock (dataLock)
+			{
+				runtimeDataFeedOverride = nextFeed;
+				DataFeed = nextFeed;
+				subBarsBySlot.Clear();
+				historicalTickBySlot.Clear();
+				barCache.Clear();
+				lastComputedBarCount = -1;
+				lastComputedLastClose = double.NaN;
+			}
+			AttachSelectedDataFeedStream();
+			RequestSelectedDataFeedBarsAsync();
+			RequestImmediateOrderflowRedraw();
 		}
 
 		private void EnsureAccelpixProviderConnected()
@@ -356,28 +421,42 @@ namespace NinjaTrader.NinjaScript.Indicators
 			catch { }
 		}
 
-		private void AttachAccelpixLiveStream()
+		private void AttachSelectedDataFeedStream()
 		{
 			try
 			{
-				EnsureAccelpixProviderConnected();
+				if (EffectiveDataFeed == AK10XOrderflowDataFeed.Accelpix)
+				{
+					EnsureAccelpixProviderConnected();
+				}
 
 				if (!isConnectionStatusHooked)
 				{
-					Connection.ConnectionStatusUpdate += OnAccelpixConnectionStatusUpdate;
+					Connection.ConnectionStatusUpdate += OnDataFeedConnectionStatusUpdate;
 					isConnectionStatusHooked = true;
+				}
+
+				Instrument inst = Instrument;
+				if (inst != null && subscribedLiveInstrument != inst)
+				{
+					if (subscribedLiveInstrument != null)
+					{
+						try { subscribedLiveInstrument.MarketDataUpdate -= OnInstrumentMarketDataUpdate; } catch { }
+					}
+					inst.MarketDataUpdate += OnInstrumentMarketDataUpdate;
+					subscribedLiveInstrument = inst;
 				}
 			}
 			catch { }
 		}
 
-		private void DetachAccelpixLiveStream()
+		private void DetachSelectedDataFeedStream()
 		{
 			try
 			{
 				if (isConnectionStatusHooked)
 				{
-					Connection.ConnectionStatusUpdate -= OnAccelpixConnectionStatusUpdate;
+					Connection.ConnectionStatusUpdate -= OnDataFeedConnectionStatusUpdate;
 					isConnectionStatusHooked = false;
 				}
 			}
@@ -385,40 +464,73 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			try
 			{
-				BarsRequest req1 = activeAccelpix1MReq;
-				activeAccelpix1MReq = null;
+				if (subscribedLiveInstrument != null)
+				{
+					try { subscribedLiveInstrument.MarketDataUpdate -= OnInstrumentMarketDataUpdate; } catch { }
+					subscribedLiveInstrument = null;
+				}
+			}
+			catch { }
+
+			try
+			{
+				BarsRequest req1 = activeFeed1MReq;
+				activeFeed1MReq = null;
 				if (req1 != null)
 				{
-					req1.Update -= OnAccelpix1MBarsUpdate;
+					req1.Update -= OnFeed1MBarsUpdate;
 					req1.Dispose();
 				}
 			}
 			catch { }
 		}
 
-		private void OnAccelpixConnectionStatusUpdate(object sender, ConnectionStatusEventArgs e)
+		private void OnInstrumentMarketDataUpdate(object sender, MarketDataEventArgs e)
+		{
+			ProcessLiveTickEvent(e);
+		}
+
+		private void OnDataFeedConnectionStatusUpdate(object sender, ConnectionStatusEventArgs e)
 		{
 			try
 			{
-				if (e == null || State != State.Realtime)
+				if (e == null || State == State.Terminated)
 					return;
-				if (e.Status == ConnectionStatus.Connected)
+				if (e.Status == ConnectionStatus.Connected || e.PriceStatus == ConnectionStatus.Connected)
 				{
-					RequestAccelpixLiveBarsAsync();
+					RequestSelectedDataFeedBarsAsync();
 				}
 			}
 			catch { }
 		}
 
-		private static DateTime GetFiveMinuteSlotKey(DateTime t1m)
+		private TradingHours ResolveFeedTradingHours(Instrument inst, bool useAccelpix)
 		{
-			int totalMin = t1m.Hour * 60 + t1m.Minute;
-			int rem = totalMin % 5;
-			int slotMin = rem == 0 ? totalMin : (totalMin + (5 - rem));
-			return t1m.Date.AddMinutes(slotMin);
+			if (inst == null)
+				return TradingHours.Get("Default 24 x 7");
+
+			if (useAccelpix)
+			{
+				string fn = inst.FullName ?? string.Empty;
+				if (fn.EndsWith("_I", StringComparison.OrdinalIgnoreCase) || fn.IndexOf("NIFTY", StringComparison.OrdinalIgnoreCase) >= 0)
+				{
+					try
+					{
+						TradingHours mcxTh = TradingHours.Get("MCX");
+						if (mcxTh != null)
+							return mcxTh;
+					}
+					catch { }
+				}
+			}
+
+			if (inst.MasterInstrument != null && inst.MasterInstrument.TradingHours != null)
+				return inst.MasterInstrument.TradingHours;
+
+			return TradingHours.Get("Default 24 x 7");
 		}
 
-		private void RequestAccelpixLiveBarsAsync()
+		private void RequestSelectedDataFeedBarsAsync()
 		{
 			try
 			{
@@ -426,27 +538,75 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (inst == null || State == State.Terminated)
 					return;
 
+				bool useAccelpix = (EffectiveDataFeed == AK10XOrderflowDataFeed.Accelpix);
+				double tick = TickSize > 0 ? TickSize : (inst.MasterInstrument != null && inst.MasterInstrument.TickSize > 0 ? inst.MasterInstrument.TickSize : 0.05);
+
 				System.Threading.Tasks.Task.Run(() =>
 				{
 					try
 					{
-						DateTime endDate = DateTime.Now.Date.AddDays(1);
-						DateTime startDate = endDate.AddDays(-3);
+						if (State == State.Terminated)
+							return;
 
-						// Live 1-Minute BarsRequest for intrabar Bid x Ask Footprint granularity
+						TradingHours reqTh = ResolveFeedTradingHours(inst, useAccelpix);
+						DateTime endDate = DateTime.Now.Date.AddDays(1);
+
+						// On NinjaTrader Feed, request genuine 1-Tick historical Bid x Ask series first for authentic historical Orderflow Footprints
+						if (!useAccelpix)
+						{
+							foreach (LookupPolicies pol in new LookupPolicies[] { LookupPolicies.Repository, LookupPolicies.Provider })
+							{
+								if (State == State.Terminated)
+									return;
+								int existingTickSlots;
+								lock (dataLock) { existingTickSlots = historicalTickBySlot.Count; }
+								if (pol == LookupPolicies.Provider && existingTickSlots >= 24)
+									break;
+
+								try
+								{
+									using (var doneTick = new System.Threading.ManualResetEventSlim(false))
+									using (var tickReq = new BarsRequest(inst, DateTime.Now.Date.AddDays(-2), endDate))
+									{
+										tickReq.BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Tick, Value = 1 };
+										tickReq.LookupPolicy = pol;
+										tickReq.MergePolicy = MergePolicy.MergeBackAdjusted;
+										if (reqTh != null) tickReq.TradingHours = reqTh;
+										tickReq.Request((tb, err, msg) =>
+										{
+											try
+											{
+												if (err == ErrorCode.NoError && tb != null && tb.Bars != null && tb.Bars.Count > 0)
+													IngestNinjaTraderHistoricalTicks(tb.Bars, tick);
+											}
+											catch { }
+											finally
+											{
+												try { doneTick.Set(); } catch { }
+											}
+										});
+										doneTick.Wait(pol == LookupPolicies.Repository ? 1000 : 2500);
+									}
+								}
+								catch { }
+							}
+						}
+
+						if (State == State.Terminated)
+							return;
+
+						DateTime startDate = endDate.AddDays(useAccelpix ? -4 : -5);
 						BarsRequest req1 = new BarsRequest(inst, startDate, endDate)
 						{
 							BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Minute, Value = 1 },
-							TradingHours = inst.MasterInstrument != null && inst.MasterInstrument.TradingHours != null
-								? inst.MasterInstrument.TradingHours
-								: TradingHours.Get("Default 24 x 7")
+							TradingHours = reqTh
 						};
-						req1.Update += OnAccelpix1MBarsUpdate;
-						BarsRequest old1 = activeAccelpix1MReq;
-						activeAccelpix1MReq = req1;
+						req1.Update += OnFeed1MBarsUpdate;
+						BarsRequest old1 = activeFeed1MReq;
+						activeFeed1MReq = req1;
 						if (old1 != null)
 						{
-							try { old1.Update -= OnAccelpix1MBarsUpdate; old1.Dispose(); } catch { }
+							try { old1.Update -= OnFeed1MBarsUpdate; old1.Dispose(); } catch { }
 						}
 
 						req1.Request((bars, errorCode, errorMessage) =>
@@ -456,7 +616,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 								if (State == State.Terminated || errorCode != ErrorCode.NoError || bars == null || bars.Bars == null || bars.Bars.Count <= 0)
 									return;
 
-								IngestAccelpix1MBars(bars.Bars);
+								IngestFeed1MBars(bars.Bars, useAccelpix);
 							}
 							catch { }
 						});
@@ -467,17 +627,122 @@ namespace NinjaTrader.NinjaScript.Indicators
 			catch { }
 		}
 
-		private void IngestAccelpix1MBars(Bars b1m)
+		private void IngestNinjaTraderHistoricalTicks(Bars bTick, double tickSize)
+		{
+			if (bTick == null || bTick.Count <= 0)
+				return;
+
+			double tick = tickSize > 0 ? tickSize : 0.01;
+			Dictionary<DateTime, LiveTickAccumulator> built = new Dictionary<DateTime, LiveTickAccumulator>();
+			double prevPx = 0.0;
+			int dir = 1;
+			int count = bTick.Count;
+
+			for (int i = 0; i < count; i++)
+			{
+				DateTime t = bTick.GetTime(i);
+				double px = bTick.GetClose(i);
+				if (px <= 0)
+					continue;
+				long vol = Math.Max(1L, bTick.GetVolume(i));
+				double bid = 0.0;
+				double ask = 0.0;
+				try
+				{
+					bid = bTick.GetBid(i);
+					ask = bTick.GetAsk(i);
+				}
+				catch { }
+
+				if (prevPx > 0)
+				{
+					if (px > prevPx + 1e-9) dir = 1;
+					else if (px < prevPx - 1e-9) dir = -1;
+				}
+				prevPx = px;
+
+				bool isBuy;
+				if (ask > 0 && bid > 0 && ask >= bid)
+				{
+					if (px >= ask - 1e-9) isBuy = true;
+					else if (px <= bid + 1e-9) isBuy = false;
+					else isBuy = (dir >= 0);
+				}
+				else
+				{
+					isBuy = (dir >= 0);
+				}
+
+				DateTime slot = GetTickSlotKey(t);
+				if (!built.TryGetValue(slot, out LiveTickAccumulator acc))
+				{
+					acc = new LiveTickAccumulator();
+					built[slot] = acc;
+				}
+
+				long tickKey = (long)Math.Round(px / tick);
+				if (isBuy)
+				{
+					acc.AskByTickKey.TryGetValue(tickKey, out long cur);
+					acc.AskByTickKey[tickKey] = cur + vol;
+					acc.RunningDelta += vol;
+				}
+				else
+				{
+					acc.BidByTickKey.TryGetValue(tickKey, out long cur);
+					acc.BidByTickKey[tickKey] = cur + vol;
+					acc.RunningDelta -= vol;
+				}
+				acc.TotalTickVolume += vol;
+				if (acc.RunningDelta < acc.MinDelta) acc.MinDelta = acc.RunningDelta;
+				if (acc.RunningDelta > acc.MaxDelta) acc.MaxDelta = acc.RunningDelta;
+			}
+
+			if (built.Count == 0)
+				return;
+
+			lock (dataLock)
+			{
+				foreach (var kv in built)
+					historicalTickBySlot[kv.Key] = kv.Value;
+				barCache.Clear();
+				lastComputedBarCount = -1;
+			}
+
+			RequestThrottledChartRefresh(true);
+		}
+
+		private void IngestFeed1MBars(Bars b1m, bool allowCumulativeAutoDetect)
 		{
 			if (b1m == null || b1m.Count <= 0)
 				return;
 
 			lock (dataLock)
 			{
-				accelpixSubBarsBy5MSlot.Clear();
+				subBarsBySlot.Clear();
+				int count = b1m.Count;
+
+				// Only difference cumulative volumes if intra-day volumes are strictly monotonic cumulative (>92% non-decreasing)
+				bool isCumulative = false;
+				if (allowCumulativeAutoDetect && count >= 12)
+				{
+					int sameDayPairs = 0;
+					int nonDecreasing = 0;
+					for (int i = 1; i < count; i++)
+					{
+						if (b1m.GetTime(i).Date == b1m.GetTime(i - 1).Date)
+						{
+							sameDayPairs++;
+							if (b1m.GetVolume(i) >= b1m.GetVolume(i - 1))
+								nonDecreasing++;
+						}
+					}
+					if (sameDayPairs >= 10 && nonDecreasing >= (int)(sameDayPairs * 0.92))
+						isCumulative = true;
+				}
+
 				DateTime prevDate = DateTime.MinValue;
 				long prevCumVol = 0;
-				int count = b1m.Count;
 
 				for (int i = 0; i < count; i++)
 				{
@@ -488,14 +753,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 						prevDate = t.Date;
 						prevCumVol = 0;
 					}
-					long barVol = rawVol >= prevCumVol ? (rawVol - prevCumVol) : rawVol;
+					long barVol = isCumulative
+						? (rawVol >= prevCumVol ? (rawVol - prevCumVol) : rawVol)
+						: rawVol;
 					prevCumVol = rawVol;
 
-					DateTime slot5M = GetFiveMinuteSlotKey(t);
-					if (!accelpixSubBarsBy5MSlot.TryGetValue(slot5M, out List<SubBar1M> list))
+					DateTime slot = GetBarSlotKey(t);
+					if (!subBarsBySlot.TryGetValue(slot, out List<SubBar1M> list))
 					{
 						list = new List<SubBar1M>(5);
-						accelpixSubBarsBy5MSlot[slot5M] = list;
+						subBarsBySlot[slot] = list;
 					}
 					list.Add(new SubBar1M
 					{
@@ -515,18 +782,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 			RequestThrottledChartRefresh(true);
 		}
 
-		private void OnAccelpix1MBarsUpdate(object sender, BarsUpdateEventArgs e)
+		private void OnFeed1MBarsUpdate(object sender, BarsUpdateEventArgs e)
 		{
 			try
 			{
-				if (e == null || e.BarsSeries == null || State != State.Realtime)
+				if (e == null || e.BarsSeries == null || State == State.Terminated)
 					return;
 				int maxIdx = Math.Min(e.MaxIndex, e.BarsSeries.Count - 1);
 				if (maxIdx < 0)
 					return;
 
 				DateTime t = e.BarsSeries.GetTime(maxIdx);
-				DateTime slot5M = GetFiveMinuteSlotKey(t);
+				DateTime slot = GetBarSlotKey(t);
 				double open = e.BarsSeries.GetOpen(maxIdx);
 				double high = e.BarsSeries.GetHigh(maxIdx);
 				double low = e.BarsSeries.GetLow(maxIdx);
@@ -535,10 +802,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				lock (dataLock)
 				{
-					if (!accelpixSubBarsBy5MSlot.TryGetValue(slot5M, out List<SubBar1M> list))
+					if (!subBarsBySlot.TryGetValue(slot, out List<SubBar1M> list))
 					{
 						list = new List<SubBar1M>(5);
-						accelpixSubBarsBy5MSlot[slot5M] = list;
+						subBarsBySlot[slot] = list;
 					}
 					bool updated = false;
 					for (int i = 0; i < list.Count; i++)
@@ -568,7 +835,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			try
 			{
-				if (State != State.Realtime)
+				if (!immediate && State != State.Realtime)
 					return;
 
 				DateTime nowUtc = DateTime.UtcNow;
@@ -878,6 +1145,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (ContainsPtPadded(btnGridToggleRect, x, y, 2f)) return 5;
 			if (ContainsPtPadded(btnZonesToggleRect, x, y, 2f)) return 6;
 			if (ContainsPtPadded(btnReloadLiveRect, x, y, 2f)) return 7;
+			if (ContainsPtPadded(btnFeedToggleRect, x, y, 2f)) return 8;
 			return -1;
 		}
 
@@ -1178,8 +1446,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				case 7: // Live Sync
 					lastBtnClickUtc = DateTime.UtcNow;
-					EnsureAccelpixProviderConnected();
-					RequestAccelpixLiveBarsAsync();
+					AttachSelectedDataFeedStream();
+					RequestSelectedDataFeedBarsAsync();
 					try
 					{
 						var sb = hookedOfScrollBar ?? ResolveOrderflowScrollBar(hookedOrderflowCC ?? ChartControl);
@@ -1188,6 +1456,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 					}
 					catch { }
 					InvalidateFootprintCache();
+					return true;
+
+				case 8: // Toggle Data Feed (Accelpix <-> NinjaTrader)
+					lastBtnClickUtc = DateTime.UtcNow;
+					AK10XOrderflowDataFeed nextFeed = EffectiveDataFeed == AK10XOrderflowDataFeed.Accelpix
+						? AK10XOrderflowDataFeed.NinjaTrader
+						: AK10XOrderflowDataFeed.Accelpix;
+					SwitchDataFeedLive(nextFeed);
 					return true;
 			}
 			return false;
@@ -1412,11 +1688,22 @@ namespace NinjaTrader.NinjaScript.Indicators
 				Dictionary<long, long> sessionVolByBucket = new Dictionary<long, long>();
 
 				int startIdx = Math.Max(0, count - 600);
+				bool useNtSessionBreaks = (EffectiveDataFeed == AK10XOrderflowDataFeed.NinjaTrader);
 				for (int i = startIdx; i < count; i++)
 				{
 					DateTime t = bars.GetTime(i);
 					DateTime sessionDate = t.Date;
-					if (sessionDate != currentSessionDate)
+					bool isNewSession = (sessionDate != currentSessionDate);
+					if (useNtSessionBreaks && !isNewSession)
+					{
+						try
+						{
+							if (bars.IsFirstBarOfSessionByIndex(i))
+								isNewSession = true;
+						}
+						catch { }
+					}
+					if (isNewSession)
 					{
 						currentSessionDate = sessionDate;
 						sessionCumDelta = 0;
@@ -1484,8 +1771,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 				EffectivePriceStep = step
 			};
 
-			// Check if we have live real-time ticks accumulated for this bar
+			// Check if we have live real-time ticks (or NinjaTrader historical 1-Tick Bid x Ask data) accumulated for this bar
+			DateTime barSlotKey = GetBarSlotKey(time);
+			LiveTickAccumulator tickAcc = null;
 			if (liveAccumulators.TryGetValue(barIdx, out LiveTickAccumulator liveAcc) && liveAcc.TotalTickVolume > 0)
+			{
+				tickAcc = liveAcc;
+			}
+			else if (EffectiveDataFeed == AK10XOrderflowDataFeed.NinjaTrader &&
+				historicalTickBySlot.TryGetValue(barSlotKey, out LiveTickAccumulator histAcc) &&
+				histAcc != null && histAcc.TotalTickVolume > 0)
+			{
+				tickAcc = histAcc;
+			}
+
+			if (tickAcc != null)
 			{
 				fp.IsLiveAccumulated = true;
 				for (int r = 0; r < numLevels; r++)
@@ -1494,13 +1794,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 					fp.Levels.Add(new FootprintLevel { Price = lvPrice });
 				}
 
-				foreach (var kv in liveAcc.BidByTickKey)
+				foreach (var kv in tickAcc.BidByTickKey)
 				{
 					double p = kv.Key * tick;
 					int idx = Math.Max(0, Math.Min(numLevels - 1, (int)((long)Math.Floor((p + 1e-9) / step) - minBucket)));
 					fp.Levels[idx].BidVolume += kv.Value;
 				}
-				foreach (var kv in liveAcc.AskByTickKey)
+				foreach (var kv in tickAcc.AskByTickKey)
 				{
 					double p = kv.Key * tick;
 					int idx = Math.Max(0, Math.Min(numLevels - 1, (int)((long)Math.Floor((p + 1e-9) / step) - minBucket)));
@@ -1522,12 +1822,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 				fp.SellVolume = fp.Levels.Sum(l => l.BidVolume);
 				fp.TotalVolume = fp.BuyVolume + fp.SellVolume;
 				fp.Delta = fp.BuyVolume - fp.SellVolume;
-				fp.MinDelta = liveAcc.MinDelta;
-				fp.MaxDelta = liveAcc.MaxDelta;
+				fp.MinDelta = tickAcc.MinDelta;
+				fp.MaxDelta = tickAcc.MaxDelta;
 			}
 			else
 			{
-				// Reconstruct realistic intrabar Bid x Ask footprint using Accelpix 1-Minute sub-bars when available, or OHLC trajectory:
+				// Reconstruct realistic intrabar Bid x Ask footprint using 1-Minute sub-bars from the selected Data Feed when available, or OHLC trajectory:
 				bool isBull = close >= open;
 				double bodyMid = (open + close) * 0.5;
 				double range = Math.Max(step, snappedHigh - snappedLow);
@@ -1536,8 +1836,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				double[] rawAsk = new double[numLevels];
 				double weightSum = 0.0;
 
-				DateTime slotKey = GetFiveMinuteSlotKey(time);
-				if (accelpixSubBarsBy5MSlot.TryGetValue(slotKey, out List<SubBar1M> subBars) && subBars != null && subBars.Count > 0)
+				if (subBarsBySlot.TryGetValue(barSlotKey, out List<SubBar1M> subBars) && subBars != null && subBars.Count > 0)
 				{
 					for (int s = 0; s < subBars.Count; s++)
 					{
@@ -2546,19 +2845,36 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
+		private string FormatOrderflowPrice(double val)
+		{
+			double tick = TickSize > 0 ? TickSize : 0.05;
+			if (tick < 0.00005)
+				return val.ToString("0.00000", CultureInfo.InvariantCulture);
+			if (tick < 0.0005)
+				return val.ToString("0.0000", CultureInfo.InvariantCulture);
+			if (tick < 0.005)
+				return val.ToString("0.000", CultureInfo.InvariantCulture);
+			return val.ToString("0.##", CultureInfo.InvariantCulture);
+		}
+
 		private void RenderInteractiveHeaderBar(float panelX, float panelY, float barSpacing, float effectiveStep)
 		{
+			bool isAccelpix = (EffectiveDataFeed == AK10XOrderflowDataFeed.Accelpix);
+			string feedTag = isAccelpix ? "ACCELPIX" : "NINJATRADER";
+			string feedBtnLabel = isAccelpix ? "Feed: Accelpix ▾" : "Feed: NT8 Feed ▾";
 			double livePx = lastTradePrice > 0 ? lastTradePrice : (double.IsNaN(lastComputedLastClose) ? 0.0 : lastComputedLastClose);
-			string ltpStr = livePx > 0 ? string.Format(CultureInfo.InvariantCulture, "  •  LTP: {0:0.00}", livePx) : "";
+			string ltpStr = livePx > 0 ? ("  •  LTP: " + FormatOrderflowPrice(livePx)) : "";
 			string headerText = string.Format(CultureInfo.InvariantCulture,
-				"⚡ AK10X Orderflow (5M){0}  •  Step: {1:0.##} ({2})",
-				ltpStr, effectiveStep, runtimeAutoStep ? "Auto" : (runtimeTicksPerLevel + "T"));
+				"⚡ AK10X Global Orderflow  •  {0}{1}  •  Step: {2} ({3})",
+				feedTag, ltpStr, FormatOrderflowPrice(effectiveStep), runtimeAutoStep ? "Auto" : (runtimeTicksPerLevel + "T"));
 
 			var hdrDw = NinjaTrader.Core.Globals.DirectWriteFactory;
 			using (var tfHeader = new TextFormat(hdrDw, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 10.5f))
-			using (var tfBtn = new TextFormat(hdrDw, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 10.0f))
+			using (var tfBtn = new TextFormat(hdrDw, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 9.8f))
 			using (var bgBrush = new SolidColorBrush(RenderTarget, new Color4(0.06f, 0.09f, 0.14f, 0.92f)))
 			using (var borderBrush = new SolidColorBrush(RenderTarget, new Color4(0.0f, 0.90f, 0.46f, 0.75f)))
+			using (var feedBorderBrush = new SolidColorBrush(RenderTarget, isAccelpix ? new Color4(0.0f, 0.92f, 0.52f, 0.95f) : new Color4(0.28f, 0.78f, 1.0f, 0.95f)))
+			using (var feedActiveBg = new SolidColorBrush(RenderTarget, isAccelpix ? new Color4(0.04f, 0.44f, 0.28f, 0.96f) : new Color4(0.08f, 0.34f, 0.56f, 0.96f)))
 			using (var hoverBorderBrush = new SolidColorBrush(RenderTarget, new Color4(0.22f, 0.78f, 1.0f, 1.0f)))
 			using (var goldBrush = new SolidColorBrush(RenderTarget, new Color4(1.0f, 0.78f, 0.15f, 1.0f)))
 			using (var btnBg = new SolidColorBrush(RenderTarget, new Color4(0.14f, 0.20f, 0.30f, 0.95f)))
@@ -2573,7 +2889,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				float boxX = panelX + 8f;
 				float boxY = panelY + 6f;
-				float boxW = 472f;
+				float availW = ChartPanel != null ? Math.Max(420f, ChartPanel.W - 20f) : 582f;
+				float boxW = Math.Min(availW, 582f);
 				float boxH = 48f;
 
 				var pillRect = new RectangleF(boxX, boxY, boxW, boxH);
@@ -2591,17 +2908,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 				bx += 48f;
 				btnStepPlusRect = DrawMiniBtn(bx, by, 44f, bh, "Step +", false, hoveredToolbarBtnIndex == 1, tfBtn, btnBg, btnHoverBg, btnActiveBg, borderBrush, hoverBorderBrush, whiteBrush);
 				bx += 48f;
-				btnAutoStepRect = DrawMiniBtn(bx, by, 46f, bh, "Auto", runtimeAutoStep, hoveredToolbarBtnIndex == 2, tfBtn, btnBg, btnHoverBg, btnActiveBg, borderBrush, hoverBorderBrush, whiteBrush);
-				bx += 50f;
+				btnAutoStepRect = DrawMiniBtn(bx, by, 44f, bh, "Auto", runtimeAutoStep, hoveredToolbarBtnIndex == 2, tfBtn, btnBg, btnHoverBg, btnActiveBg, borderBrush, hoverBorderBrush, whiteBrush);
+				bx += 48f;
 				btnWidthMinusRect = DrawMiniBtn(bx, by, 48f, bh, "Zoom -", false, hoveredToolbarBtnIndex == 3, tfBtn, btnBg, btnHoverBg, btnActiveBg, borderBrush, hoverBorderBrush, whiteBrush);
 				bx += 52f;
 				btnWidthPlusRect = DrawMiniBtn(bx, by, 48f, bh, "Zoom +", false, hoveredToolbarBtnIndex == 4, tfBtn, btnBg, btnHoverBg, btnActiveBg, borderBrush, hoverBorderBrush, whiteBrush);
 				bx += 52f;
-				btnGridToggleRect = DrawMiniBtn(bx, by, 46f, bh, "Grid", runtimeShowStatGrid, hoveredToolbarBtnIndex == 5, tfBtn, btnBg, btnHoverBg, btnActiveBg, borderBrush, hoverBorderBrush, whiteBrush);
-				bx += 50f;
+				btnGridToggleRect = DrawMiniBtn(bx, by, 44f, bh, "Grid", runtimeShowStatGrid, hoveredToolbarBtnIndex == 5, tfBtn, btnBg, btnHoverBg, btnActiveBg, borderBrush, hoverBorderBrush, whiteBrush);
+				bx += 48f;
 				btnZonesToggleRect = DrawMiniBtn(bx, by, 46f, bh, "Zones", runtimeShowImbZones, hoveredToolbarBtnIndex == 6, tfBtn, btnBg, btnHoverBg, btnActiveBg, borderBrush, hoverBorderBrush, whiteBrush);
 				bx += 50f;
-				btnReloadLiveRect = DrawMiniBtn(bx, by, 64f, bh, "Live Sync", true, hoveredToolbarBtnIndex == 7, tfBtn, btnBg, btnHoverBg, btnActiveBg, borderBrush, hoverBorderBrush, whiteBrush);
+				btnReloadLiveRect = DrawMiniBtn(bx, by, 62f, bh, "Live Sync", true, hoveredToolbarBtnIndex == 7, tfBtn, btnBg, btnHoverBg, btnActiveBg, borderBrush, hoverBorderBrush, whiteBrush);
+				bx += 66f;
+				float feedBtnW = Math.Max(78f, Math.Min(108f, (boxX + boxW - 6f) - bx));
+				btnFeedToggleRect = DrawMiniBtn(bx, by, feedBtnW, bh, feedBtnLabel, true, hoveredToolbarBtnIndex == 8, tfBtn, btnBg, btnHoverBg, feedActiveBg, feedBorderBrush, hoverBorderBrush, whiteBrush);
 			}
 		}
 
@@ -2671,19 +2991,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 {
 	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
 	{
-		private AK10XOrderflow[] cacheAK10XOrderflow;
-		public AK10XOrderflow AK10XOrderflow(int ticksPerLevel, bool autoScalePriceStep, int barSpacePx, bool showBarPOC, bool showBarVA, int barVAPercentage, bool showSessionVA, bool showImbalance, double imbalancePercentage, int imbalanceFilter, bool showImbalanceSRZones, int imbalanceSRConsecutiveLevels, bool showBarDelta, bool showStatisticGrid)
+		private AK10XGlobalOrderflow[] cacheAK10XGlobalOrderflow;
+		public AK10XGlobalOrderflow AK10XGlobalOrderflow(AK10XOrderflowDataFeed dataFeed, int ticksPerLevel, bool autoScalePriceStep, int barSpacePx, bool showBarPOC, bool showBarVA, int barVAPercentage, bool showSessionVA, bool showImbalance, double imbalancePercentage, int imbalanceFilter, bool showImbalanceSRZones, int imbalanceSRConsecutiveLevels, bool showBarDelta, bool showStatisticGrid)
 		{
-			return AK10XOrderflow(Input, ticksPerLevel, autoScalePriceStep, barSpacePx, showBarPOC, showBarVA, barVAPercentage, showSessionVA, showImbalance, imbalancePercentage, imbalanceFilter, showImbalanceSRZones, imbalanceSRConsecutiveLevels, showBarDelta, showStatisticGrid);
+			return AK10XGlobalOrderflow(Input, dataFeed, ticksPerLevel, autoScalePriceStep, barSpacePx, showBarPOC, showBarVA, barVAPercentage, showSessionVA, showImbalance, imbalancePercentage, imbalanceFilter, showImbalanceSRZones, imbalanceSRConsecutiveLevels, showBarDelta, showStatisticGrid);
 		}
 
-		public AK10XOrderflow AK10XOrderflow(ISeries<double> input, int ticksPerLevel, bool autoScalePriceStep, int barSpacePx, bool showBarPOC, bool showBarVA, int barVAPercentage, bool showSessionVA, bool showImbalance, double imbalancePercentage, int imbalanceFilter, bool showImbalanceSRZones, int imbalanceSRConsecutiveLevels, bool showBarDelta, bool showStatisticGrid)
+		public AK10XGlobalOrderflow AK10XGlobalOrderflow(ISeries<double> input, AK10XOrderflowDataFeed dataFeed, int ticksPerLevel, bool autoScalePriceStep, int barSpacePx, bool showBarPOC, bool showBarVA, int barVAPercentage, bool showSessionVA, bool showImbalance, double imbalancePercentage, int imbalanceFilter, bool showImbalanceSRZones, int imbalanceSRConsecutiveLevels, bool showBarDelta, bool showStatisticGrid)
 		{
-			if (cacheAK10XOrderflow != null)
-				for (int idx = 0; idx < cacheAK10XOrderflow.Length; idx++)
-					if (cacheAK10XOrderflow[idx] != null && cacheAK10XOrderflow[idx].TicksPerLevel == ticksPerLevel && cacheAK10XOrderflow[idx].AutoScalePriceStep == autoScalePriceStep && cacheAK10XOrderflow[idx].BarSpacePx == barSpacePx && cacheAK10XOrderflow[idx].ShowBarPOC == showBarPOC && cacheAK10XOrderflow[idx].ShowBarVA == showBarVA && cacheAK10XOrderflow[idx].BarVAPercentage == barVAPercentage && cacheAK10XOrderflow[idx].ShowSessionVA == showSessionVA && cacheAK10XOrderflow[idx].ShowImbalance == showImbalance && cacheAK10XOrderflow[idx].ImbalancePercentage == imbalancePercentage && cacheAK10XOrderflow[idx].ImbalanceFilter == imbalanceFilter && cacheAK10XOrderflow[idx].ShowImbalanceSRZones == showImbalanceSRZones && cacheAK10XOrderflow[idx].ImbalanceSRConsecutiveLevels == imbalanceSRConsecutiveLevels && cacheAK10XOrderflow[idx].ShowBarDelta == showBarDelta && cacheAK10XOrderflow[idx].ShowStatisticGrid == showStatisticGrid && cacheAK10XOrderflow[idx].EqualsInput(input))
-						return cacheAK10XOrderflow[idx];
-			return CacheIndicator<AK10XOrderflow>(new AK10XOrderflow(){ TicksPerLevel = ticksPerLevel, AutoScalePriceStep = autoScalePriceStep, BarSpacePx = barSpacePx, ShowBarPOC = showBarPOC, ShowBarVA = showBarVA, BarVAPercentage = barVAPercentage, ShowSessionVA = showSessionVA, ShowImbalance = showImbalance, ImbalancePercentage = imbalancePercentage, ImbalanceFilter = imbalanceFilter, ShowImbalanceSRZones = showImbalanceSRZones, ImbalanceSRConsecutiveLevels = imbalanceSRConsecutiveLevels, ShowBarDelta = showBarDelta, ShowStatisticGrid = showStatisticGrid }, input, ref cacheAK10XOrderflow);
+			if (cacheAK10XGlobalOrderflow != null)
+				for (int idx = 0; idx < cacheAK10XGlobalOrderflow.Length; idx++)
+					if (cacheAK10XGlobalOrderflow[idx] != null && cacheAK10XGlobalOrderflow[idx].DataFeed == dataFeed && cacheAK10XGlobalOrderflow[idx].TicksPerLevel == ticksPerLevel && cacheAK10XGlobalOrderflow[idx].AutoScalePriceStep == autoScalePriceStep && cacheAK10XGlobalOrderflow[idx].BarSpacePx == barSpacePx && cacheAK10XGlobalOrderflow[idx].ShowBarPOC == showBarPOC && cacheAK10XGlobalOrderflow[idx].ShowBarVA == showBarVA && cacheAK10XGlobalOrderflow[idx].BarVAPercentage == barVAPercentage && cacheAK10XGlobalOrderflow[idx].ShowSessionVA == showSessionVA && cacheAK10XGlobalOrderflow[idx].ShowImbalance == showImbalance && cacheAK10XGlobalOrderflow[idx].ImbalancePercentage == imbalancePercentage && cacheAK10XGlobalOrderflow[idx].ImbalanceFilter == imbalanceFilter && cacheAK10XGlobalOrderflow[idx].ShowImbalanceSRZones == showImbalanceSRZones && cacheAK10XGlobalOrderflow[idx].ImbalanceSRConsecutiveLevels == imbalanceSRConsecutiveLevels && cacheAK10XGlobalOrderflow[idx].ShowBarDelta == showBarDelta && cacheAK10XGlobalOrderflow[idx].ShowStatisticGrid == showStatisticGrid && cacheAK10XGlobalOrderflow[idx].EqualsInput(input))
+						return cacheAK10XGlobalOrderflow[idx];
+			return CacheIndicator<AK10XGlobalOrderflow>(new AK10XGlobalOrderflow(){ DataFeed = dataFeed, TicksPerLevel = ticksPerLevel, AutoScalePriceStep = autoScalePriceStep, BarSpacePx = barSpacePx, ShowBarPOC = showBarPOC, ShowBarVA = showBarVA, BarVAPercentage = barVAPercentage, ShowSessionVA = showSessionVA, ShowImbalance = showImbalance, ImbalancePercentage = imbalancePercentage, ImbalanceFilter = imbalanceFilter, ShowImbalanceSRZones = showImbalanceSRZones, ImbalanceSRConsecutiveLevels = imbalanceSRConsecutiveLevels, ShowBarDelta = showBarDelta, ShowStatisticGrid = showStatisticGrid }, input, ref cacheAK10XGlobalOrderflow);
 		}
 	}
 }
@@ -2692,14 +3012,14 @@ namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
 {
 	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
 	{
-		public Indicators.AK10XOrderflow AK10XOrderflow(int ticksPerLevel, bool autoScalePriceStep, int barSpacePx, bool showBarPOC, bool showBarVA, int barVAPercentage, bool showSessionVA, bool showImbalance, double imbalancePercentage, int imbalanceFilter, bool showImbalanceSRZones, int imbalanceSRConsecutiveLevels, bool showBarDelta, bool showStatisticGrid)
+		public Indicators.AK10XGlobalOrderflow AK10XGlobalOrderflow(Indicators.AK10XOrderflowDataFeed dataFeed, int ticksPerLevel, bool autoScalePriceStep, int barSpacePx, bool showBarPOC, bool showBarVA, int barVAPercentage, bool showSessionVA, bool showImbalance, double imbalancePercentage, int imbalanceFilter, bool showImbalanceSRZones, int imbalanceSRConsecutiveLevels, bool showBarDelta, bool showStatisticGrid)
 		{
-			return indicator.AK10XOrderflow(Input, ticksPerLevel, autoScalePriceStep, barSpacePx, showBarPOC, showBarVA, barVAPercentage, showSessionVA, showImbalance, imbalancePercentage, imbalanceFilter, showImbalanceSRZones, imbalanceSRConsecutiveLevels, showBarDelta, showStatisticGrid);
+			return indicator.AK10XGlobalOrderflow(Input, dataFeed, ticksPerLevel, autoScalePriceStep, barSpacePx, showBarPOC, showBarVA, barVAPercentage, showSessionVA, showImbalance, imbalancePercentage, imbalanceFilter, showImbalanceSRZones, imbalanceSRConsecutiveLevels, showBarDelta, showStatisticGrid);
 		}
 
-		public Indicators.AK10XOrderflow AK10XOrderflow(ISeries<double> input , int ticksPerLevel, bool autoScalePriceStep, int barSpacePx, bool showBarPOC, bool showBarVA, int barVAPercentage, bool showSessionVA, bool showImbalance, double imbalancePercentage, int imbalanceFilter, bool showImbalanceSRZones, int imbalanceSRConsecutiveLevels, bool showBarDelta, bool showStatisticGrid)
+		public Indicators.AK10XGlobalOrderflow AK10XGlobalOrderflow(ISeries<double> input , Indicators.AK10XOrderflowDataFeed dataFeed, int ticksPerLevel, bool autoScalePriceStep, int barSpacePx, bool showBarPOC, bool showBarVA, int barVAPercentage, bool showSessionVA, bool showImbalance, double imbalancePercentage, int imbalanceFilter, bool showImbalanceSRZones, int imbalanceSRConsecutiveLevels, bool showBarDelta, bool showStatisticGrid)
 		{
-			return indicator.AK10XOrderflow(input, ticksPerLevel, autoScalePriceStep, barSpacePx, showBarPOC, showBarVA, barVAPercentage, showSessionVA, showImbalance, imbalancePercentage, imbalanceFilter, showImbalanceSRZones, imbalanceSRConsecutiveLevels, showBarDelta, showStatisticGrid);
+			return indicator.AK10XGlobalOrderflow(input, dataFeed, ticksPerLevel, autoScalePriceStep, barSpacePx, showBarPOC, showBarVA, barVAPercentage, showSessionVA, showImbalance, imbalancePercentage, imbalanceFilter, showImbalanceSRZones, imbalanceSRConsecutiveLevels, showBarDelta, showStatisticGrid);
 		}
 	}
 }
@@ -2708,14 +3028,14 @@ namespace NinjaTrader.NinjaScript.Strategies
 {
 	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
 	{
-		public Indicators.AK10XOrderflow AK10XOrderflow(int ticksPerLevel, bool autoScalePriceStep, int barSpacePx, bool showBarPOC, bool showBarVA, int barVAPercentage, bool showSessionVA, bool showImbalance, double imbalancePercentage, int imbalanceFilter, bool showImbalanceSRZones, int imbalanceSRConsecutiveLevels, bool showBarDelta, bool showStatisticGrid)
+		public Indicators.AK10XGlobalOrderflow AK10XGlobalOrderflow(Indicators.AK10XOrderflowDataFeed dataFeed, int ticksPerLevel, bool autoScalePriceStep, int barSpacePx, bool showBarPOC, bool showBarVA, int barVAPercentage, bool showSessionVA, bool showImbalance, double imbalancePercentage, int imbalanceFilter, bool showImbalanceSRZones, int imbalanceSRConsecutiveLevels, bool showBarDelta, bool showStatisticGrid)
 		{
-			return indicator.AK10XOrderflow(Input, ticksPerLevel, autoScalePriceStep, barSpacePx, showBarPOC, showBarVA, barVAPercentage, showSessionVA, showImbalance, imbalancePercentage, imbalanceFilter, showImbalanceSRZones, imbalanceSRConsecutiveLevels, showBarDelta, showStatisticGrid);
+			return indicator.AK10XGlobalOrderflow(Input, dataFeed, ticksPerLevel, autoScalePriceStep, barSpacePx, showBarPOC, showBarVA, barVAPercentage, showSessionVA, showImbalance, imbalancePercentage, imbalanceFilter, showImbalanceSRZones, imbalanceSRConsecutiveLevels, showBarDelta, showStatisticGrid);
 		}
 
-		public Indicators.AK10XOrderflow AK10XOrderflow(ISeries<double> input , int ticksPerLevel, bool autoScalePriceStep, int barSpacePx, bool showBarPOC, bool showBarVA, int barVAPercentage, bool showSessionVA, bool showImbalance, double imbalancePercentage, int imbalanceFilter, bool showImbalanceSRZones, int imbalanceSRConsecutiveLevels, bool showBarDelta, bool showStatisticGrid)
+		public Indicators.AK10XGlobalOrderflow AK10XGlobalOrderflow(ISeries<double> input , Indicators.AK10XOrderflowDataFeed dataFeed, int ticksPerLevel, bool autoScalePriceStep, int barSpacePx, bool showBarPOC, bool showBarVA, int barVAPercentage, bool showSessionVA, bool showImbalance, double imbalancePercentage, int imbalanceFilter, bool showImbalanceSRZones, int imbalanceSRConsecutiveLevels, bool showBarDelta, bool showStatisticGrid)
 		{
-			return indicator.AK10XOrderflow(input, ticksPerLevel, autoScalePriceStep, barSpacePx, showBarPOC, showBarVA, barVAPercentage, showSessionVA, showImbalance, imbalancePercentage, imbalanceFilter, showImbalanceSRZones, imbalanceSRConsecutiveLevels, showBarDelta, showStatisticGrid);
+			return indicator.AK10XGlobalOrderflow(input, dataFeed, ticksPerLevel, autoScalePriceStep, barSpacePx, showBarPOC, showBarVA, barVAPercentage, showSessionVA, showImbalance, imbalancePercentage, imbalanceFilter, showImbalanceSRZones, imbalanceSRConsecutiveLevels, showBarDelta, showStatisticGrid);
 		}
 	}
 }

@@ -3,7 +3,7 @@
 // Reverse-engineered and enhanced via REA (D:\AK10X\rea).
 // Provides:
 //   1. Standalone Live Scanner Window (Control Center -> New -> AK10X MP Scanner): Multi-symbol dockable/floating NTWindow with real-time Accelpix & NT8 tick tracking, dynamic watchlists & smooth auto-refresh.
-//   2. Chart Indicator (Indicators -> MarketProfileScanner50Charts): Full hardware-accelerated Direct2D interactive scanner grid on any chart.
+//   2. Chart Indicator (Indicators -> AK10XMarketProfileScanner): Full hardware-accelerated Direct2D interactive scanner grid on any chart.
 #region Using declarations
 using System;
 using System.Collections.Concurrent;
@@ -1177,7 +1177,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				{
 					// Nse.xml ends at 15:30 and strips Accelpix's 15:31..15:41 closing/settlement bars before ExtractBarsFromRequest runs.
 					// MCX.xml uses the exact same "India Standard Time" timezone with Mon-Fri 09:00-24:00 sessions, allowing 15:30..15:40
-					// closing bars through so RebuildAggregatedBarsLocked merges Period M (15:15-15:44) identically to AmiBroker 50Charts.
+					// closing bars through so RebuildAggregatedBarsLocked merges Period M (15:15-15:44) identically to AK10X Session Standard.
 					TradingHours mcxTh = TradingHours.Get("MCX");
 					if (mcxTh != null)
 						return mcxTh;
@@ -1918,13 +1918,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 			List<MpBarSample> todayBars = dayGroups[dayGroups.Count - 1];
 			List<MpBarSample> prevBars = dayGroups[dayGroups.Count - 2];
 
-			// Match 50ChartsMarketProfileScanner.afl Minimum Tick Size = 0.05 across all NSE symbols
+			// Match AK10XMarketProfileScanner Minimum Tick Size = 0.05 across all NSE symbols
 			// (AccelPixNT8 sets MasterInstrument.TickSize to 0.10 or 0.01 on several NSE symbols, which distorted Auto TPOSize)
 			double tickSize = Math.Max(0.0001, DefaultMinTickSize);
 			if (!IsNseSymbol(symbol) && sub != null && sub.Instrument != null && sub.Instrument.MasterInstrument != null && sub.Instrument.MasterInstrument.TickSize > 0)
 				tickSize = sub.Instrument.MasterInstrument.TickSize;
 
-			// 1. Daily OHLCV Series & Wilder ATR / SMA (Exact 50chartsMP.dll 1001C0BA..1001C352)
+			// 1. Daily OHLCV Series & Wilder ATR / SMA (Exact AK10X Scanner Engine 1001C0BA..1001C352)
 			List<double> dailyCloses = new List<double>(dayGroups.Count);
 			List<double> trueRanges = new List<double>(dayGroups.Count);
 			double prevCloseForTr = 0;
@@ -1962,16 +1962,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 					priorClosesSumForSma += dailyCloses[cIdx];
 			}
 
-			// 50chartsMP.dll uses LastValue(Ref(ATR(N), -1)) (previous trading day's Daily ATR)
+			// AK10X Scanner Engine uses LastValue(Ref(ATR(N), -1)) (previous trading day's Daily ATR)
 			var prevDayTrueRanges = trueRanges.Count > 1 ? trueRanges.Take(trueRanges.Count - 1).ToList() : trueRanges;
 			double atrRaw = ComputeWilderAtr(prevDayTrueRanges, Math.Max(1, AtrDays), tickSize);
 			double atr10Raw = ComputeWilderAtr(prevDayTrueRanges, 10, tickSize);
 			double atrVal = Math.Round(atrRaw, 2);
 			double atr10Val = atr10Raw;
 
-			// Exact 50chartsMP.dll Auto TPO Size (1001C422..1001C51B):
+			// Exact AK10X Scanner Engine Auto TPO Size (1001C422..1001C51B):
 			// ONE tpoSize is computed from unrounded Ref(ATR(10), -1) ([ebx+50h]) and passed to both PrevDay and Today profiles.
-			double tdTpoStep = Compute50ChartsAutoTpoSize(atr10Raw, tickSize);
+			double tdTpoStep = ComputeAK10XAutoTpoSize(atr10Raw, tickSize);
 			double pdTpoStep = tdTpoStep;
 
 			double pdVah, pdPoc, pdVal;
@@ -2136,13 +2136,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			row.PriceTone = row.PercentChange >= 0 ? MpCellTone.FgGreen : MpCellTone.FgRed;
 
-			// Exact 50chartsMP.dll Open=H/L (1001E5D8..1001E67B): IEEE-754 float equality when High > Low
-			if (liveHigh > liveLow && ((float)liveOpen == (float)liveHigh || AlmostEqual50Charts(liveOpen, liveHigh)))
+			// Exact AK10X Scanner Engine Open=H/L (1001E5D8..1001E67B): IEEE-754 float equality when High > Low
+			if (liveHigh > liveLow && ((float)liveOpen == (float)liveHigh || AlmostEqualAK10X(liveOpen, liveHigh)))
 			{
 				row.OpenEqualHL = "Open = High";
 				row.OpenEqualHLTone = MpCellTone.BgRedOrange;
 			}
-			else if (liveHigh > liveLow && ((float)liveOpen == (float)liveLow || AlmostEqual50Charts(liveOpen, liveLow)))
+			else if (liveHigh > liveLow && ((float)liveOpen == (float)liveLow || AlmostEqualAK10X(liveOpen, liveLow)))
 			{
 				row.OpenEqualHL = "Open = Low";
 				row.OpenEqualHLTone = MpCellTone.BgGreen;
@@ -2153,7 +2153,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				row.OpenEqualHLTone = MpCellTone.Default;
 			}
 
-			// Exact 50chartsMP.dll Price - SMA(21) (1001E90D)
+			// Exact AK10X Scanner Engine Price - SMA(21) (1001E90D)
 			string smaColLabel = "SMA(" + SmaDays + ")";
 			if (livePrice >= smaVal)
 			{
@@ -2166,7 +2166,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				row.PriceVsSmaTone = MpCellTone.BgRedOrange;
 			}
 
-			// Exact 50chartsMP.dll PD-SingleP (1001ED19)
+			// Exact AK10X Scanner Engine PD-SingleP (1001ED19)
 			if (pdSinglePrintCode == 1)
 			{
 				row.PdSinglePrint = "Single Print - Up";
@@ -2183,7 +2183,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				row.PdSinglePrintTone = MpCellTone.Default;
 			}
 
-			// Exact 50chartsMP.dll Open vs PDVA (1001FA5A): >= pdVah is Above, <= pdVal is Below
+			// Exact AK10X Scanner Engine Open vs PDVA (1001FA5A): >= pdVah is Above, <= pdVal is Below
 			int openVsPdvaCode;
 			if (liveOpen >= pdVah)
 			{
@@ -2204,7 +2204,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				openVsPdvaCode = 0;
 			}
 
-			// Exact 50chartsMP.dll Open vs PDHL (1001F92F): >= pdHigh is Above, <= pdLow is Below
+			// Exact AK10X Scanner Engine Open vs PDHL (1001F92F): >= pdHigh is Above, <= pdLow is Below
 			if (liveOpen >= pdHigh)
 			{
 				row.OpenVsPdHl = "Open Above PDHL";
@@ -2221,14 +2221,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 				row.OpenVsPdHlTone = MpCellTone.Default;
 			}
 
-			// Exact 50chartsMP.dll OpenType (1001FB95)
+			// Exact AK10X Scanner Engine OpenType (1001FB95)
 			string openTypeStr;
 			MpCellTone openTypeTone;
 			ClassifyOpenType(todayBars, openVsPdvaCode, pdVah, pdVal, tdTpoStep, out openTypeStr, out openTypeTone);
 			row.OpenType = openTypeStr;
 			row.OpenTypeTone = openTypeTone;
 
-			// Exact 50chartsMP.dll PrevDay Breakout (1001FF41)
+			// Exact AK10X Scanner Engine PrevDay Breakout (1001FF41)
 			bool brokePdUp = liveHigh > pdHigh;
 			bool brokePdDown = liveLow < pdLow;
 			if (brokePdUp && brokePdDown)
@@ -2252,7 +2252,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				row.PrevDayBreakoutTone = MpCellTone.Default;
 			}
 
-			// Exact 50chartsMP.dll IB Size (1001F0BB): compared against atr10Val (0.8, 0.5, 1/3)
+			// Exact AK10X Scanner Engine IB Size (1001F0BB): compared against atr10Val (0.8, 0.5, 1/3)
 			if (ibRange >= atr10Val * 0.80)
 				row.IbSize = "Very Wide";
 			else if (ibRange >= atr10Val * 0.50)
@@ -2263,7 +2263,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				row.IbSize = "Normal";
 			row.IbSizeTone = MpCellTone.Default;
 
-			// Exact 50chartsMP.dll IB Breakout (1001F295) & Price - IB (10020352)
+			// Exact AK10X Scanner Engine IB Breakout (1001F295) & Price - IB (10020352)
 			bool ibBrokenUp = liveHigh > ibHigh;
 			bool ibBrokenDown = liveLow < ibLow;
 			if (ibBrokenUp && ibBrokenDown)
@@ -2287,7 +2287,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				row.IbBreakoutTone = MpCellTone.Default;
 			}
 
-			// In 50chartsMP.dll (10020352), Price - IB is only populated when IB has been broken (ibBrokenUp || ibBrokenDown)
+			// In AK10X Scanner Engine (10020352), Price - IB is only populated when IB has been broken (ibBrokenUp || ibBrokenDown)
 			if (ibBrokenUp || ibBrokenDown)
 			{
 				if (livePrice > ibHigh)
@@ -2312,21 +2312,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 				row.PriceVsIbTone = MpCellTone.Default;
 			}
 
-			// Exact 50chartsMP.dll Today VA (100204E2)
+			// Exact AK10X Scanner Engine Today VA (100204E2)
 			string todayVaStr;
 			MpCellTone todayVaTone;
 			ClassifyTodayVa(tdVah, tdVal, pdVah, pdVal, out todayVaStr, out todayVaTone);
 			row.TodayVaStatus = todayVaStr;
 			row.TodayVaTone = todayVaTone;
 
-			// Exact 50chartsMP.dll 30-min PreviousBar (1001F3F0)
+			// Exact AK10X Scanner Engine 30-min PreviousBar (1001F3F0)
 			string prevBarStr;
 			MpCellTone prevBarTone;
 			Classify30MinPrevBar(todayBars, prevBars, out prevBarStr, out prevBarTone);
 			row.Prev30MinBarStatus = prevBarStr;
 			row.Prev30MinBarTone = prevBarTone;
 
-			// Exact 50chartsMP.dll SingleP (10020203)
+			// Exact AK10X Scanner Engine SingleP (10020203)
 			if (tdSinglePrintCode == 1)
 			{
 				row.TodaySinglePrint = "Single Print - Up";
@@ -2365,18 +2365,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return Math.Max(minTick, (double)atr);
 		}
 
-		// Exact 50chartsMP.dll 1005D292 float32 price-to-step floor quantizer:
+		// Exact AK10X Scanner Engine 1005D292 float32 price-to-step floor quantizer:
 		// (float)(floor((double)((float)price / (float)step)) * (double)(float)step)
-		private static float Quantize50Charts(double price, double step)
+		private static float QuantizeAK10X(double price, double step)
 		{
 			float fp = (float)price;
 			float fs = (float)Math.Max(1e-5, step);
 			return (float)(Math.Floor((double)(fp / fs)) * (double)fs);
 		}
 
-		// Exact 50chartsMP.dll Auto TPO Size (1001C422..1001C47B):
+		// Exact AK10X Scanner Engine Auto TPO Size (1001C422..1001C47B):
 		// ceilf(((ceilf((float)atr10) * 4.0f) / 100.0f) / (float)tickSize) * (float)tickSize
-		private static double Compute50ChartsAutoTpoSize(double atr10, double tickSize)
+		private static double ComputeAK10XAutoTpoSize(double atr10, double tickSize)
 		{
 			float minTick = (float)Math.Max(0.0001, tickSize);
 			float ceilAtr = (float)Math.Ceiling((double)Math.Max(minTick, (float)atr10));
@@ -2415,16 +2415,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 			double dayHigh = sessionBars.Max(x => x.High);
 			double dayLow = sessionBars.Min(x => x.Low);
 
-			// Exact 50chartsMP.dll Profile Grid Construction (10023E24..1002423A) using float32 quantization (1005D292)
+			// Exact AK10X Scanner Engine Profile Grid Construction (10023E24..1002423A) using float32 quantization (1005D292)
 			float step = (float)Math.Max(1e-5, tpoStep);
-			float sessionMinLow = Quantize50Charts(dayLow, step);
-			float sessionMaxHighFloor = Quantize50Charts(dayHigh, step);
+			float sessionMinLow = QuantizeAK10X(dayLow, step);
+			float sessionMaxHighFloor = QuantizeAK10X(dayHigh, step);
 			int numBuckets = Math.Max(1, (int)Math.Round((double)((sessionMaxHighFloor - sessionMinLow) / step) + 1.0, MidpointRounding.AwayFromZero));
 			if (numBuckets > 2000)
 			{
 				step = (float)Math.Max(1e-5, (dayHigh - dayLow) / 500.0);
-				sessionMinLow = Quantize50Charts(dayLow, step);
-				sessionMaxHighFloor = Quantize50Charts(dayHigh, step);
+				sessionMinLow = QuantizeAK10X(dayLow, step);
+				sessionMaxHighFloor = QuantizeAK10X(dayHigh, step);
 				numBuckets = Math.Max(1, (int)Math.Round((double)((sessionMaxHighFloor - sessionMinLow) / step) + 1.0, MidpointRounding.AwayFromZero));
 			}
 
@@ -2433,14 +2433,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 			for (int p = 0; p < sessionBars.Count; p++)
 			{
 				MpBarSample b = sessionBars[p];
-				float bLowFloor = Math.Max(sessionMinLow, Quantize50Charts(b.Low, step));
-				float bHighFloor = Math.Min(sessionMaxHighFloor, Quantize50Charts(b.High, step));
+				float bLowFloor = Math.Max(sessionMinLow, QuantizeAK10X(b.Low, step));
+				float bHighFloor = Math.Min(sessionMaxHighFloor, QuantizeAK10X(b.High, step));
 
 				for (int i = 0; i < numBuckets; i++)
 				{
 					float price = sessionMinLow + i * step;
-					bool geLow = price >= bLowFloor || AlmostEqual50Charts(bLowFloor, price);
-					bool leHigh = price <= bHighFloor || AlmostEqual50Charts(bHighFloor, price);
+					bool geLow = price >= bLowFloor || AlmostEqualAK10X(bLowFloor, price);
+					bool leHigh = price <= bHighFloor || AlmostEqualAK10X(bHighFloor, price);
 					if (geLow && leHigh)
 					{
 						tpoCount[i]++;
@@ -2459,7 +2459,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (maxTpo <= 0 || totalTpo <= 0)
 				return;
 
-			// Exact 50chartsMP.dll Center-Outward POC Search (1002969F..10029700)
+			// Exact AK10X Scanner Engine Center-Outward POC Search (1002969F..10029700)
 			int midIdx = (int)Math.Floor(numBuckets * 0.5);
 			int pocIdx = midIdx;
 			for (int d = 0; d <= numBuckets; d++)
@@ -2480,7 +2480,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			pocTpoCount = tpoCount[pocIdx];
 
-			// Exact 50chartsMP.dll 70% Value Area 2-Bucket Expansion (10029702..100297FE)
+			// Exact AK10X Scanner Engine 70% Value Area 2-Bucket Expansion (10029702..100297FE)
 			double targetTpo = (totalTpo * vaPct) / 100.0;
 			double included = pocTpoCount;
 			int valPtr = pocIdx - 1;
@@ -2518,7 +2518,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			valPrice = Math.Round((double)(sessionMinLow + valIdx * step), 2);
 
 			// -------------------------------------------------------------
-			// Interior Single Print Detection (50chartsMP.dll 10029AF0, 1001ED19 & 10020203)
+			// Interior Single Print Detection (AK10X Scanner Engine 10029AF0, 1001ED19 & 10020203)
 			// Excludes buying tail at bottom and selling tail at top; detects all interior tpoCount == 1 bins (live and completed).
 			// -------------------------------------------------------------
 			int interiorBottom = 0;
@@ -2562,7 +2562,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			if (lastSpStartBin >= 0 && lastSpEndBin >= lastSpStartBin)
 			{
-				// Exact 50chartsMP.dll (10030E51..10030EA5) Single Print direction classification
+				// Exact AK10X Scanner Engine (10030E51..10030EA5) Single Print direction classification
 				float spLowPrice = sessionMinLow + lastSpStartBin * step;
 				float spHighPrice = sessionMinLow + lastSpEndBin * step;
 				bool isBuyingSp = (float)dayClose >= (float)dayOpen;
@@ -2574,7 +2574,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 
 			// -------------------------------------------------------------
-			// Exact 50chartsMP.dll Day Type Classification & Color Mapping
+			// Exact AK10X Scanner Engine Day Type Classification & Color Mapping
 			// (10027942..10027AC1, 1001EAEB..1001EB59, 1001EE26..1001EF1E, 100208FB..10020998)
 			// -------------------------------------------------------------
 			int ibCnt = Math.Min(Math.Max(1, ibCount), sessionBars.Count);
@@ -2641,7 +2641,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 			}
 
-			// Exact 50chartsMP.dll 1001EE5B..1001EF05: Today's "Day Type" text is always shown,
+			// Exact AK10X Scanner Engine 1001EE5B..1001EF05: Today's "Day Type" text is always shown,
 			// but uses Default neutral background when lastBarIndexWithinProfile < ibCandleCount + 2 (sessionBars.Count < ibCount + 3).
 			if (!isCompletedSession && sessionBars.Count < Math.Max(1, ibCount) + 3)
 			{
@@ -2649,7 +2649,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
-		// Exact 50chartsMP.dll OpenType Classification (1001FB95..1001FF40)
+		// Exact AK10X Scanner Engine OpenType Classification (1001FB95..1001FF40)
 		// Note: 1001FEC0..1001FED0 always renders OpenType with Default neutral cell tone.
 		private static void ClassifyOpenType(
 			List<MpBarSample> todayBars,
@@ -2667,18 +2667,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 				return;
 
 			float s = (float)Math.Max(1e-5, step);
-			float qOpen0 = Quantize50Charts(todayBars[0].Open, s);
-			float qHigh0 = Quantize50Charts(todayBars[0].High, s);
-			float qLow0 = Quantize50Charts(todayBars[0].Low, s);
+			float qOpen0 = QuantizeAK10X(todayBars[0].Open, s);
+			float qHigh0 = QuantizeAK10X(todayBars[0].High, s);
+			float qLow0 = QuantizeAK10X(todayBars[0].Low, s);
 
 			// [ebp-4Ch] = qLow1 (Period B), [ebp-50h] = qHigh1 (Period B)
-			float qHigh1 = Quantize50Charts(todayBars[1].High, s);
-			float qLow1 = Quantize50Charts(todayBars[1].Low, s);
+			float qHigh1 = QuantizeAK10X(todayBars[1].High, s);
+			float qLow1 = QuantizeAK10X(todayBars[1].Low, s);
 
 			// 1001FCF5..1001FD8A: [ebp-44h] = qHigh2 (Period C), [ebp-48h] = qLow2 (Period C) when Count > 3
 			bool hasBar2 = todayBars.Count > 3;
-			float qHigh2 = hasBar2 ? Quantize50Charts(todayBars[2].High, s) : qHigh1;
-			float qLow2 = hasBar2 ? Quantize50Charts(todayBars[2].Low, s) : qLow1;
+			float qHigh2 = hasBar2 ? QuantizeAK10X(todayBars[2].High, s) : qHigh1;
+			float qLow2 = hasBar2 ? QuantizeAK10X(todayBars[2].Low, s) : qLow1;
 
 			int aOpenAboveLow = (int)Math.Round((double)((qOpen0 - qLow0) / s), MidpointRounding.AwayFromZero);
 			int aTotalTicks = (int)Math.Round((double)((qHigh0 - qLow0) / s), MidpointRounding.AwayFromZero);
@@ -2730,8 +2730,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public int IntValue;
 		}
 
-		// Exact 50chartsMP.dll Helper 10018AF0 -> AmiBroker AlmostEqual(float x, float y, maxUlps = 5)
-		private static bool AlmostEqual50Charts(double a, double b)
+		// Exact AK10X Scanner Engine Helper 10018AF0 -> AmiBroker AlmostEqual(float x, float y, maxUlps = 5)
+		private static bool AlmostEqualAK10X(double a, double b)
 		{
 			if (double.IsNaN(a) || double.IsNaN(b))
 				return false;
@@ -2747,7 +2747,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return diff <= 5L;
 		}
 
-		// Exact 50chartsMP.dll Today VA Classification (100204E2)
+		// Exact AK10X Scanner Engine Today VA Classification (100204E2)
 		private static void ClassifyTodayVa(
 			double tdVah,
 			double tdVal,
@@ -2766,12 +2766,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 				status = "Lower than PDVA";
 				tone = MpCellTone.BgRedOrange;
 			}
-			else if (AlmostEqual50Charts(tdVah, pdVah) && AlmostEqual50Charts(tdVal, pdVal))
+			else if (AlmostEqualAK10X(tdVah, pdVah) && AlmostEqualAK10X(tdVal, pdVal))
 			{
 				status = "Same VA";
 				tone = MpCellTone.Default;
 			}
-			else if ((AlmostEqual50Charts(tdVah, pdVah) || tdVah < pdVah) && (AlmostEqual50Charts(tdVal, pdVal) || tdVal > pdVal))
+			else if ((AlmostEqualAK10X(tdVah, pdVah) || tdVah < pdVah) && (AlmostEqualAK10X(tdVal, pdVal) || tdVal > pdVal))
 			{
 				status = "Inside PrevVA";
 				tone = MpCellTone.Default;
@@ -2781,12 +2781,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 				status = "Overlapping to PDVA H & L";
 				tone = MpCellTone.BgYellow;
 			}
-			else if (tdVah > pdVah && (tdVal > pdVal || AlmostEqual50Charts(tdVal, pdVal)))
+			else if (tdVah > pdVah && (tdVal > pdVal || AlmostEqualAK10X(tdVal, pdVal)))
 			{
 				status = "Overlapping to PDVA High";
 				tone = MpCellTone.BgGreen;
 			}
-			else if ((tdVah < pdVah || AlmostEqual50Charts(tdVah, pdVah)) && tdVal < pdVal)
+			else if ((tdVah < pdVah || AlmostEqualAK10X(tdVah, pdVah)) && tdVal < pdVal)
 			{
 				status = "Overlapping to PDVA low";
 				tone = MpCellTone.BgRedOrange;
@@ -2798,7 +2798,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
-		// Exact 50chartsMP.dll 30-min PreviousBar Classification (1001F3F0..1001F879)
+		// Exact AK10X Scanner Engine 30-min PreviousBar Classification (1001F3F0..1001F879)
 		private static void Classify30MinPrevBar(
 			List<MpBarSample> todayBars,
 			List<MpBarSample> prevBars,
@@ -3176,7 +3176,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			try
 			{
-				NinjaTrader.NinjaScript.AddOns.AK10XChartStackerWindow.EnsureAccelpixConnected();
+				NinjaTrader.NinjaScript.AddOns.AK10XTradingWindow.EnsureAccelpixConnected();
 				Connection.ConnectionStatusUpdate += OnConnectionStatusUpdate;
 			}
 			catch { }
@@ -4033,7 +4033,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 			lastScannerOpenedTicker = clean;
 			lastScannerOpenedUtc = now;
-			NinjaTrader.NinjaScript.AddOns.AK10XChartStackerWindow.LoadUnifiedInstrumentPair(clean);
+			NinjaTrader.NinjaScript.AddOns.AK10XTradingWindow.LoadUnifiedInstrumentPair(clean);
 		}
 
 		private void OnGridPreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
@@ -4503,7 +4503,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 	#endregion
 
 	#region NinjaTrader 8 AddOn Menu Integration (Control Center -> New -> AK10X MP Scanner)
-	public class MarketProfileScanner50ChartsAddOn : AddOnBase
+	public class AK10XMarketProfileScannerAddOn : AddOnBase
 	{
 		private NTMenuItem menuItem;
 		private NTMenuItem existingMenu;
@@ -4513,7 +4513,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (State == State.SetDefaults)
 			{
 				Description = "AK10X Market Profile Live Scanner Add-On for NinjaTrader 8";
-				Name = "MarketProfileScanner50ChartsAddOn";
+				Name = "AK10XMarketProfileScannerAddOn";
 			}
 		}
 
@@ -4558,8 +4558,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 	}
 	#endregion
 
-	#region Chart Indicator (Right-Click Chart -> Indicators -> MarketProfileScanner50Charts)
-	public class MarketProfileScanner50Charts : Indicator
+	#region Chart Indicator (Right-Click Chart -> Indicators -> AK10XMarketProfileScanner)
+	public class AK10XMarketProfileScanner : Indicator
 	{
 		private struct ToolbarBtn
 		{
@@ -4656,7 +4656,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (State == State.SetDefaults)
 			{
 				Description = "AK10X Market Profile Live Scanner with Real-Time Data Tracking and Auto-Refresh.";
-				Name = "MarketProfileScanner50Charts";
+				Name = "AK10XMarketProfileScanner";
 				Calculate = Calculate.OnEachTick;
 				IsOverlay = true;
 				DisplayInDataBox = false;
@@ -4852,7 +4852,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 							activeFilter, "", sortCol.Id, sortAscending, sortCol.TextSelector, sortCol.SortNumSelector, sortCol.IsNumeric);
 						if (targetIdx >= 0 && targetIdx < rows.Count && rows[targetIdx] != null && !string.IsNullOrWhiteSpace(rows[targetIdx].Ticker))
 						{
-							NinjaTrader.NinjaScript.AddOns.AK10XChartStackerWindow.LoadUnifiedInstrumentPair(rows[targetIdx].Ticker);
+							NinjaTrader.NinjaScript.AddOns.AK10XTradingWindow.LoadUnifiedInstrumentPair(rows[targetIdx].Ticker);
 							e.Handled = true;
 							return;
 						}
@@ -5236,19 +5236,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 {
 	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
 	{
-		private MarketProfileScanner50Charts[] cacheMarketProfileScanner50Charts;
-		public MarketProfileScanner50Charts MarketProfileScanner50Charts(bool displayPrevDayValues, bool displayTodayValues, bool displayDailySma, int smaNumberOfDays, bool displayPrevDayMpLevels, bool displayIbValues, bool displayCurrentDayMpLevels, int atrNumberOfDays, double profileDistributionOneSigma, double minTickSizeParam, int initialBalanceCandleCount, bool autoRefreshEnabled, int autoRefreshSeconds, bool useClassicLightTheme, int scannerFontSize)
+		private AK10XMarketProfileScanner[] cacheAK10XMarketProfileScanner;
+		public AK10XMarketProfileScanner AK10XMarketProfileScanner(bool displayPrevDayValues, bool displayTodayValues, bool displayDailySma, int smaNumberOfDays, bool displayPrevDayMpLevels, bool displayIbValues, bool displayCurrentDayMpLevels, int atrNumberOfDays, double profileDistributionOneSigma, double minTickSizeParam, int initialBalanceCandleCount, bool autoRefreshEnabled, int autoRefreshSeconds, bool useClassicLightTheme, int scannerFontSize)
 		{
-			return MarketProfileScanner50Charts(Input, displayPrevDayValues, displayTodayValues, displayDailySma, smaNumberOfDays, displayPrevDayMpLevels, displayIbValues, displayCurrentDayMpLevels, atrNumberOfDays, profileDistributionOneSigma, minTickSizeParam, initialBalanceCandleCount, autoRefreshEnabled, autoRefreshSeconds, useClassicLightTheme, scannerFontSize);
+			return AK10XMarketProfileScanner(Input, displayPrevDayValues, displayTodayValues, displayDailySma, smaNumberOfDays, displayPrevDayMpLevels, displayIbValues, displayCurrentDayMpLevels, atrNumberOfDays, profileDistributionOneSigma, minTickSizeParam, initialBalanceCandleCount, autoRefreshEnabled, autoRefreshSeconds, useClassicLightTheme, scannerFontSize);
 		}
 
-		public MarketProfileScanner50Charts MarketProfileScanner50Charts(ISeries<double> input, bool displayPrevDayValues, bool displayTodayValues, bool displayDailySma, int smaNumberOfDays, bool displayPrevDayMpLevels, bool displayIbValues, bool displayCurrentDayMpLevels, int atrNumberOfDays, double profileDistributionOneSigma, double minTickSizeParam, int initialBalanceCandleCount, bool autoRefreshEnabled, int autoRefreshSeconds, bool useClassicLightTheme, int scannerFontSize)
+		public AK10XMarketProfileScanner AK10XMarketProfileScanner(ISeries<double> input, bool displayPrevDayValues, bool displayTodayValues, bool displayDailySma, int smaNumberOfDays, bool displayPrevDayMpLevels, bool displayIbValues, bool displayCurrentDayMpLevels, int atrNumberOfDays, double profileDistributionOneSigma, double minTickSizeParam, int initialBalanceCandleCount, bool autoRefreshEnabled, int autoRefreshSeconds, bool useClassicLightTheme, int scannerFontSize)
 		{
-			if (cacheMarketProfileScanner50Charts != null)
-				for (int idx = 0; idx < cacheMarketProfileScanner50Charts.Length; idx++)
-					if (cacheMarketProfileScanner50Charts[idx] != null && cacheMarketProfileScanner50Charts[idx].DisplayPrevDayValues == displayPrevDayValues && cacheMarketProfileScanner50Charts[idx].DisplayTodayValues == displayTodayValues && cacheMarketProfileScanner50Charts[idx].DisplayDailySma == displayDailySma && cacheMarketProfileScanner50Charts[idx].SmaNumberOfDays == smaNumberOfDays && cacheMarketProfileScanner50Charts[idx].DisplayPrevDayMpLevels == displayPrevDayMpLevels && cacheMarketProfileScanner50Charts[idx].DisplayIbValues == displayIbValues && cacheMarketProfileScanner50Charts[idx].DisplayCurrentDayMpLevels == displayCurrentDayMpLevels && cacheMarketProfileScanner50Charts[idx].AtrNumberOfDays == atrNumberOfDays && cacheMarketProfileScanner50Charts[idx].ProfileDistributionOneSigma == profileDistributionOneSigma && cacheMarketProfileScanner50Charts[idx].MinTickSizeParam == minTickSizeParam && cacheMarketProfileScanner50Charts[idx].InitialBalanceCandleCount == initialBalanceCandleCount && cacheMarketProfileScanner50Charts[idx].AutoRefreshEnabled == autoRefreshEnabled && cacheMarketProfileScanner50Charts[idx].AutoRefreshSeconds == autoRefreshSeconds && cacheMarketProfileScanner50Charts[idx].UseClassicLightTheme == useClassicLightTheme && cacheMarketProfileScanner50Charts[idx].ScannerFontSize == scannerFontSize && cacheMarketProfileScanner50Charts[idx].EqualsInput(input))
-						return cacheMarketProfileScanner50Charts[idx];
-			return CacheIndicator<MarketProfileScanner50Charts>(new MarketProfileScanner50Charts(){ DisplayPrevDayValues = displayPrevDayValues, DisplayTodayValues = displayTodayValues, DisplayDailySma = displayDailySma, SmaNumberOfDays = smaNumberOfDays, DisplayPrevDayMpLevels = displayPrevDayMpLevels, DisplayIbValues = displayIbValues, DisplayCurrentDayMpLevels = displayCurrentDayMpLevels, AtrNumberOfDays = atrNumberOfDays, ProfileDistributionOneSigma = profileDistributionOneSigma, MinTickSizeParam = minTickSizeParam, InitialBalanceCandleCount = initialBalanceCandleCount, AutoRefreshEnabled = autoRefreshEnabled, AutoRefreshSeconds = autoRefreshSeconds, UseClassicLightTheme = useClassicLightTheme, ScannerFontSize = scannerFontSize }, input, ref cacheMarketProfileScanner50Charts);
+			if (cacheAK10XMarketProfileScanner != null)
+				for (int idx = 0; idx < cacheAK10XMarketProfileScanner.Length; idx++)
+					if (cacheAK10XMarketProfileScanner[idx] != null && cacheAK10XMarketProfileScanner[idx].DisplayPrevDayValues == displayPrevDayValues && cacheAK10XMarketProfileScanner[idx].DisplayTodayValues == displayTodayValues && cacheAK10XMarketProfileScanner[idx].DisplayDailySma == displayDailySma && cacheAK10XMarketProfileScanner[idx].SmaNumberOfDays == smaNumberOfDays && cacheAK10XMarketProfileScanner[idx].DisplayPrevDayMpLevels == displayPrevDayMpLevels && cacheAK10XMarketProfileScanner[idx].DisplayIbValues == displayIbValues && cacheAK10XMarketProfileScanner[idx].DisplayCurrentDayMpLevels == displayCurrentDayMpLevels && cacheAK10XMarketProfileScanner[idx].AtrNumberOfDays == atrNumberOfDays && cacheAK10XMarketProfileScanner[idx].ProfileDistributionOneSigma == profileDistributionOneSigma && cacheAK10XMarketProfileScanner[idx].MinTickSizeParam == minTickSizeParam && cacheAK10XMarketProfileScanner[idx].InitialBalanceCandleCount == initialBalanceCandleCount && cacheAK10XMarketProfileScanner[idx].AutoRefreshEnabled == autoRefreshEnabled && cacheAK10XMarketProfileScanner[idx].AutoRefreshSeconds == autoRefreshSeconds && cacheAK10XMarketProfileScanner[idx].UseClassicLightTheme == useClassicLightTheme && cacheAK10XMarketProfileScanner[idx].ScannerFontSize == scannerFontSize && cacheAK10XMarketProfileScanner[idx].EqualsInput(input))
+						return cacheAK10XMarketProfileScanner[idx];
+			return CacheIndicator<AK10XMarketProfileScanner>(new AK10XMarketProfileScanner(){ DisplayPrevDayValues = displayPrevDayValues, DisplayTodayValues = displayTodayValues, DisplayDailySma = displayDailySma, SmaNumberOfDays = smaNumberOfDays, DisplayPrevDayMpLevels = displayPrevDayMpLevels, DisplayIbValues = displayIbValues, DisplayCurrentDayMpLevels = displayCurrentDayMpLevels, AtrNumberOfDays = atrNumberOfDays, ProfileDistributionOneSigma = profileDistributionOneSigma, MinTickSizeParam = minTickSizeParam, InitialBalanceCandleCount = initialBalanceCandleCount, AutoRefreshEnabled = autoRefreshEnabled, AutoRefreshSeconds = autoRefreshSeconds, UseClassicLightTheme = useClassicLightTheme, ScannerFontSize = scannerFontSize }, input, ref cacheAK10XMarketProfileScanner);
 		}
 	}
 }
@@ -5257,14 +5257,14 @@ namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
 {
 	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
 	{
-		public Indicators.MarketProfileScanner50Charts MarketProfileScanner50Charts(bool displayPrevDayValues, bool displayTodayValues, bool displayDailySma, int smaNumberOfDays, bool displayPrevDayMpLevels, bool displayIbValues, bool displayCurrentDayMpLevels, int atrNumberOfDays, double profileDistributionOneSigma, double minTickSizeParam, int initialBalanceCandleCount, bool autoRefreshEnabled, int autoRefreshSeconds, bool useClassicLightTheme, int scannerFontSize)
+		public Indicators.AK10XMarketProfileScanner AK10XMarketProfileScanner(bool displayPrevDayValues, bool displayTodayValues, bool displayDailySma, int smaNumberOfDays, bool displayPrevDayMpLevels, bool displayIbValues, bool displayCurrentDayMpLevels, int atrNumberOfDays, double profileDistributionOneSigma, double minTickSizeParam, int initialBalanceCandleCount, bool autoRefreshEnabled, int autoRefreshSeconds, bool useClassicLightTheme, int scannerFontSize)
 		{
-			return indicator.MarketProfileScanner50Charts(Input, displayPrevDayValues, displayTodayValues, displayDailySma, smaNumberOfDays, displayPrevDayMpLevels, displayIbValues, displayCurrentDayMpLevels, atrNumberOfDays, profileDistributionOneSigma, minTickSizeParam, initialBalanceCandleCount, autoRefreshEnabled, autoRefreshSeconds, useClassicLightTheme, scannerFontSize);
+			return indicator.AK10XMarketProfileScanner(Input, displayPrevDayValues, displayTodayValues, displayDailySma, smaNumberOfDays, displayPrevDayMpLevels, displayIbValues, displayCurrentDayMpLevels, atrNumberOfDays, profileDistributionOneSigma, minTickSizeParam, initialBalanceCandleCount, autoRefreshEnabled, autoRefreshSeconds, useClassicLightTheme, scannerFontSize);
 		}
 
-		public Indicators.MarketProfileScanner50Charts MarketProfileScanner50Charts(ISeries<double> input , bool displayPrevDayValues, bool displayTodayValues, bool displayDailySma, int smaNumberOfDays, bool displayPrevDayMpLevels, bool displayIbValues, bool displayCurrentDayMpLevels, int atrNumberOfDays, double profileDistributionOneSigma, double minTickSizeParam, int initialBalanceCandleCount, bool autoRefreshEnabled, int autoRefreshSeconds, bool useClassicLightTheme, int scannerFontSize)
+		public Indicators.AK10XMarketProfileScanner AK10XMarketProfileScanner(ISeries<double> input , bool displayPrevDayValues, bool displayTodayValues, bool displayDailySma, int smaNumberOfDays, bool displayPrevDayMpLevels, bool displayIbValues, bool displayCurrentDayMpLevels, int atrNumberOfDays, double profileDistributionOneSigma, double minTickSizeParam, int initialBalanceCandleCount, bool autoRefreshEnabled, int autoRefreshSeconds, bool useClassicLightTheme, int scannerFontSize)
 		{
-			return indicator.MarketProfileScanner50Charts(input, displayPrevDayValues, displayTodayValues, displayDailySma, smaNumberOfDays, displayPrevDayMpLevels, displayIbValues, displayCurrentDayMpLevels, atrNumberOfDays, profileDistributionOneSigma, minTickSizeParam, initialBalanceCandleCount, autoRefreshEnabled, autoRefreshSeconds, useClassicLightTheme, scannerFontSize);
+			return indicator.AK10XMarketProfileScanner(input, displayPrevDayValues, displayTodayValues, displayDailySma, smaNumberOfDays, displayPrevDayMpLevels, displayIbValues, displayCurrentDayMpLevels, atrNumberOfDays, profileDistributionOneSigma, minTickSizeParam, initialBalanceCandleCount, autoRefreshEnabled, autoRefreshSeconds, useClassicLightTheme, scannerFontSize);
 		}
 	}
 }
@@ -5273,14 +5273,14 @@ namespace NinjaTrader.NinjaScript.Strategies
 {
 	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
 	{
-		public Indicators.MarketProfileScanner50Charts MarketProfileScanner50Charts(bool displayPrevDayValues, bool displayTodayValues, bool displayDailySma, int smaNumberOfDays, bool displayPrevDayMpLevels, bool displayIbValues, bool displayCurrentDayMpLevels, int atrNumberOfDays, double profileDistributionOneSigma, double minTickSizeParam, int initialBalanceCandleCount, bool autoRefreshEnabled, int autoRefreshSeconds, bool useClassicLightTheme, int scannerFontSize)
+		public Indicators.AK10XMarketProfileScanner AK10XMarketProfileScanner(bool displayPrevDayValues, bool displayTodayValues, bool displayDailySma, int smaNumberOfDays, bool displayPrevDayMpLevels, bool displayIbValues, bool displayCurrentDayMpLevels, int atrNumberOfDays, double profileDistributionOneSigma, double minTickSizeParam, int initialBalanceCandleCount, bool autoRefreshEnabled, int autoRefreshSeconds, bool useClassicLightTheme, int scannerFontSize)
 		{
-			return indicator.MarketProfileScanner50Charts(Input, displayPrevDayValues, displayTodayValues, displayDailySma, smaNumberOfDays, displayPrevDayMpLevels, displayIbValues, displayCurrentDayMpLevels, atrNumberOfDays, profileDistributionOneSigma, minTickSizeParam, initialBalanceCandleCount, autoRefreshEnabled, autoRefreshSeconds, useClassicLightTheme, scannerFontSize);
+			return indicator.AK10XMarketProfileScanner(Input, displayPrevDayValues, displayTodayValues, displayDailySma, smaNumberOfDays, displayPrevDayMpLevels, displayIbValues, displayCurrentDayMpLevels, atrNumberOfDays, profileDistributionOneSigma, minTickSizeParam, initialBalanceCandleCount, autoRefreshEnabled, autoRefreshSeconds, useClassicLightTheme, scannerFontSize);
 		}
 
-		public Indicators.MarketProfileScanner50Charts MarketProfileScanner50Charts(ISeries<double> input , bool displayPrevDayValues, bool displayTodayValues, bool displayDailySma, int smaNumberOfDays, bool displayPrevDayMpLevels, bool displayIbValues, bool displayCurrentDayMpLevels, int atrNumberOfDays, double profileDistributionOneSigma, double minTickSizeParam, int initialBalanceCandleCount, bool autoRefreshEnabled, int autoRefreshSeconds, bool useClassicLightTheme, int scannerFontSize)
+		public Indicators.AK10XMarketProfileScanner AK10XMarketProfileScanner(ISeries<double> input , bool displayPrevDayValues, bool displayTodayValues, bool displayDailySma, int smaNumberOfDays, bool displayPrevDayMpLevels, bool displayIbValues, bool displayCurrentDayMpLevels, int atrNumberOfDays, double profileDistributionOneSigma, double minTickSizeParam, int initialBalanceCandleCount, bool autoRefreshEnabled, int autoRefreshSeconds, bool useClassicLightTheme, int scannerFontSize)
 		{
-			return indicator.MarketProfileScanner50Charts(input, displayPrevDayValues, displayTodayValues, displayDailySma, smaNumberOfDays, displayPrevDayMpLevels, displayIbValues, displayCurrentDayMpLevels, atrNumberOfDays, profileDistributionOneSigma, minTickSizeParam, initialBalanceCandleCount, autoRefreshEnabled, autoRefreshSeconds, useClassicLightTheme, scannerFontSize);
+			return indicator.AK10XMarketProfileScanner(input, displayPrevDayValues, displayTodayValues, displayDailySma, smaNumberOfDays, displayPrevDayMpLevels, displayIbValues, displayCurrentDayMpLevels, atrNumberOfDays, profileDistributionOneSigma, minTickSizeParam, initialBalanceCandleCount, autoRefreshEnabled, autoRefreshSeconds, useClassicLightTheme, scannerFontSize);
 		}
 	}
 }

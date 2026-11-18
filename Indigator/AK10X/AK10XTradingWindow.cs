@@ -249,14 +249,14 @@ namespace NinjaTrader.NinjaScript.AddOns
 	}
 	#endregion
 
-	#region AK10XChartStackerWindow
+	#region AK10XTradingWindow
 	/// <summary>
 	/// Unified 2-Screen Window Stacker hosting Screen 1 (Market Profile) and Screen 2 (5-Min Candles).
 	/// True Win32 Child Window docking guarantees zero floating windows, zero shaking, and instant responsiveness.
 	/// </summary>
-	public class AK10XChartStackerWindow : NTWindow
+	public class AK10XTradingWindow : NTWindow
 	{
-		public static AK10XChartStackerWindow Instance { get; private set; }
+		public static AK10XTradingWindow Instance { get; private set; }
 
 		private static System.Windows.Threading.Dispatcher stackerDispatcher;
 		public static System.Windows.Threading.Dispatcher StackerDispatcher
@@ -522,7 +522,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			btnAccelpixStatus.Background = new SolidColorBrush(isConn ? Color.FromRgb(8, 42, 22) : Color.FromRgb(42, 32, 8));
 		}
 
-		public static AK10XChartStackerWindow FindOrCreateActiveInstance()
+		public static AK10XTradingWindow FindOrCreateActiveInstance()
 		{
 			if (Instance != null && !Instance.isWindowClosed)
 				return Instance;
@@ -536,7 +536,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 					{
 						Window w = null;
 						try { w = allWins[i]; } catch { }
-						if (w is AK10XChartStackerWindow existing && !existing.isWindowClosed)
+						if (w is AK10XTradingWindow existing && !existing.isWindowClosed)
 						{
 							Instance = existing;
 							stackerDispatcher = existing.Dispatcher;
@@ -547,7 +547,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			}
 			catch { }
 
-			Instance = new AK10XChartStackerWindow();
+			Instance = new AK10XTradingWindow();
 			Instance.Show();
 			return Instance;
 		}
@@ -934,7 +934,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			catch { }
 		}
 
-		public AK10XChartStackerWindow()
+		public AK10XTradingWindow()
 		{
 			EnsureD2DFactoryForCurrentThread();
 			Instance = this;
@@ -2046,9 +2046,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 		public void DockChartByHwnd(IntPtr hwnd, string title, int paneIndex, NinjaTrader.Gui.Chart.Chart chartInstance = null)
 		{
 			if (hwnd == IntPtr.Zero) return;
-			if (AK10XChartStackerWindow.StackerDispatcher != null && !AK10XChartStackerWindow.StackerDispatcher.CheckAccess())
+			if (AK10XTradingWindow.StackerDispatcher != null && !AK10XTradingWindow.StackerDispatcher.CheckAccess())
 			{
-				AK10XChartStackerWindow.StackerDispatcher.BeginInvoke(new Action(() => DockChartByHwnd(hwnd, title, paneIndex, chartInstance)));
+				AK10XTradingWindow.StackerDispatcher.BeginInvoke(new Action(() => DockChartByHwnd(hwnd, title, paneIndex, chartInstance)));
 				return;
 			}
 			if (!Dispatcher.CheckAccess())
@@ -2197,9 +2197,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		public void UndockPane(int paneIndex)
 		{
-			if (AK10XChartStackerWindow.StackerDispatcher != null && !AK10XChartStackerWindow.StackerDispatcher.CheckAccess())
+			if (AK10XTradingWindow.StackerDispatcher != null && !AK10XTradingWindow.StackerDispatcher.CheckAccess())
 			{
-				AK10XChartStackerWindow.StackerDispatcher.BeginInvoke(new Action(() => UndockPane(paneIndex)));
+				AK10XTradingWindow.StackerDispatcher.BeginInvoke(new Action(() => UndockPane(paneIndex)));
 				return;
 			}
 			if (!Dispatcher.CheckAccess())
@@ -2271,9 +2271,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		public void UndockAll()
 		{
-			if (AK10XChartStackerWindow.StackerDispatcher != null && !AK10XChartStackerWindow.StackerDispatcher.CheckAccess())
+			if (AK10XTradingWindow.StackerDispatcher != null && !AK10XTradingWindow.StackerDispatcher.CheckAccess())
 			{
-				AK10XChartStackerWindow.StackerDispatcher.BeginInvoke(new Action(() => UndockAll()));
+				AK10XTradingWindow.StackerDispatcher.BeginInvoke(new Action(() => UndockAll()));
 				return;
 			}
 			if (!Dispatcher.CheckAccess())
@@ -2360,9 +2360,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		private void SyncPaneWindow(int paneIndex)
 		{
-			if (AK10XChartStackerWindow.StackerDispatcher != null && !AK10XChartStackerWindow.StackerDispatcher.CheckAccess())
+			if (AK10XTradingWindow.StackerDispatcher != null && !AK10XTradingWindow.StackerDispatcher.CheckAccess())
 			{
-				AK10XChartStackerWindow.StackerDispatcher.BeginInvoke(new Action(() => SyncPaneWindow(paneIndex)));
+				AK10XTradingWindow.StackerDispatcher.BeginInvoke(new Action(() => SyncPaneWindow(paneIndex)));
 				return;
 			}
 			if (!Dispatcher.CheckAccess())
@@ -2501,9 +2501,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		public void SyncBothPanes()
 		{
-			if (AK10XChartStackerWindow.StackerDispatcher != null && !AK10XChartStackerWindow.StackerDispatcher.CheckAccess())
+			if (AK10XTradingWindow.StackerDispatcher != null && !AK10XTradingWindow.StackerDispatcher.CheckAccess())
 			{
-				AK10XChartStackerWindow.StackerDispatcher.BeginInvoke(new Action(() => SyncBothPanes()));
+				AK10XTradingWindow.StackerDispatcher.BeginInvoke(new Action(() => SyncBothPanes()));
 				return;
 			}
 			if (!Dispatcher.CheckAccess())
@@ -2711,9 +2711,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		public void RefreshAvailableCharts()
 		{
-			if (AK10XChartStackerWindow.StackerDispatcher != null && !AK10XChartStackerWindow.StackerDispatcher.CheckAccess())
+			if (AK10XTradingWindow.StackerDispatcher != null && !AK10XTradingWindow.StackerDispatcher.CheckAccess())
 			{
-				AK10XChartStackerWindow.StackerDispatcher.BeginInvoke(new Action(() => RefreshAvailableCharts()));
+				AK10XTradingWindow.StackerDispatcher.BeginInvoke(new Action(() => RefreshAvailableCharts()));
 				return;
 			}
 			if (!Dispatcher.CheckAccess())
@@ -2781,7 +2781,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 						string name = ind.GetType().Name;
 						if (name.IndexOf("MarketProfile", StringComparison.OrdinalIgnoreCase) >= 0)
 							return 1;
-						if (name.IndexOf("AK10XOrderflow", StringComparison.OrdinalIgnoreCase) >= 0)
+						if (name.IndexOf("Orderflow", StringComparison.OrdinalIgnoreCase) >= 0)
 							return 2;
 					}
 				}
@@ -3035,8 +3035,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 				// Hide raw NinjaTrader green/red candlesticks so neither Market Profile nor Orderflow ever flashes raw candles during symbol switches
 				SilenceRawCandlesticksOnChart(cc);
 
-				string targetTypePart = applyMarketProfile ? "MarketProfile" : "AK10XOrderflow";
-				string conflictingTypePart = applyMarketProfile ? "AK10XOrderflow" : "MarketProfile";
+				string targetTypePart = applyMarketProfile ? "MarketProfile" : "Orderflow";
+				string conflictingTypePart = applyMarketProfile ? "Orderflow" : "MarketProfile";
 				bool exists = false;
 				bool hasConflictingIndicator = false;
 				foreach (var ind in cc.Indicators)
@@ -3070,26 +3070,57 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 				if (!exists)
 				{
+					bool isGlobalInstrument = false;
+					try
+					{
+						Instrument inst = cc.Instrument;
+						if (inst != null)
+						{
+							string fn = inst.FullName ?? string.Empty;
+							bool explicitIndian = fn.EndsWith("_I", StringComparison.OrdinalIgnoreCase)
+								|| fn.EndsWith("-EQ", StringComparison.OrdinalIgnoreCase)
+								|| fn.IndexOf("NIFTY", StringComparison.OrdinalIgnoreCase) >= 0
+								|| fn.IndexOf("SENSEX", StringComparison.OrdinalIgnoreCase) >= 0;
+							if (!explicitIndian && inst.MasterInstrument != null)
+							{
+								InstrumentType it = inst.MasterInstrument.InstrumentType;
+								string th = inst.MasterInstrument.TradingHours != null ? (inst.MasterInstrument.TradingHours.Name ?? string.Empty) : string.Empty;
+								if (it == InstrumentType.Forex ||
+									it.ToString().IndexOf("Crypto", StringComparison.OrdinalIgnoreCase) >= 0 ||
+									th.IndexOf("CME", StringComparison.OrdinalIgnoreCase) >= 0 ||
+									th.IndexOf("Nymex", StringComparison.OrdinalIgnoreCase) >= 0 ||
+									th.IndexOf("Comex", StringComparison.OrdinalIgnoreCase) >= 0 ||
+									th.IndexOf("CBOT", StringComparison.OrdinalIgnoreCase) >= 0 ||
+									th.IndexOf("Eurex", StringComparison.OrdinalIgnoreCase) >= 0 ||
+									th.IndexOf("Forex", StringComparison.OrdinalIgnoreCase) >= 0)
+								{
+									isGlobalInstrument = true;
+								}
+							}
+						}
+					}
+					catch { }
+
+					NinjaTrader.Gui.NinjaScript.IndicatorRenderBase createdInd;
 					if (applyMarketProfile)
 					{
-						var mp = new NinjaTrader.NinjaScript.Indicators.INDMarketProfile50Charts();
-						mp.SetState(State.SetDefaults);
-						mp.ChartControl = cc;
-						mp.ChartBars = cc.PrimaryBars;
-						mp.ChartPanel = cc.ChartPanels[0];
-						mp.Panel = 0;
-						cc.Indicators.Add(mp);
+						createdInd = isGlobalInstrument
+							? (NinjaTrader.Gui.NinjaScript.IndicatorRenderBase)new NinjaTrader.NinjaScript.Indicators.AK10XGlobalMarketProfile()
+							: (NinjaTrader.Gui.NinjaScript.IndicatorRenderBase)new NinjaTrader.NinjaScript.Indicators.AK10XIndiaMarketProfile();
 					}
 					else
 					{
-						var ofInd = new NinjaTrader.NinjaScript.Indicators.AK10XOrderflow();
-						ofInd.SetState(State.SetDefaults);
-						ofInd.ChartControl = cc;
-						ofInd.ChartBars = cc.PrimaryBars;
-						ofInd.ChartPanel = cc.ChartPanels[0];
-						ofInd.Panel = 0;
-						cc.Indicators.Add(ofInd);
+						createdInd = isGlobalInstrument
+							? (NinjaTrader.Gui.NinjaScript.IndicatorRenderBase)new NinjaTrader.NinjaScript.Indicators.AK10XGlobalOrderflow()
+							: (NinjaTrader.Gui.NinjaScript.IndicatorRenderBase)new NinjaTrader.NinjaScript.Indicators.AK10XIndianOrderflow();
 					}
+
+					createdInd.SetState(State.SetDefaults);
+					createdInd.ChartControl = cc;
+					createdInd.ChartBars = cc.PrimaryBars;
+					createdInd.ChartPanel = cc.ChartPanels[0];
+					createdInd.Panel = 0;
+					cc.Indicators.Add(createdInd);
 
 					var refreshMethod = typeof(ChartControl).GetMethod("RefreshIndicators", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
 					if (refreshMethod != null)
@@ -3218,7 +3249,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 				newChart.Background = new SolidColorBrush(Color.FromRgb(18, 22, 29)); // #12161D institutional dark
 				newChart.ShowActivated = false;
 
-				// Automatically attach INDMarketProfile50Charts (Screen 1) or AK10XOrderflow (Screen 2)
+				// Automatically attach AK10XIndiaMarketProfile (Screen 1) or AK10XIndianOrderflow (Screen 2)
 				bool isProfileChart = applyMarketProfile;
 				var initTimer = new System.Windows.Threading.DispatcherTimer(
 					TimeSpan.FromMilliseconds(35),
@@ -3727,8 +3758,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		/// <summary>
 		/// Common unified chart loader:
-		/// Chart 1: 1-Min Timeframe with INDMarketProfile50Charts attached.
-		/// Chart 2: 5-Min Timeframe with AK10XOrderflow attached.
+		/// Chart 1: 1-Min Timeframe with AK10XIndiaMarketProfile attached.
+		/// Chart 2: 5-Min Timeframe with AK10XIndianOrderflow attached.
 		/// Docks both seamlessly into Screen 1 and Screen 2 of the 2-Screen Stacker in Maximized view.
 		/// </summary>
 		public static void LoadUnifiedInstrumentPair(string symbol)
@@ -3737,7 +3768,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			{
 				try
 				{
-					AK10XChartStackerWindow win = FindOrCreateActiveInstance();
+					AK10XTradingWindow win = FindOrCreateActiveInstance();
 					if (win != null)
 					{
 						win.LoadSymbolPairOnWindow(symbol, false);
@@ -3749,8 +3780,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 				}
 			};
 
-			if (AK10XChartStackerWindow.StackerDispatcher != null && !AK10XChartStackerWindow.StackerDispatcher.CheckAccess())
-				AK10XChartStackerWindow.StackerDispatcher.BeginInvoke(openAct);
+			if (AK10XTradingWindow.StackerDispatcher != null && !AK10XTradingWindow.StackerDispatcher.CheckAccess())
+				AK10XTradingWindow.StackerDispatcher.BeginInvoke(openAct);
 			else
 				openAct();
 		}
@@ -3974,7 +4005,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			{
 				try
 				{
-					AK10XChartStackerWindow win = FindOrCreateActiveInstance();
+					AK10XTradingWindow win = FindOrCreateActiveInstance();
 					if (win != null)
 					{
 						win.MaximizeStackerToWorkArea();
@@ -4005,8 +4036,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 	}
 	#endregion
 
-	#region AddOn Integration (Control Center -> New -> AK10X 2-Screen Stacker)
-	public class AK10XWindowStackerAddOn : AddOnBase
+	#region AddOn Integration (Control Center -> New -> AK10X Trading Screen)
+	public class AK10XTradingWindowAddOn : AddOnBase
 	{
 		private NTMenuItem menuItem;
 		private NTMenuItem existingMenu;
@@ -4016,7 +4047,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 			if (State == State.SetDefaults)
 			{
 				Description = "AK10X Trading Screen Add-On for NinjaTrader 8";
-				Name = "AK10XWindowStacker";
+				Name = "AK10XTradingWindow";
 			}
 		}
 
@@ -4058,7 +4089,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
 		private void OnMenuItemClick(object sender, RoutedEventArgs e)
 		{
-			AK10XChartStackerWindow.OpenFromControlCenterMenu();
+			AK10XTradingWindow.OpenFromControlCenterMenu();
 		}
 	}
 	#endregion
