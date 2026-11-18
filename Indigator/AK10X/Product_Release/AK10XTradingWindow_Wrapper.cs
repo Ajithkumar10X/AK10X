@@ -14,7 +14,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 {
 	internal static class AK10XSuiteRuntimeLoader
 	{
-		public const string ExpectedBuildStamp = "20261117_091834";
+		public const string ExpectedBuildStamp = "20261118_084327";
 		private static readonly object SyncRoot = new object();
 		private static Assembly cachedSuiteAssembly;
 		private static bool resolveHooked;

@@ -329,6 +329,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ShowVirginVPPoC = true;
 				ShowVirginMidLine = true;
 
+				EnableRunningDayLevels = true;
+				ShowRunningDayVAH = true;
+				ShowRunningDayVAL = true;
+				ShowRunningDayPOC = true;
+				ShowRunningDayPPOC = true;
+
 				ShowSummary = true;
 				FixSummaryBoxAtBottom = true;
 				MinimizeSummaryBoxes = false;
@@ -4260,8 +4266,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 					using (var cyanBrush = new DxBrush(RenderTarget, new SharpDX.Color(72, 198, 222)))
 					using (var highExtremeBrush = new DxBrush(RenderTarget, new SharpDX.Color(38, 224, 102)))
 					using (var lowExtremeBrush = new DxBrush(RenderTarget, new SharpDX.Color(248, 76, 82)))
-					using (var highSwingLineBrush = new DxBrush(RenderTarget, new SharpDX.Color(38, 224, 102, 200)))
-					using (var lowSwingLineBrush = new DxBrush(RenderTarget, new SharpDX.Color(248, 76, 82, 200)))
+					using (var highSwingLineBrush = new DxBrush(RenderTarget, new SharpDX.Color(38, 224, 102, 185)))
+					using (var lowSwingLineBrush = new DxBrush(RenderTarget, new SharpDX.Color(248, 76, 82, 185)))
 					using (var highExtremeBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(38, 224, 102, 190)))
 					using (var lowExtremeBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(248, 76, 82, 190)))
 					using (var daySepBrush = new DxBrush(RenderTarget, new SharpDX.Color(62, 78, 96)))
@@ -4460,9 +4466,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 								bool isHighVirgin = GetLevelExtensionX(allDays, i, day.High, xCollapsedRight, panelRight, out drawEndX, isHighExtreme: true);
 								float drawStartX = Math.Max(panelLeft, xIb);
 								if (highLevelStroke != null)
-									RenderTarget.DrawLine(new Vector2(drawStartX, profileHighY), new Vector2(drawEndX, profileHighY), highLevelBrush, 1.05f, highLevelStroke);
+									DrawHairlineHorizontal(drawStartX, drawEndX, profileHighY, highLevelBrush, 0.65f, highLevelStroke);
 								else
-									RenderTarget.DrawLine(new Vector2(drawStartX, profileHighY), new Vector2(drawEndX, profileHighY), highSwingLineBrush, 1.05f);
+									DrawHairlineHorizontal(drawStartX, drawEndX, profileHighY, highSwingLineBrush, 0.52f);
 
 								if (isHighVirgin)
 								{
@@ -4485,9 +4491,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 								bool isLowVirgin = GetLevelExtensionX(allDays, i, day.Low, xCollapsedRight, panelRight, out drawEndX, isLowExtreme: true);
 								float drawStartX = Math.Max(panelLeft, xIb);
 								if (lowLevelStroke != null)
-									RenderTarget.DrawLine(new Vector2(drawStartX, profileLowY), new Vector2(drawEndX, profileLowY), lowLevelBrush, 1.05f, lowLevelStroke);
+									DrawHairlineHorizontal(drawStartX, drawEndX, profileLowY, lowLevelBrush, 0.65f, lowLevelStroke);
 								else
-									RenderTarget.DrawLine(new Vector2(drawStartX, profileLowY), new Vector2(drawEndX, profileLowY), lowSwingLineBrush, 1.05f);
+									DrawHairlineHorizontal(drawStartX, drawEndX, profileLowY, lowSwingLineBrush, 0.52f);
 
 								if (isLowVirgin)
 								{
@@ -4504,13 +4510,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 								}
 							}
 
-							// 3. Extending VAH & VAL (extends until broken; right-edge tag when Virgin)
+							// 3. Extending VAH & VAL (with separate Running Day enable/disable controls)
 							double vahPrice = day.VahBin * dStep;
 							double valPrice = day.ValBin * dStep;
 							float yVahLine = SessionPriceToY(day, day.VahBin * dStep + dStep * 0.5, step);
 							float yValLine = SessionPriceToY(day, day.ValBin * dStep - dStep * 0.5, step);
+							bool allowVahExt = isRunningDay ? (EnableRunningDayLevels && ShowRunningDayVAH) : ShowVirginVAH;
+							bool allowValExt = isRunningDay ? (EnableRunningDayLevels && ShowRunningDayVAL) : ShowVirginVAL;
 
-							if (ShowVirginVAH && yVahLine >= panelTop && yVahLine <= panelBottom - 25f)
+							if (allowVahExt && yVahLine >= panelTop && yVahLine <= panelBottom - 25f)
 							{
 								float vahDrawEndX;
 								bool isVahVirgin = GetLevelExtensionX(allDays, i, vahPrice, xCollapsedRight, panelRight, out vahDrawEndX);
@@ -4535,7 +4543,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 								}
 							}
 
-							if (ShowVirginVAL && yValLine >= panelTop && yValLine <= panelBottom - 25f)
+							if (allowValExt && yValLine >= panelTop && yValLine <= panelBottom - 25f)
 							{
 								float valDrawEndX;
 								bool isValVirgin = GetLevelExtensionX(allDays, i, valPrice, xCollapsedRight, panelRight, out valDrawEndX);
@@ -4560,17 +4568,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 								}
 							}
 
-							// 4. Extending VPoC & VPPoC (extends until broken; right-edge tag when Virgin)
+							// 4. Extending VPoC (POC) & VPPoC (PPoC) (with separate Running Day enable/disable controls)
 							double vpocPrice = day.VolumePocBin * dStep;
 							double tpoPocPrice = day.PocBin * dStep;
 							float yVpoc = SessionPriceToY(day, vpocPrice, step);
 							float yTpoPoc = SessionPriceToY(day, tpoPocPrice, step);
+							bool allowVpocLine = !isRunningDay || (EnableRunningDayLevels && ShowRunningDayPOC);
+							bool allowVpocExt = isRunningDay ? (EnableRunningDayLevels && ShowRunningDayPOC) : ShowVirginVPoC;
+							bool allowVppocLine = !isRunningDay || (EnableRunningDayLevels && ShowRunningDayPPOC);
+							bool allowVppocExt = isRunningDay ? (EnableRunningDayLevels && ShowRunningDayPPOC) : ShowVirginVPPoC;
 
-							if (yVpoc >= panelTop && yVpoc <= panelBottom - 25f)
+							if (allowVpocLine && yVpoc >= panelTop && yVpoc <= panelBottom - 25f)
 							{
 								float vpocDrawEndX = xCollapsedRight;
 								bool isVpocVirgin = false;
-								if (ShowVirginVPoC)
+								if (allowVpocExt)
 									isVpocVirgin = GetLevelExtensionX(allDays, i, vpocPrice, xCollapsedRight, panelRight, out vpocDrawEndX);
 								RenderTarget.DrawLine(
 									new Vector2(Math.Max(panelLeft, xIb), yVpoc),
@@ -4590,11 +4602,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 								}
 							}
 
-							if (day.PocBin != day.VolumePocBin && yTpoPoc >= panelTop && yTpoPoc <= panelBottom - 25f)
+							if (allowVppocLine && (day.PocBin != day.VolumePocBin || !allowVpocLine) && yTpoPoc >= panelTop && yTpoPoc <= panelBottom - 25f)
 							{
 								float tpoDrawEndX = xCollapsedRight;
 								bool isVppocVirgin = false;
-								if (ShowVirginVPPoC)
+								if (allowVppocExt)
 									isVppocVirgin = GetLevelExtensionX(allDays, i, tpoPocPrice, xCollapsedRight, panelRight, out tpoDrawEndX);
 								RenderTarget.DrawLine(
 									new Vector2(Math.Max(panelLeft, xIb), yTpoPoc),
@@ -4749,13 +4761,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 							float yValB = SessionPriceToY(day, val * dStep - dStep * 0.5, step);
 							float yVaTop = Math.Min(yVahA, yValB);
 							float yVaBot = Math.Max(yVahA, yValB);
+							bool showProfileVah = !isRunningDay || (EnableRunningDayLevels && ShowRunningDayVAH);
+							bool showProfileVal = !isRunningDay || (EnableRunningDayLevels && ShowRunningDayVAL);
 
 							// Value Area Box
-							RenderTarget.FillRectangle(
-								new RectangleF(xIb, yVaTop, Math.Max(4f, xCollapsedRight - xIb), Math.Max(2f, yVaBot - yVaTop)),
-								vaFillBrush);
-							RenderTarget.DrawLine(new Vector2(xIb, yVaTop), new Vector2(xCollapsedRight, yVaTop), vaBorderBrush, 1.0f, dashedStroke);
-							RenderTarget.DrawLine(new Vector2(xIb, yVaBot), new Vector2(xCollapsedRight, yVaBot), vaBorderBrush, 1.0f, dashedStroke);
+							if (showProfileVah || showProfileVal)
+							{
+								RenderTarget.FillRectangle(
+									new RectangleF(xIb, yVaTop, Math.Max(4f, xCollapsedRight - xIb), Math.Max(2f, yVaBot - yVaTop)),
+									vaFillBrush);
+							}
+							if (showProfileVah)
+								RenderTarget.DrawLine(new Vector2(xIb, yVaTop), new Vector2(xCollapsedRight, yVaTop), vaBorderBrush, 1.0f, dashedStroke);
+							if (showProfileVal)
+								RenderTarget.DrawLine(new Vector2(xIb, yVaBot), new Vector2(xCollapsedRight, yVaBot), vaBorderBrush, 1.0f, dashedStroke);
 
 							float sampleRowYA = SessionPriceToY(day, poc * dStep + dStep * 0.5, step);
 							float sampleRowYB = SessionPriceToY(day, poc * dStep - dStep * 0.5, step);
@@ -5000,11 +5019,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 											});
 										}
 
-										RenderTarget.FillRectangle(
-											new RectangleF(xSplitStart, yVaTop, Math.Max(10f, xSplitEnd - xSplitStart), Math.Max(2f, yVaBot - yVaTop)),
-											vaFillBrush);
-										RenderTarget.DrawLine(new Vector2(xSplitStart, yVaTop), new Vector2(xSplitEnd, yVaTop), vaBorderBrush, 1.0f, dashedStroke);
-										RenderTarget.DrawLine(new Vector2(xSplitStart, yVaBot), new Vector2(xSplitEnd, yVaBot), vaBorderBrush, 1.0f, dashedStroke);
+										if (showProfileVah || showProfileVal)
+										{
+											RenderTarget.FillRectangle(
+												new RectangleF(xSplitStart, yVaTop, Math.Max(10f, xSplitEnd - xSplitStart), Math.Max(2f, yVaBot - yVaTop)),
+												vaFillBrush);
+										}
+										if (showProfileVah)
+											RenderTarget.DrawLine(new Vector2(xSplitStart, yVaTop), new Vector2(xSplitEnd, yVaTop), vaBorderBrush, 1.0f, dashedStroke);
+										if (showProfileVal)
+											RenderTarget.DrawLine(new Vector2(xSplitStart, yVaBot), new Vector2(xSplitEnd, yVaBot), vaBorderBrush, 1.0f, dashedStroke);
 
 										// Highlight Single Print Zones & SL lines inside Split Profile as well
 										if (ShowSinglePrints && day.SinglePrintZones.Count > 0)
@@ -5874,6 +5898,27 @@ namespace NinjaTrader.NinjaScript.Indicators
 			RenderTarget.DrawText(text, format, cellRect, brush, DrawTextOptions.Clip);
 		}
 
+		private void DrawHairlineHorizontal(float x0, float x1, float rawY, DxBrush brush, float width = 0.55f, StrokeStyle stroke = null)
+		{
+			if (RenderTarget == null || brush == null || x1 <= x0)
+				return;
+
+			float snappedY = (float)Math.Floor(rawY) + 0.5f;
+			var prevAa = RenderTarget.AntialiasMode;
+			RenderTarget.AntialiasMode = AntialiasMode.PerPrimitive;
+			try
+			{
+				if (stroke != null)
+					RenderTarget.DrawLine(new Vector2(x0, snappedY), new Vector2(x1, snappedY), brush, width, stroke);
+				else
+					RenderTarget.DrawLine(new Vector2(x0, snappedY), new Vector2(x1, snappedY), brush, width);
+			}
+			finally
+			{
+				RenderTarget.AntialiasMode = prevAa;
+			}
+		}
+
 		private void DrawText(string text, float x, float y, float width, float height, DxTextFormat format, DxBrush brush)
 		{
 			if (width <= 0 || height <= 0 || string.IsNullOrEmpty(text))
@@ -6004,6 +6049,22 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		[Display(Name = "Enable Virgin MidLine", Description = "Show and extend Virgin Session Midline across subsequent days until broken", GroupName = "Virgin Lines & Levels", Order = 8)]
 		public bool ShowVirginMidLine { get; set; }
+
+		// Running Day Enable / Disable Controls (VAH, VAL, POC, PPoC)
+		[Display(Name = "Enable Running Day Levels (Master)", Description = "Master switch to enable or disable ValueAreaHigh, ValueAreaLow, POC (VPoC), and PPoC (VPPoC) on the currently running day", GroupName = "Running Day Levels", Order = 0)]
+		public bool EnableRunningDayLevels { get; set; }
+
+		[Display(Name = "Enable Running Day ValueAreaHigh", Description = "Show ValueAreaHigh line and right-edge label on the currently running day", GroupName = "Running Day Levels", Order = 1)]
+		public bool ShowRunningDayVAH { get; set; }
+
+		[Display(Name = "Enable Running Day ValueAreaLow", Description = "Show ValueAreaLow line and right-edge label on the currently running day", GroupName = "Running Day Levels", Order = 2)]
+		public bool ShowRunningDayVAL { get; set; }
+
+		[Display(Name = "Enable Running Day POC (VPoC)", Description = "Show Volume PoC (POC) line and right-edge label on the currently running day", GroupName = "Running Day Levels", Order = 3)]
+		public bool ShowRunningDayPOC { get; set; }
+
+		[Display(Name = "Enable Running Day PPoC (VPPoC)", Description = "Show TPO PoC (PPoC) line and right-edge label on the currently running day", GroupName = "Running Day Levels", Order = 4)]
+		public bool ShowRunningDayPPOC { get; set; }
 
 		// Panels & Cards
 		[NinjaScriptProperty]
