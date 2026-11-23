@@ -32,11 +32,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 		NinjaTrader = 1
 	}
 
+	public enum AK10XOrderflowMode
+	{
+		Imbalance = 0,       // Exact GoCharting Pattern: Seller (Left) | Center Buyer/Seller Candle Spine | Buyer (Right) + Amber Imbalance Blocks
+		VolumeFootprint = 1, // Same Center Spine Pattern + Proportional Seller/Buyer Volume Footprint Bars
+		Delta = 2,           // Center Spine + Price-Level Net Delta (+Buy / -Sell) Profile
+		TotalVolume = 3      // Center Spine + Total Volume Profile Histogram
+	}
+
 	/// <summary>
-	/// AK10XIndianOrderflow — Institutional Orderflow Footprint Indicator for Indian Markets (NSE / BSE / MCX)
-	/// Features selectable Data Feed (Default: Accelpix, or NinjaTrader Feed), Bid x Ask Clusters,
-	/// Bar POC & 70% Value Area, Developing Session VA/POC, Diagonal & Stacked Imbalance S/R Zones,
-	/// and Bottom 7-Row Statistic Grid (1:2 Logic, Buy Vol, Sell Vol, Delta, Cum. Delta, Min/Max Delta).
+	/// AK10XIndianOrderflow — Exact GoCharting-Style Buyer & Seller Candle Orderflow for Indian Markets (NSE / BSE / MCX)
+	/// - Seller Volume (Left) | Slim Buyer (Teal-Green) / Seller (Red) Center Candle Spine | Buyer Volume (Right)
+	/// - Borderless open layout with Solid Amber/Orange (#F59E0B) Diagonal Imbalance blocks
+	/// - Single-row GoCharting Intensity-Shaded Green/Red Bottom Delta Strip
+	/// - Smooth Mouse-Wheel Zoom Out (Standard Buyer/Seller Candlesticks) <-> Zoom In (Orderflow Footprint)
 	/// </summary>
 	public class AK10XIndianOrderflow : Indicator
 	{
@@ -95,7 +104,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public int StartBarIndex;
 			public int EndBarIndex;
 			public bool IsBroken;
-			public bool IsDemandAskZone; // true = Ask Imbalance Support (Lime), false = Bid Imbalance Resistance (DeepPink)
+			public bool IsDemandAskZone;
 			public double TopPrice;
 			public double BottomPrice;
 		}
@@ -135,32 +144,31 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private double lastAskPrice;
 		private double lastTradePrice;
 		private int lastTickDirection = 1;
+		private DateTime lastNativeOnMarketDataUtc = DateTime.MinValue;
 
 		private int lastComputedBarCount = -1;
 		private double lastComputedLastClose = double.NaN;
 		private long lastComputedLastVol = -1;
-		private int runtimeTicksPerLevel = 20;
+		private double lastComputedUniformStep = -1.0;
+		private int lastEffectiveAutoTicks = 10;
+		private int runtimeTicksPerLevel = 10;
 		private bool runtimeAutoStep = true;
 		private bool runtimeShowStatGrid = true;
-		private bool runtimeShowImbZones = true;
+		private bool runtimeShowImbZones = false;
+		private bool runtimeShowHalfpack = true;
+		private bool runtimeLightTheme = false;
+		private AK10XOrderflowMode runtimeOrderflowMode = AK10XOrderflowMode.VolumeFootprint;
 		private AK10XOrderflowDataFeed? runtimeDataFeedOverride;
+		private double runtimeYZoomFactor = 1.0;
 		private bool initialBarWidthApplied = false;
 
-		// Interactive UI button rects (SharpDX coordinates)
-		private RectangleF btnStepMinusRect;
-		private RectangleF btnStepPlusRect;
-		private RectangleF btnAutoStepRect;
-		private RectangleF btnWidthMinusRect;
-		private RectangleF btnWidthPlusRect;
-		private RectangleF btnGridToggleRect;
-		private RectangleF btnZonesToggleRect;
-		private RectangleF btnReloadLiveRect;
-		private RectangleF btnFeedToggleRect;
+		private readonly RectangleF[] toolbarBtnRects = new RectangleF[15];
 		private bool mouseSubscribed = false;
-		private UIElement subscribedElement = null;
 		private ChartControl hookedOrderflowCC = null;
-		private Window hookedOrderflowOwnerWin = null;
+		private UIElement hookedOwnerChart = null;
 		private MouseButtonEventHandler ofMouseLeftDownHandler = null;
+		private MouseWheelEventHandler ofMouseWheelHandler = null;
+		private MouseWheelEventHandler ofOwnerChartWheelHandler = null;
 		private System.Windows.Controls.Primitives.ScrollBar hookedOfScrollBar = null;
 		private System.Windows.Forms.Form hookedD2DForm = null;
 		private bool isDraggingFootprintCanvas = false;
@@ -168,7 +176,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private double ofDragStartScrollVal = 0.0;
 		private int hoveredToolbarBtnIndex = -1;
 		private int lastHandledOfMouseTimestamp = -1;
+		private long lastWheelHandledTicks = 0;
 		private DateTime lastBtnClickUtc = DateTime.MinValue;
+
+		private static readonly MethodInfo cachedInitSlotsPainted = typeof(ChartControl).GetMethod("InitSlotsPainted", BindingFlags.Instance | BindingFlags.NonPublic);
+		private static readonly MethodInfo cachedInitScrollbar = typeof(ChartControl).GetMethod("InitScrollbar", BindingFlags.Instance | BindingFlags.NonPublic);
 
 		private BarsRequest activeFeed1MReq;
 		private Instrument subscribedLiveInstrument;
@@ -189,70 +201,92 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		#region Properties
 		[NinjaScriptProperty]
-		[Display(Name = "Data Feed", Description = "Choose Accelpix Feed (NSE/BSE/MCX) or NinjaTrader Feed (CME/Forex/Global)", Order = 0, GroupName = "0. Data Feed")]
+		[Display(Name = "Data Feed", Description = "Choose Accelpix Feed (NSE/BSE/MCX) or NinjaTrader Feed (CME/Forex/Global)", Order = 0, GroupName = "0. Data Feed & Mode")]
 		public AK10XOrderflowDataFeed DataFeed { get; set; }
 
 		[NinjaScriptProperty]
+		[Display(Name = "Orderflow Display Mode", Description = "Imbalance (Exact GoCharting Borderless Spine + Amber Imbalances), VolumeFootprint, Delta, or TotalVolume", Order = 1, GroupName = "0. Data Feed & Mode")]
+		public AK10XOrderflowMode FootprintMode { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(20, 80)]
+		[Display(Name = "Candlestick Zoom Threshold (px)", Description = "Below this bar width (zoom out), bars render as standard Buyer/Seller Candlesticks; above it (zoom in), they expand into GoCharting Orderflow", Order = 2, GroupName = "0. Data Feed & Mode")]
+		public int CandlestickZoomThresholdPx { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "GoCharting White Theme", Description = "Enable crisp white GoCharting background theme (or toggle anytime from the top bar)", Order = 3, GroupName = "0. Data Feed & Mode")]
+		public bool UseLightTheme { get; set; }
+
+		[NinjaScriptProperty]
 		[Range(1, 500)]
-		[Display(Name = "Ticks Per Level", Description = "Price grouping in ticks (STOCK_USER.xml default = 20)", Order = 1, GroupName = "1. Footprint Core")]
+		[Display(Name = "Ticks Per Level", Description = "Manual price grouping in ticks when Auto-Scale is off", Order = 1, GroupName = "1. Footprint Core")]
 		public int TicksPerLevel { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Auto-Scale Price Step", Description = "Automatically scales price step so every 5-min bar has 8-16 clean non-overlapping rows", Order = 2, GroupName = "1. Footprint Core")]
+		[Display(Name = "Auto-Scale Price Step", Description = "Automatically scales price step to visible chart height so every row is ~19px tall and crystal-clear", Order = 2, GroupName = "1. Footprint Core")]
 		public bool AutoScalePriceStep { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(40, 220)]
-		[Display(Name = "Footprint Bar Spacing (px)", Description = "Horizontal pixel spacing per footprint bar (STOCK_USER.xml default = 110)", Order = 3, GroupName = "1. Footprint Core")]
+		[Display(Name = "Default Footprint Width (px)", Description = "Initial bar spacing in Orderflow view (default = 96px)", Order = 3, GroupName = "1. Footprint Core")]
 		public int BarSpacePx { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Show Bar POC", Description = "Highlight Bar Point of Control in Yellow (#FFFF00)", Order = 1, GroupName = "2. POC & Value Area")]
+		[Display(Name = "Show Bar POC", Description = "Highlight highest-volume price level (Point of Control) on each bar", Order = 1, GroupName = "2. POC, Halfpack & Value Area")]
 		public bool ShowBarPOC { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Show Bar Value Area (70%)", Description = "Highlight 70% Bar Value Area in Aquamarine (#7FFFD4)", Order = 2, GroupName = "2. POC & Value Area")]
+		[Display(Name = "Enable Halfpack", Description = "Show 50% Halfpack line across every candle in Footprint and Imbalance modes (Enabled by default)", Order = 2, GroupName = "2. POC, Halfpack & Value Area")]
+		public bool ShowHalfpack { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Show Bar Value Area (70%)", Description = "Subtle Value Area highlight", Order = 3, GroupName = "2. POC, Halfpack & Value Area")]
 		public bool ShowBarVA { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(50, 95)]
-		[Display(Name = "Bar Value Area %", Description = "Bar Value Area percentage (default 70%)", Order = 3, GroupName = "2. POC & Value Area")]
+		[Display(Name = "Bar Value Area %", Description = "Bar Value Area percentage (default 70%)", Order = 4, GroupName = "2. POC, Halfpack & Value Area")]
 		public int BarVAPercentage { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Show Developing Session VA & POC", Description = "Plot Developing Session POC (Orange) and VAH/VAL (RoyalBlue)", Order = 4, GroupName = "2. POC & Value Area")]
+		[Display(Name = "Show Developing Session VA & POC", Description = "Plot Developing Session POC and VAH/VAL step lines", Order = 5, GroupName = "2. POC, Halfpack & Value Area")]
 		public bool ShowSessionVA { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Show Diagonal Imbalances", Description = "Highlight 400% Diagonal Bid/Ask Imbalances (DeepPink / Lime)", Order = 1, GroupName = "3. Imbalances & S/R Zones")]
+		[Display(Name = "Show Diagonal Imbalances", Description = "Highlight aggressive Buyer (Ask) and Seller (Bid) diagonal imbalances with GoCharting Amber blocks", Order = 1, GroupName = "3. Imbalances & S/R Zones")]
 		public bool ShowImbalance { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(150, 1000)]
-		[Display(Name = "Imbalance Ratio %", Description = "Diagonal imbalance threshold percentage (STOCK_USER.xml default = 400%)", Order = 2, GroupName = "3. Imbalances & S/R Zones")]
+		[Display(Name = "Imbalance Ratio %", Description = "Diagonal imbalance ratio percentage (GoCharting default = 300%)", Order = 2, GroupName = "3. Imbalances & S/R Zones")]
 		public double ImbalancePercentage { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(1, 10000)]
-		[Display(Name = "Imbalance Min Volume Filter", Description = "Minimum volume required to trigger an imbalance (default = 10)", Order = 3, GroupName = "3. Imbalances & S/R Zones")]
+		[Display(Name = "Imbalance Min Volume Filter", Description = "Minimum level volume required to trigger an imbalance", Order = 3, GroupName = "3. Imbalances & S/R Zones")]
 		public int ImbalanceFilter { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Show Stacked Imbalance S/R Zones", Description = "Project Support/Resistance zones from 2+ consecutive imbalances until broken", Order = 4, GroupName = "3. Imbalances & S/R Zones")]
+		[Display(Name = "Show Stacked Imbalance Zones", Description = "Extend Support/Resistance zones from consecutive stacked imbalances", Order = 4, GroupName = "3. Imbalances & S/R Zones")]
 		public bool ShowImbalanceSRZones { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(2, 6)]
-		[Display(Name = "Consecutive Imbalance Levels", Description = "Minimum consecutive imbalance rows to form an S/R zone (default = 2)", Order = 5, GroupName = "3. Imbalances & S/R Zones")]
+		[Display(Name = "Consecutive Imbalance Levels", Description = "Minimum consecutive imbalance rows to form a Stacked Imbalance zone (default = 3)", Order = 5, GroupName = "3. Imbalances & S/R Zones")]
 		public int ImbalanceSRConsecutiveLevels { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Show Bar Delta Label", Description = "Show net bar delta label beneath each bar", Order = 1, GroupName = "4. Statistic Grid & Labels")]
+		[Display(Name = "Show Box Top Delta & Bottom Height", Description = "Show Delta pill above each candle box and Candle Height (High - Low) pill below each box", Order = 1, GroupName = "4. Top/Bottom Badges & 3-Row Table")]
 		public bool ShowBarDelta { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Show Bottom Statistic Grid", Description = "Show 6-row bottom orderflow table (Buy Vol, Sell Vol, Delta, Cum. Delta, Min/Max Delta)", Order = 2, GroupName = "4. Statistic Grid & Labels")]
+		[Display(Name = "Show 3-Row Bottom Table", Description = "Show 3-row bottom table: Momentum (BMC/SMC), Strength (Buyer/Seller), and Delta", Order = 2, GroupName = "4. Top/Bottom Badges & 3-Row Table")]
 		public bool ShowStatisticGrid { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(5, 45)]
+		[Display(Name = "Momentum Small Wick Max %", Description = "Maximum top wick (BMC) or bottom wick (SMC) % of candle height for Momentum classification (default = 25%)", Order = 3, GroupName = "4. Top/Bottom Badges & 3-Row Table")]
+		public int MomentumMaxWickPct { get; set; }
 		#endregion
 
 		#region Lifecycle & Dual Data Feed Engine (Accelpix / NinjaTrader)
@@ -260,7 +294,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			if (State == State.SetDefaults)
 			{
-				Description = "AK10X Indian Orderflow Footprint Indicator (Selectable Data Feed: Accelpix Default or NinjaTrader Feed)";
+				Description = "AK10X GoCharting-Style Buyer & Seller Candle Orderflow Indicator for Indian Markets (Accelpix Default + Data Feed Selector)";
 				Name = "AK10XIndianOrderflow";
 				Calculate = Calculate.OnEachTick;
 				IsOverlay = true;
@@ -270,23 +304,29 @@ namespace NinjaTrader.NinjaScript.Indicators
 				IsSuspendedWhileInactive = false;
 
 				DataFeed = AK10XOrderflowDataFeed.Accelpix;
-				TicksPerLevel = 20;
+				FootprintMode = AK10XOrderflowMode.VolumeFootprint;
+				CandlestickZoomThresholdPx = 38;
+				UseLightTheme = false;
+
+				TicksPerLevel = 10;
 				AutoScalePriceStep = true;
-				BarSpacePx = 110;
+				BarSpacePx = 96;
 
 				ShowBarPOC = true;
-				ShowBarVA = true;
+				ShowHalfpack = true;
+				ShowBarVA = false;
 				BarVAPercentage = 70;
-				ShowSessionVA = true;
+				ShowSessionVA = false;
 
 				ShowImbalance = true;
-				ImbalancePercentage = 400.0;
+				ImbalancePercentage = 300.0;
 				ImbalanceFilter = 10;
-				ShowImbalanceSRZones = true;
-				ImbalanceSRConsecutiveLevels = 2;
+				ShowImbalanceSRZones = false;
+				ImbalanceSRConsecutiveLevels = 3;
 
 				ShowBarDelta = true;
 				ShowStatisticGrid = true;
+				MomentumMaxWickPct = 25;
 			}
 			else if (State == State.DataLoaded)
 			{
@@ -299,12 +339,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 					lastComputedBarCount = -1;
 					lastComputedLastClose = double.NaN;
 					lastComputedLastVol = -1;
+					lastComputedUniformStep = -1.0;
 				}
 				runtimeDataFeedOverride = null;
+				runtimeOrderflowMode = FootprintMode;
+				runtimeLightTheme = UseLightTheme;
 				runtimeTicksPerLevel = Math.Max(1, TicksPerLevel);
+				lastEffectiveAutoTicks = runtimeTicksPerLevel;
 				runtimeAutoStep = AutoScalePriceStep;
 				runtimeShowStatGrid = ShowStatisticGrid;
 				runtimeShowImbZones = ShowImbalanceSRZones;
+				runtimeShowHalfpack = ShowHalfpack;
+				runtimeYZoomFactor = 1.0;
 				liveStreamInitialized = true;
 				EnsureMouseEventsSubscribed();
 				AttachSelectedDataFeedStream();
@@ -370,9 +416,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 				DataFeed = nextFeed;
 				subBarsBySlot.Clear();
 				historicalTickBySlot.Clear();
+				liveAccumulators.Clear();
 				barCache.Clear();
 				lastComputedBarCount = -1;
 				lastComputedLastClose = double.NaN;
+				lastComputedUniformStep = -1.0;
 			}
 			AttachSelectedDataFeedStream();
 			RequestSelectedDataFeedBarsAsync();
@@ -493,7 +541,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private void OnInstrumentMarketDataUpdate(object sender, MarketDataEventArgs e)
 		{
-			ProcessLiveTickEvent(e);
+			if (State != State.Realtime)
+				return;
+			if ((DateTime.UtcNow - lastNativeOnMarketDataUtc).TotalSeconds < 2.0)
+				return;
+			ProcessLiveTickEvent(e, false);
 		}
 
 		private void OnDataFeedConnectionStatusUpdate(object sender, ConnectionStatusEventArgs e)
@@ -512,6 +564,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private TradingHours ResolveFeedTradingHours(Instrument inst, bool useAccelpix)
 		{
+			try
+			{
+				if (ChartBars != null && ChartBars.Bars != null && ChartBars.Bars.TradingHours != null)
+					return ChartBars.Bars.TradingHours;
+			}
+			catch { }
+
 			if (inst == null)
 				return TradingHours.Get("Default 24 x 7");
 
@@ -536,6 +595,29 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return TradingHours.Get("Default 24 x 7");
 		}
 
+		private MergePolicy ResolveChartMergePolicy(Instrument inst)
+		{
+			try
+			{
+				if (ChartBars != null && ChartBars.Properties != null)
+				{
+					PropertyInfo mpProp = ChartBars.Properties.GetType().GetProperty("MergePolicy", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+					if (mpProp != null && mpProp.PropertyType == typeof(MergePolicy))
+					{
+						MergePolicy chartMp = (MergePolicy)mpProp.GetValue(ChartBars.Properties, null);
+						if (chartMp != MergePolicy.UseGlobalSettings)
+							return chartMp;
+					}
+				}
+				if (inst != null && inst.MasterInstrument != null && inst.MasterInstrument.MergePolicy != MergePolicy.UseGlobalSettings)
+					return inst.MasterInstrument.MergePolicy;
+				if (Globals.MarketDataOptions != null)
+					return Globals.MarketDataOptions.GlobalMergePolicy;
+			}
+			catch { }
+			return MergePolicy.MergeBackAdjusted;
+		}
+
 		private void RequestSelectedDataFeedBarsAsync()
 		{
 			try
@@ -546,6 +628,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				bool useAccelpix = (EffectiveDataFeed == AK10XOrderflowDataFeed.Accelpix);
 				double tick = TickSize > 0 ? TickSize : (inst.MasterInstrument != null && inst.MasterInstrument.TickSize > 0 ? inst.MasterInstrument.TickSize : 0.05);
+				MergePolicy chartMerge = ResolveChartMergePolicy(inst);
 
 				System.Threading.Tasks.Task.Run(() =>
 				{
@@ -557,7 +640,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 						TradingHours reqTh = ResolveFeedTradingHours(inst, useAccelpix);
 						DateTime endDate = DateTime.Now.Date.AddDays(1);
 
-						// On NinjaTrader Feed, request genuine 1-Tick historical Bid x Ask series first for authentic historical Orderflow Footprints
 						if (!useAccelpix)
 						{
 							foreach (LookupPolicies pol in new LookupPolicies[] { LookupPolicies.Repository, LookupPolicies.Provider })
@@ -576,7 +658,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 									{
 										tickReq.BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Tick, Value = 1 };
 										tickReq.LookupPolicy = pol;
-										tickReq.MergePolicy = MergePolicy.MergeBackAdjusted;
+										tickReq.MergePolicy = chartMerge;
 										if (reqTh != null) tickReq.TradingHours = reqTh;
 										tickReq.Request((tb, err, msg) =>
 										{
@@ -591,7 +673,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 												try { doneTick.Set(); } catch { }
 											}
 										});
-										doneTick.Wait(pol == LookupPolicies.Repository ? 1000 : 2500);
+										doneTick.Wait(pol == LookupPolicies.Repository ? 1000 : 3000);
 									}
 								}
 								catch { }
@@ -605,6 +687,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 						BarsRequest req1 = new BarsRequest(inst, startDate, endDate)
 						{
 							BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Minute, Value = 1 },
+							MergePolicy = chartMerge,
 							TradingHours = reqTh
 						};
 						req1.Update += OnFeed1MBarsUpdate;
@@ -640,10 +723,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			double tick = tickSize > 0 ? tickSize : 0.01;
 			Dictionary<DateTime, LiveTickAccumulator> built = new Dictionary<DateTime, LiveTickAccumulator>();
-			double prevPx = 0.0;
-			int dir = 1;
 			int count = bTick.Count;
 
+			int dir = 1;
+			double firstPx = bTick.GetClose(0);
+			for (int k = 1; k < Math.Min(count, 25); k++)
+			{
+				double kp = bTick.GetClose(k);
+				if (Math.Abs(kp - firstPx) > 1e-9)
+				{
+					dir = kp > firstPx ? 1 : -1;
+					break;
+				}
+			}
+
+			double prevPx = 0.0;
 			for (int i = 0; i < count; i++)
 			{
 				DateTime t = bTick.GetTime(i);
@@ -668,10 +762,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 				prevPx = px;
 
 				bool isBuy;
-				if (ask > 0 && bid > 0 && ask >= bid)
+				if (ask > 0 && bid > 0 && ask > bid + tick * 0.15)
 				{
+					double mid = (ask + bid) * 0.5;
 					if (px >= ask - 1e-9) isBuy = true;
 					else if (px <= bid + 1e-9) isBuy = false;
+					else if (Math.Abs(px - mid) > tick * 0.1) isBuy = (px > mid);
 					else isBuy = (dir >= 0);
 				}
 				else
@@ -728,7 +824,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 				subBarsBySlot.Clear();
 				int count = b1m.Count;
 
-				// Only difference cumulative volumes if intra-day volumes are strictly monotonic cumulative (>92% non-decreasing)
 				bool isCumulative = false;
 				if (allowCumulativeAutoDetect && count >= 12)
 				{
@@ -845,7 +940,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					return;
 
 				DateTime nowUtc = DateTime.UtcNow;
-				if (!immediate && (nowUtc - lastLiveRefreshUtc).TotalMilliseconds < 250)
+				if (!immediate && (nowUtc - lastLiveRefreshUtc).TotalMilliseconds < 220)
 					return;
 				lastLiveRefreshUtc = nowUtc;
 
@@ -944,8 +1039,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (cc == null || cc.Properties == null)
 				return;
 
-			int desiredMargin = Math.Max(48, (int)Math.Round(barSpacing * 1.5f));
-			if (Math.Abs(cc.Properties.BarMarginRightUser - desiredMargin) <= 4)
+			int minRightMargin = runtimeShowStatGrid ? 92 : 28;
+			int desiredMargin = Math.Max(minRightMargin, Math.Min(150, (int)Math.Round(barSpacing * 1.18f)));
+			if (Math.Abs(cc.Properties.BarMarginRightUser - desiredMargin) <= 6)
 				return;
 
 			if (immediateOnUiThread)
@@ -963,7 +1059,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				{
 					try
 					{
-						if (cc.Properties != null && Math.Abs(cc.Properties.BarMarginRightUser - desiredMargin) > 4)
+						if (cc.Properties != null && Math.Abs(cc.Properties.BarMarginRightUser - desiredMargin) > 6)
 						{
 							cc.Properties.BarMarginRightUser = desiredMargin;
 							TriggerChartScrollbarRefresh();
@@ -1024,46 +1120,74 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private void EnsureMouseEventsSubscribed()
 		{
-			if (ChartControl == null)
+			ChartControl cc = ChartControl;
+			if (cc == null)
 				return;
-			if (mouseSubscribed && hookedOrderflowCC == ChartControl && hookedOfScrollBar != null)
+
+			var curD2D = cc.OwnerChart != null ? cc.OwnerChart.Form : null;
+			var curOwner = cc.OwnerChart as UIElement;
+
+			if (mouseSubscribed &&
+				hookedOrderflowCC == cc &&
+				hookedOfScrollBar != null &&
+				hookedD2DForm == curD2D &&
+				hookedOwnerChart == curOwner)
+			{
 				return;
+			}
 
 			try
 			{
-				ChartControl cc = ChartControl;
 				cc.Dispatcher.InvokeAsync(() =>
 				{
 					try
 					{
-						if (cc == null) return;
+						if (cc == null || State == State.Terminated)
+							return;
+
 						if (ofMouseLeftDownHandler == null)
 							ofMouseLeftDownHandler = new MouseButtonEventHandler(OnChartMouseLeftButtonDown);
+						if (ofMouseWheelHandler == null)
+							ofMouseWheelHandler = new MouseWheelEventHandler(OnChartMouseWheel);
+						if (ofOwnerChartWheelHandler == null)
+							ofOwnerChartWheelHandler = new MouseWheelEventHandler(OnOwnerChartPreviewMouseWheel);
 
 						if (!mouseSubscribed || hookedOrderflowCC != cc)
 						{
 							if (hookedOrderflowCC != null)
 							{
 								try { hookedOrderflowCC.RemoveHandler(UIElement.PreviewMouseLeftButtonDownEvent, ofMouseLeftDownHandler); } catch { }
+								try { hookedOrderflowCC.RemoveHandler(UIElement.PreviewMouseWheelEvent, ofMouseWheelHandler); } catch { }
 								hookedOrderflowCC.PreviewMouseMove -= OnChartMouseMove;
 								hookedOrderflowCC.PreviewMouseLeftButtonUp -= OnChartMouseLeftButtonUp;
-								hookedOrderflowCC.PreviewMouseWheel -= OnChartMouseWheel;
 								hookedOrderflowCC.MouseLeave -= OnChartMouseLeave;
 							}
 							cc.RemoveHandler(UIElement.PreviewMouseLeftButtonDownEvent, ofMouseLeftDownHandler);
 							cc.AddHandler(UIElement.PreviewMouseLeftButtonDownEvent, ofMouseLeftDownHandler, true);
+							cc.RemoveHandler(UIElement.PreviewMouseWheelEvent, ofMouseWheelHandler);
+							cc.AddHandler(UIElement.PreviewMouseWheelEvent, ofMouseWheelHandler, true);
 							cc.PreviewMouseMove += OnChartMouseMove;
 							cc.PreviewMouseLeftButtonUp += OnChartMouseLeftButtonUp;
-							cc.PreviewMouseWheel += OnChartMouseWheel;
 							cc.MouseLeave += OnChartMouseLeave;
 							hookedOrderflowCC = cc;
-							subscribedElement = cc;
 							mouseSubscribed = true;
+						}
+
+						UIElement ownerElem = cc.OwnerChart as UIElement;
+						if (ownerElem != null && hookedOwnerChart != ownerElem)
+						{
+							if (hookedOwnerChart != null)
+							{
+								try { hookedOwnerChart.RemoveHandler(UIElement.PreviewMouseWheelEvent, ofOwnerChartWheelHandler); } catch { }
+							}
+							ownerElem.RemoveHandler(UIElement.PreviewMouseWheelEvent, ofOwnerChartWheelHandler);
+							ownerElem.AddHandler(UIElement.PreviewMouseWheelEvent, ofOwnerChartWheelHandler, true);
+							hookedOwnerChart = ownerElem;
 						}
 
 						if (cc.Properties != null)
 						{
-							float curDist = cc.Properties.BarDistance > 12f ? cc.Properties.BarDistance : 110f;
+							float curDist = cc.Properties.BarDistance > 4f ? cc.Properties.BarDistance : BarSpacePx;
 							SyncOneBoxRightGapMargin(cc, curDist, true);
 						}
 
@@ -1073,9 +1197,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 						if (cc.OwnerChart != null && cc.OwnerChart.Form != null && hookedD2DForm != cc.OwnerChart.Form)
 						{
 							if (hookedD2DForm != null)
+							{
 								hookedD2DForm.MouseDown -= OnD2DFormMouseDown;
+								hookedD2DForm.MouseMove -= OnD2DFormMouseMove;
+								hookedD2DForm.MouseUp -= OnD2DFormMouseUp;
+								hookedD2DForm.MouseWheel -= OnD2DFormMouseWheel;
+							}
 							hookedD2DForm = cc.OwnerChart.Form;
 							hookedD2DForm.MouseDown += OnD2DFormMouseDown;
+							hookedD2DForm.MouseMove += OnD2DFormMouseMove;
+							hookedD2DForm.MouseUp += OnD2DFormMouseUp;
+							hookedD2DForm.MouseWheel += OnD2DFormMouseWheel;
 						}
 					}
 					catch { }
@@ -1087,8 +1219,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private void UnsubscribeMouseEvents()
 		{
 			ChartControl cc = hookedOrderflowCC;
-			Window ownerWin = hookedOrderflowOwnerWin;
-			MouseButtonEventHandler handler = ofMouseLeftDownHandler;
+			UIElement ownerElem = hookedOwnerChart;
+			MouseButtonEventHandler downHandler = ofMouseLeftDownHandler;
+			MouseWheelEventHandler wheelHandler = ofMouseWheelHandler;
+			MouseWheelEventHandler ownerWheelHandler = ofOwnerChartWheelHandler;
 			var d2d = hookedD2DForm;
 			if (cc != null)
 			{
@@ -1096,35 +1230,50 @@ namespace NinjaTrader.NinjaScript.Indicators
 				{
 					cc.Dispatcher.InvokeAsync(() =>
 					{
-						if (handler != null)
+						if (downHandler != null)
 						{
-							try { cc.RemoveHandler(UIElement.PreviewMouseLeftButtonDownEvent, handler); } catch { }
-							try { if (ownerWin != null) ownerWin.RemoveHandler(UIElement.PreviewMouseLeftButtonDownEvent, handler); } catch { }
+							try { cc.RemoveHandler(UIElement.PreviewMouseLeftButtonDownEvent, downHandler); } catch { }
+						}
+						if (wheelHandler != null)
+						{
+							try { cc.RemoveHandler(UIElement.PreviewMouseWheelEvent, wheelHandler); } catch { }
+						}
+						if (ownerElem != null && ownerWheelHandler != null)
+						{
+							try { ownerElem.RemoveHandler(UIElement.PreviewMouseWheelEvent, ownerWheelHandler); } catch { }
 						}
 						try { cc.PreviewMouseMove -= OnChartMouseMove; } catch { }
 						try { cc.PreviewMouseLeftButtonUp -= OnChartMouseLeftButtonUp; } catch { }
-						try { cc.PreviewMouseWheel -= OnChartMouseWheel; } catch { }
 						try { cc.MouseLeave -= OnChartMouseLeave; } catch { }
-						try { if (d2d != null) d2d.MouseDown -= OnD2DFormMouseDown; } catch { }
+						if (d2d != null)
+						{
+							try { d2d.MouseDown -= OnD2DFormMouseDown; } catch { }
+							try { d2d.MouseMove -= OnD2DFormMouseMove; } catch { }
+							try { d2d.MouseUp -= OnD2DFormMouseUp; } catch { }
+							try { d2d.MouseWheel -= OnD2DFormMouseWheel; } catch { }
+						}
 					});
 				}
 				catch { }
 			}
 			mouseSubscribed = false;
-			subscribedElement = null;
 			hookedOrderflowCC = null;
-			hookedOrderflowOwnerWin = null;
+			hookedOwnerChart = null;
 			hookedOfScrollBar = null;
 			hookedD2DForm = null;
 		}
 
 		private void OnD2DFormMouseDown(object sender, System.Windows.Forms.MouseEventArgs e)
 		{
-			if (e.Button != System.Windows.Forms.MouseButtons.Left || ChartControl == null)
+			if (e == null || e.Button != System.Windows.Forms.MouseButtons.Left)
+				return;
+			ChartControl cc = hookedOrderflowCC ?? ChartControl;
+			if (!IsOrderflowChartControlActive(cc))
 				return;
 			try
 			{
-				ChartControl cc = ChartControl;
+				float pxX = e.X;
+				float pxY = e.Y;
 				if (cc.OwnerChart != null && cc.OwnerChart.Form != null && cc.OwnerChart.Form.IsHandleCreated)
 				{
 					Win32Point pt;
@@ -1133,7 +1282,34 @@ namespace NinjaTrader.NinjaScript.Indicators
 						IntPtr hwnd = cc.OwnerChart.Form.Handle;
 						if (hwnd != IntPtr.Zero && ScreenToClient(hwnd, ref pt))
 						{
-							HandleToolbarClick(pt.X, pt.Y);
+							pxX = pt.X;
+							pxY = pt.Y;
+						}
+					}
+				}
+
+				if (HandleToolbarClick(pxX, pxY))
+				{
+					hoveredToolbarBtnIndex = -1;
+					RequestImmediateOrderflowRedraw();
+					return;
+				}
+
+				if (ChartPanel != null)
+				{
+					float panelLeft = (float)ChartPanel.X;
+					float panelRight = (float)(ChartPanel.X + ChartPanel.W);
+					float panelTop = (float)ChartPanel.Y;
+					float panelBot = (float)(ChartPanel.Y + ChartPanel.H);
+					if (pxX >= panelLeft && pxX <= panelRight - 50f && pxY >= panelTop + 4f && pxY <= panelBot - 4f)
+					{
+						var sb = hookedOfScrollBar ?? (hookedOfScrollBar = ResolveOrderflowScrollBar(cc));
+						if (sb != null)
+						{
+							isPendingOfCanvasDrag = true;
+							isDraggingFootprintCanvas = false;
+							ofDragStartMouseX = pxX;
+							ofDragStartScrollVal = sb.Value;
 						}
 					}
 				}
@@ -1141,17 +1317,111 @@ namespace NinjaTrader.NinjaScript.Indicators
 			catch { }
 		}
 
+		private void OnD2DFormMouseMove(object sender, System.Windows.Forms.MouseEventArgs e)
+		{
+			if (e == null)
+				return;
+			ChartControl cc = hookedOrderflowCC ?? ChartControl;
+			if (!IsOrderflowChartControlActive(cc))
+				return;
+
+			float curPxX = e.X;
+			float curPxY = e.Y;
+
+			if (!isDraggingFootprintCanvas && !isPendingOfCanvasDrag)
+			{
+				int overIdx = HitTestToolbarButtonAt(curPxX, curPxY);
+				if (overIdx != hoveredToolbarBtnIndex)
+				{
+					hoveredToolbarBtnIndex = overIdx;
+					RequestImmediateOrderflowRedraw();
+				}
+				return;
+			}
+
+			if ((e.Button & System.Windows.Forms.MouseButtons.Left) != System.Windows.Forms.MouseButtons.Left)
+			{
+				isPendingOfCanvasDrag = false;
+				isDraggingFootprintCanvas = false;
+				return;
+			}
+
+			try
+			{
+				float deltaX = curPxX - ofDragStartMouseX;
+				if (isPendingOfCanvasDrag && !isDraggingFootprintCanvas)
+				{
+					if (Math.Abs(deltaX) < 3.5f)
+						return;
+					isDraggingFootprintCanvas = true;
+					isPendingOfCanvasDrag = false;
+				}
+
+				if (isDraggingFootprintCanvas && Math.Abs(deltaX) > 0.75f)
+				{
+					var sb = hookedOfScrollBar ?? (hookedOfScrollBar = ResolveOrderflowScrollBar(cc));
+					if (sb != null && sb.Maximum > sb.Minimum)
+					{
+						float barDist = (cc.Properties != null && cc.Properties.BarDistance > 3f) ? cc.Properties.BarDistance : 48f;
+						double barDelta = deltaX / barDist;
+						double targetVal = Math.Max(sb.Minimum, Math.Min(sb.Maximum, ofDragStartScrollVal - barDelta));
+						if (Math.Abs(sb.Value - targetVal) >= 0.015)
+						{
+							sb.Value = targetVal;
+							RequestImmediateOrderflowRedraw();
+						}
+					}
+				}
+			}
+			catch { }
+		}
+
+		private void OnD2DFormMouseUp(object sender, System.Windows.Forms.MouseEventArgs e)
+		{
+			isPendingOfCanvasDrag = false;
+			isDraggingFootprintCanvas = false;
+		}
+
+		private void OnD2DFormMouseWheel(object sender, System.Windows.Forms.MouseEventArgs e)
+		{
+			if (e == null || e.Delta == 0)
+				return;
+			ChartControl cc = hookedOrderflowCC ?? ChartControl;
+			if (!IsOrderflowChartControlActive(cc))
+				return;
+
+			ProcessUniversalSmoothWheel(cc, e.Delta, e.X, true);
+		}
+
+		private void OnOwnerChartPreviewMouseWheel(object sender, MouseWheelEventArgs e)
+		{
+			if (e == null || e.Delta == 0)
+				return;
+			ChartControl cc = hookedOrderflowCC ?? ChartControl;
+			if (!IsOrderflowChartControlActive(cc))
+				return;
+			if (IsOfInteractiveUiControlSource(e.OriginalSource))
+				return;
+
+			try
+			{
+				System.Windows.Point pt = e.GetPosition(cc);
+				if (pt.X < -20 || pt.Y < -20 || pt.X > cc.ActualWidth + 80 || pt.Y > cc.ActualHeight + 40)
+					return;
+				float pxX = ConvertOfHorizontalPx(cc, pt.X);
+				if (ProcessUniversalSmoothWheel(cc, e.Delta, pxX, true))
+					e.Handled = true;
+			}
+			catch { }
+		}
+
 		private int HitTestToolbarButtonAt(float x, float y)
 		{
-			if (ContainsPtPadded(btnStepMinusRect, x, y, 2f)) return 0;
-			if (ContainsPtPadded(btnStepPlusRect, x, y, 2f)) return 1;
-			if (ContainsPtPadded(btnAutoStepRect, x, y, 2f)) return 2;
-			if (ContainsPtPadded(btnWidthMinusRect, x, y, 2f)) return 3;
-			if (ContainsPtPadded(btnWidthPlusRect, x, y, 2f)) return 4;
-			if (ContainsPtPadded(btnGridToggleRect, x, y, 2f)) return 5;
-			if (ContainsPtPadded(btnZonesToggleRect, x, y, 2f)) return 6;
-			if (ContainsPtPadded(btnReloadLiveRect, x, y, 2f)) return 7;
-			if (ContainsPtPadded(btnFeedToggleRect, x, y, 2f)) return 8;
+			for (int i = 0; i < toolbarBtnRects.Length; i++)
+			{
+				if (ContainsPtPadded(toolbarBtnRects[i], x, y, 2f))
+					return i;
+			}
 			return -1;
 		}
 
@@ -1226,7 +1496,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 				return;
 			}
 
-			// Prepare smooth horizontal grab-and-drag panning (defer CaptureMouse until >= 3.5px drag so clicks never block)
 			try
 			{
 				System.Windows.Point pt = e.GetPosition(cc);
@@ -1309,7 +1578,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					var sb = hookedOfScrollBar ?? (hookedOfScrollBar = ResolveOrderflowScrollBar(cc));
 					if (sb != null && sb.Maximum > sb.Minimum)
 					{
-						float barDist = (cc.Properties != null && cc.Properties.BarDistance > 12f) ? cc.Properties.BarDistance : 90f;
+						float barDist = (cc.Properties != null && cc.Properties.BarDistance > 3f) ? cc.Properties.BarDistance : 48f;
 						double barDelta = deltaX / barDist;
 						double targetVal = Math.Max(sb.Minimum, Math.Min(sb.Maximum, ofDragStartScrollVal - barDelta));
 						if (Math.Abs(sb.Value - targetVal) >= 0.015)
@@ -1339,42 +1608,127 @@ namespace NinjaTrader.NinjaScript.Indicators
 			catch { }
 		}
 
-		private void OnChartMouseWheel(object sender, MouseWheelEventArgs e)
+		private static float ComputeSmoothNextZoomDistance(float curDist, int wheelDelta)
 		{
-			ChartControl cc = hookedOrderflowCC ?? ChartControl;
-			if (!IsOrderflowChartControlActive(cc) || e == null)
+			double notches = Math.Max(-3.5, Math.Min(3.5, wheelDelta / 120.0));
+			if (Math.Abs(notches) < 0.04)
+				notches = wheelDelta > 0 ? 0.20 : -0.20;
+
+			float safeCur = Math.Max(4.0f, curDist);
+			float next = safeCur * (float)Math.Pow(1.145, notches);
+			if (Math.Abs(next - safeCur) < 0.45f)
+				next = safeCur + (wheelDelta > 0 ? 0.65f : -0.65f);
+
+			return Math.Max(4.0f, Math.Min(240.0f, next));
+		}
+
+		private void ApplyHorizontalZoom(ChartControl cc, float nextDist, float cursorPxX = -1f)
+		{
+			if (cc == null || cc.Properties == null)
 				return;
 
+			float prevDist = Math.Max(4.0f, cc.Properties.BarDistance);
+			float clamped = Math.Max(4.0f, Math.Min(240.0f, nextDist));
+			if (Math.Abs(clamped - prevDist) < 0.05f)
+				return;
+
+			var sb = hookedOfScrollBar ?? (hookedOfScrollBar = ResolveOrderflowScrollBar(cc));
+			double prevSbVal = (sb != null) ? sb.Value : 0.0;
+			bool wasPinnedToLiveEdge = (sb != null && sb.Maximum > sb.Minimum && sb.Value >= sb.Maximum - 0.6);
+
+			cc.Properties.BarDistance = clamped;
+			SyncOneBoxRightGapMargin(cc, clamped, true);
+			TriggerChartScrollbarRefresh();
+
+			// Cursor-anchored smooth horizontal zoom: keep the hovered bar directly under the mouse cursor!
 			try
 			{
-				if ((Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
+				if (sb != null && sb.Maximum > sb.Minimum && ChartPanel != null && cursorPxX >= ChartPanel.X && cursorPxX <= ChartPanel.X + ChartPanel.W)
 				{
-					if (cc.Properties != null)
+					float rightAnchorX = ChartPanel.X + ChartPanel.W - Math.Max(28f, cc.Properties.BarMarginRightUser);
+					if (wasPinnedToLiveEdge && cursorPxX >= ChartPanel.X + ChartPanel.W * 0.68f)
 					{
-						float cur = cc.Properties.BarDistance;
-						float next = e.Delta > 0 ? Math.Min(220f, cur + 14f) : Math.Max(30f, cur - 14f);
-						cc.Properties.BarDistance = next;
-						SyncOneBoxRightGapMargin(cc, next, true);
-						TriggerChartScrollbarRefresh();
-						RequestImmediateOrderflowRedraw();
-						e.Handled = true;
+						sb.Value = sb.Maximum;
 					}
-					return;
-				}
-
-				var sb = hookedOfScrollBar ?? (hookedOfScrollBar = ResolveOrderflowScrollBar(cc));
-				if (sb != null && sb.Maximum > sb.Minimum)
-				{
-					double step = Math.Max(0.25, Math.Abs(e.Delta) / 120.0 * 2.0);
-					double targetVal = e.Delta > 0
-						? Math.Max(sb.Minimum, sb.Value - step)
-						: Math.Min(sb.Maximum, sb.Value + step);
-					sb.Value = targetVal;
-					e.Handled = true;
-					RequestImmediateOrderflowRedraw();
+					else if (cursorPxX < rightAnchorX - 8f)
+					{
+						float distFromRight = rightAnchorX - cursorPxX;
+						double deltaBars = distFromRight * ((1.0 / prevDist) - (1.0 / clamped));
+						double targetVal = Math.Max(sb.Minimum, Math.Min(sb.Maximum, prevSbVal + deltaBars));
+						sb.Value = targetVal;
+					}
 				}
 			}
 			catch { }
+
+			RequestImmediateOrderflowRedraw();
+		}
+
+		private bool ProcessUniversalSmoothWheel(ChartControl cc, int rawDelta, float cursorPxX, bool hasCursorX)
+		{
+			if (cc == null || rawDelta == 0)
+				return false;
+
+			// Deduplicate simultaneous WinForms Direct2DForm + WPF PreviewMouseWheel notifications (< 10ms)
+			long nowTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+			long minGapTicks = System.Diagnostics.Stopwatch.Frequency / 110; // ~9ms
+			if (nowTicks - lastWheelHandledTicks < minGapTicks)
+				return true;
+			lastWheelHandledTicks = nowTicks;
+
+			try
+			{
+				if ((Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift)
+				{
+					var sb = hookedOfScrollBar ?? (hookedOfScrollBar = ResolveOrderflowScrollBar(cc));
+					if (sb != null && sb.Maximum > sb.Minimum)
+					{
+						double step = Math.Max(0.5, Math.Abs(rawDelta) / 120.0 * 3.0);
+						sb.Value = rawDelta > 0
+							? Math.Max(sb.Minimum, sb.Value - step)
+							: Math.Min(sb.Maximum, sb.Value + step);
+						RequestImmediateOrderflowRedraw();
+					}
+					return true;
+				}
+
+				if ((Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
+				{
+					double notches = Math.Max(-3.0, Math.Min(3.0, rawDelta / 120.0));
+					runtimeYZoomFactor = Math.Max(0.40, Math.Min(3.8, runtimeYZoomFactor * Math.Pow(1.13, notches)));
+					RequestImmediateOrderflowRedraw();
+					return true;
+				}
+
+				if (cc.Properties != null)
+				{
+					float cur = cc.Properties.BarDistance > 3f ? cc.Properties.BarDistance : BarSpacePx;
+					float next = ComputeSmoothNextZoomDistance(cur, rawDelta);
+					ApplyHorizontalZoom(cc, next, hasCursorX ? cursorPxX : -1f);
+					return true;
+				}
+			}
+			catch { }
+			return false;
+		}
+
+		private void OnChartMouseWheel(object sender, MouseWheelEventArgs e)
+		{
+			ChartControl cc = hookedOrderflowCC ?? ChartControl;
+			if (!IsOrderflowChartControlActive(cc) || e == null || e.Delta == 0)
+				return;
+			if (IsOfInteractiveUiControlSource(e.OriginalSource))
+				return;
+
+			float pxX = -1f;
+			try
+			{
+				pxX = ConvertOfHorizontalPx(cc, e.GetPosition(cc).X);
+			}
+			catch { }
+
+			if (ProcessUniversalSmoothWheel(cc, e.Delta, pxX, pxX >= 0f))
+				e.Handled = true;
 		}
 
 		private bool HandleToolbarClick(float x, float y)
@@ -1385,99 +1739,144 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private bool ExecuteToolbarButtonAction(int btnIdx)
 		{
-			if ((DateTime.UtcNow - lastBtnClickUtc).TotalMilliseconds < 90)
+			if ((DateTime.UtcNow - lastBtnClickUtc).TotalMilliseconds < 70)
 				return false;
+
+			ChartControl cc = hookedOrderflowCC ?? ChartControl;
 
 			switch (btnIdx)
 			{
-				case 0: // Step -
+				case 0: // Volume Footprint (Seller Left | Vivid Center Candle | Buyer Right + Volume Bars & Imbalances)
 					lastBtnClickUtc = DateTime.UtcNow;
-					runtimeAutoStep = false;
-					runtimeTicksPerLevel = Math.Max(1, (int)Math.Round(runtimeTicksPerLevel * 0.7));
-					if (runtimeTicksPerLevel >= TicksPerLevel && runtimeTicksPerLevel > 1) runtimeTicksPerLevel--;
+					runtimeOrderflowMode = AK10XOrderflowMode.VolumeFootprint;
+					FootprintMode = runtimeOrderflowMode;
+					if (cc != null && cc.Properties != null && cc.Properties.BarDistance < CandlestickZoomThresholdPx)
+						ApplyHorizontalZoom(cc, Math.Max(88f, BarSpacePx));
+					else
+						RequestImmediateOrderflowRedraw();
+					return true;
+
+				case 1: // Imbalance (Seller Left | Vivid Center Candle | Buyer Right + Imbalance Highlights)
+					lastBtnClickUtc = DateTime.UtcNow;
+					runtimeOrderflowMode = AK10XOrderflowMode.Imbalance;
+					FootprintMode = runtimeOrderflowMode;
+					if (cc != null && cc.Properties != null && cc.Properties.BarDistance < CandlestickZoomThresholdPx)
+						ApplyHorizontalZoom(cc, Math.Max(88f, BarSpacePx));
+					else
+						RequestImmediateOrderflowRedraw();
+					return true;
+
+				case 2: // Delta Footprint Mode
+					lastBtnClickUtc = DateTime.UtcNow;
+					runtimeOrderflowMode = AK10XOrderflowMode.Delta;
+					FootprintMode = runtimeOrderflowMode;
+					if (cc != null && cc.Properties != null && cc.Properties.BarDistance < CandlestickZoomThresholdPx)
+						ApplyHorizontalZoom(cc, Math.Max(78f, BarSpacePx * 0.85f));
+					else
+						RequestImmediateOrderflowRedraw();
+					return true;
+
+				case 3: // Total Volume Profile Mode
+					lastBtnClickUtc = DateTime.UtcNow;
+					runtimeOrderflowMode = AK10XOrderflowMode.TotalVolume;
+					FootprintMode = runtimeOrderflowMode;
+					if (cc != null && cc.Properties != null && cc.Properties.BarDistance < CandlestickZoomThresholdPx)
+						ApplyHorizontalZoom(cc, Math.Max(78f, BarSpacePx * 0.85f));
+					else
+						RequestImmediateOrderflowRedraw();
+					return true;
+
+				case 4: // Quick Toggle: Candlestick <-> Orderflow
+					lastBtnClickUtc = DateTime.UtcNow;
+					if (cc != null && cc.Properties != null)
+					{
+						bool isCandleNow = cc.Properties.BarDistance < CandlestickZoomThresholdPx;
+						ApplyHorizontalZoom(cc, isCandleNow ? Math.Max(88f, BarSpacePx) : 14f);
+					}
+					return true;
+
+				case 5: // Step -
+					lastBtnClickUtc = DateTime.UtcNow;
+					if (runtimeAutoStep)
+					{
+						runtimeTicksPerLevel = Math.Max(1, lastEffectiveAutoTicks);
+						runtimeAutoStep = false;
+					}
+					runtimeTicksPerLevel = Math.Max(1, runtimeTicksPerLevel <= 3 ? (runtimeTicksPerLevel - 1) : (int)Math.Round(runtimeTicksPerLevel * 0.72));
 					InvalidateFootprintCache();
 					return true;
 
-				case 1: // Step +
-					lastBtnClickUtc = DateTime.UtcNow;
-					runtimeAutoStep = false;
-					runtimeTicksPerLevel = Math.Min(500, Math.Max(runtimeTicksPerLevel + 2, (int)Math.Round(runtimeTicksPerLevel * 1.35)));
-					InvalidateFootprintCache();
-					return true;
-
-				case 2: // Auto
+				case 6: // Auto Step
 					lastBtnClickUtc = DateTime.UtcNow;
 					runtimeAutoStep = !runtimeAutoStep;
-					if (!runtimeAutoStep) runtimeTicksPerLevel = Math.Max(1, TicksPerLevel);
+					if (!runtimeAutoStep) runtimeTicksPerLevel = Math.Max(1, lastEffectiveAutoTicks);
 					InvalidateFootprintCache();
 					return true;
 
-				case 3: // Zoom -
+				case 7: // Step +
 					lastBtnClickUtc = DateTime.UtcNow;
-					if (ChartControl != null && ChartControl.Properties != null)
+					if (runtimeAutoStep)
 					{
-						float cur = ChartControl.Properties.BarDistance;
-						float next = Math.Max(30f, cur - 16f);
-						ChartControl.Properties.BarDistance = next;
-						SyncOneBoxRightGapMargin(ChartControl, next, true);
-						TriggerChartScrollbarRefresh();
-						RequestImmediateOrderflowRedraw();
+						runtimeTicksPerLevel = Math.Max(1, lastEffectiveAutoTicks);
+						runtimeAutoStep = false;
 					}
+					runtimeTicksPerLevel = Math.Min(500, Math.Max(runtimeTicksPerLevel + 1, (int)Math.Ceiling(runtimeTicksPerLevel * 1.32)));
+					InvalidateFootprintCache();
 					return true;
 
-				case 4: // Zoom +
-					lastBtnClickUtc = DateTime.UtcNow;
-					if (ChartControl != null && ChartControl.Properties != null)
-					{
-						float cur = ChartControl.Properties.BarDistance;
-						float next = Math.Min(220f, cur + 16f);
-						ChartControl.Properties.BarDistance = next;
-						SyncOneBoxRightGapMargin(ChartControl, next, true);
-						TriggerChartScrollbarRefresh();
-						RequestImmediateOrderflowRedraw();
-					}
-					return true;
-
-				case 5: // Grid
-					lastBtnClickUtc = DateTime.UtcNow;
-					runtimeShowStatGrid = !runtimeShowStatGrid;
-					RequestImmediateOrderflowRedraw();
-					return true;
-
-				case 6: // Zones
+				case 8: // Stacked Imbalance Zones Toggle
 					lastBtnClickUtc = DateTime.UtcNow;
 					runtimeShowImbZones = !runtimeShowImbZones;
 					RequestImmediateOrderflowRedraw();
 					return true;
 
-				case 7: // Live Sync
+				case 9: // Bottom Delta Strip Toggle
 					lastBtnClickUtc = DateTime.UtcNow;
-					AttachSelectedDataFeedStream();
-					RequestSelectedDataFeedBarsAsync();
-					try
-					{
-						var sb = hookedOfScrollBar ?? ResolveOrderflowScrollBar(hookedOrderflowCC ?? ChartControl);
-						if (sb != null && sb.Maximum > sb.Minimum)
-							sb.Value = sb.Maximum;
-					}
-					catch { }
-					InvalidateFootprintCache();
+					runtimeShowStatGrid = !runtimeShowStatGrid;
+					RequestImmediateOrderflowRedraw();
 					return true;
 
-				case 8: // Toggle Data Feed (Accelpix <-> NinjaTrader)
+				case 10: // White / Dark Theme Toggle
+					lastBtnClickUtc = DateTime.UtcNow;
+					runtimeLightTheme = !runtimeLightTheme;
+					UseLightTheme = runtimeLightTheme;
+					RequestImmediateOrderflowRedraw();
+					return true;
+
+				case 11: // Toggle Data Feed (Accelpix <-> NinjaTrader)
 					lastBtnClickUtc = DateTime.UtcNow;
 					AK10XOrderflowDataFeed nextFeed = EffectiveDataFeed == AK10XOrderflowDataFeed.Accelpix
 						? AK10XOrderflowDataFeed.NinjaTrader
 						: AK10XOrderflowDataFeed.Accelpix;
 					SwitchDataFeedLive(nextFeed);
 					return true;
+
+				case 12: // Smooth Zoom Out (Z-)
+					lastBtnClickUtc = DateTime.UtcNow;
+					if (cc != null && cc.Properties != null)
+					{
+						float cur = cc.Properties.BarDistance > 3f ? cc.Properties.BarDistance : BarSpacePx;
+						ApplyHorizontalZoom(cc, ComputeSmoothNextZoomDistance(cur, -240));
+					}
+					return true;
+
+				case 13: // Smooth Zoom In (Z+)
+					lastBtnClickUtc = DateTime.UtcNow;
+					if (cc != null && cc.Properties != null)
+					{
+						float cur = cc.Properties.BarDistance > 3f ? cc.Properties.BarDistance : BarSpacePx;
+						ApplyHorizontalZoom(cc, ComputeSmoothNextZoomDistance(cur, 240));
+					}
+					return true;
+
+				case 14: // Toggle Halfpack (HP)
+					lastBtnClickUtc = DateTime.UtcNow;
+					runtimeShowHalfpack = !runtimeShowHalfpack;
+					ShowHalfpack = runtimeShowHalfpack;
+					RequestImmediateOrderflowRedraw();
+					return true;
 			}
 			return false;
-		}
-
-		private static bool ContainsPt(RectangleF r, float x, float y)
-		{
-			return r.Width > 0 && r.Height > 0 && x >= r.Left && x <= r.Right && y >= r.Top && y <= r.Bottom;
 		}
 
 		private static bool ContainsPtPadded(RectangleF r, float x, float y, float pad)
@@ -1493,19 +1892,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				barCache.Clear();
 				lastComputedBarCount = -1;
+				lastComputedUniformStep = -1.0;
 			}
 			RequestImmediateOrderflowRedraw();
 		}
 
 		private void TriggerChartScrollbarRefresh()
 		{
-			if (ChartControl == null) return;
+			ChartControl cc = ChartControl;
+			if (cc == null) return;
 			try
 			{
-				var mSlots = typeof(ChartControl).GetMethod("InitSlotsPainted", BindingFlags.Instance | BindingFlags.NonPublic);
-				if (mSlots != null) mSlots.Invoke(ChartControl, null);
-				var mScroll = typeof(ChartControl).GetMethod("InitScrollbar", BindingFlags.Instance | BindingFlags.NonPublic);
-				if (mScroll != null) mScroll.Invoke(ChartControl, null);
+				if (cachedInitSlotsPainted != null) cachedInitSlotsPainted.Invoke(cc, null);
+				if (cachedInitScrollbar != null) cachedInitScrollbar.Invoke(cc, null);
 				RequestImmediateOrderflowRedraw();
 			}
 			catch { }
@@ -1515,10 +1914,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 		#region Real-Time Market Data & Bar Computation
 		protected override void OnMarketData(MarketDataEventArgs e)
 		{
-			ProcessLiveTickEvent(e);
+			if (State == State.Realtime)
+				lastNativeOnMarketDataUtc = DateTime.UtcNow;
+			ProcessLiveTickEvent(e, true);
 		}
 
-		private void ProcessLiveTickEvent(MarketDataEventArgs e)
+		private void ProcessLiveTickEvent(MarketDataEventArgs e, bool fromNativeOnMarketData)
 		{
 			if (e == null || State == State.Terminated)
 				return;
@@ -1539,8 +1940,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 					return;
 
 				long vol = e.Volume > 0 ? e.Volume : 1L;
+				double tick = TickSize > 0 ? TickSize : 0.05;
 
-				// Determine UpDownTick + Bid/Ask aggression (matching STOCK_USER.xml OrderflowCalculationMode = UpDownTick)
 				bool isBuyAggression;
 				if (lastTradePrice > 0)
 				{
@@ -1549,12 +1950,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 					else if (e.Price < lastTradePrice - 1e-9)
 						lastTickDirection = -1;
 				}
-				if (lastAskPrice > 0 && lastBidPrice > 0 && lastAskPrice >= lastBidPrice)
+
+				if (lastAskPrice > 0 && lastBidPrice > 0 && lastAskPrice > lastBidPrice + tick * 0.15)
 				{
+					double mid = (lastAskPrice + lastBidPrice) * 0.5;
 					if (e.Price >= lastAskPrice - 1e-9)
 						isBuyAggression = true;
 					else if (e.Price <= lastBidPrice + 1e-9)
 						isBuyAggression = false;
+					else if (Math.Abs(e.Price - mid) > tick * 0.1)
+						isBuyAggression = (e.Price > mid);
 					else
 						isBuyAggression = (lastTickDirection >= 0);
 				}
@@ -1564,20 +1969,50 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 				lastTradePrice = e.Price;
 
-				double tick = TickSize > 0 ? TickSize : 0.05;
 				long tickKey = (long)Math.Round(e.Price / tick);
 				bool isRealtime = (State == State.Realtime);
-				int barIdx = isRealtime && lastComputedBarCount > 0
-					? Math.Max(CurrentBar, lastComputedBarCount - 1)
-					: Math.Max(0, CurrentBar);
+
+				int barIdx;
+				if (fromNativeOnMarketData)
+				{
+					barIdx = Math.Max(0, CurrentBar);
+				}
+				else
+				{
+					if (ChartBars != null && ChartBars.Bars != null && ChartBars.Bars.Count > 0)
+						barIdx = ChartBars.Bars.Count - 1;
+					else
+						barIdx = Math.Max(0, CurrentBar);
+				}
 
 				lock (dataLock)
 				{
 					if (!liveAccumulators.TryGetValue(barIdx, out LiveTickAccumulator acc))
 					{
 						acc = new LiveTickAccumulator();
+						if (isRealtime)
+						{
+							try
+							{
+								if (ChartBars != null && ChartBars.Bars != null && barIdx >= 0 && barIdx < ChartBars.Bars.Count)
+								{
+									DateTime slot = GetBarSlotKey(ChartBars.Bars.GetTime(barIdx));
+									if (historicalTickBySlot.TryGetValue(slot, out LiveTickAccumulator histSeed) && histSeed != null)
+									{
+										foreach (var kv in histSeed.BidByTickKey) acc.BidByTickKey[kv.Key] = kv.Value;
+										foreach (var kv in histSeed.AskByTickKey) acc.AskByTickKey[kv.Key] = kv.Value;
+										acc.RunningDelta = histSeed.RunningDelta;
+										acc.MinDelta = histSeed.MinDelta;
+										acc.MaxDelta = histSeed.MaxDelta;
+										acc.TotalTickVolume = histSeed.TotalTickVolume;
+									}
+								}
+							}
+							catch { }
+						}
 						liveAccumulators[barIdx] = acc;
 					}
+
 					if (isBuyAggression)
 					{
 						acc.AskByTickKey.TryGetValue(tickKey, out long cur);
@@ -1616,41 +2051,34 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
-		private double DetermineEffectivePriceStep(double barLow, double barHigh, double refPrice)
+		private double ComputeReadablePriceStep(double medianBarRange, double visibleSpan, float usablePanelHeightPx)
 		{
 			double tick = TickSize > 0 ? TickSize : 0.05;
-			double baseStep = Math.Max(tick, runtimeTicksPerLevel * tick);
-
 			if (!runtimeAutoStep)
-				return baseStep;
+				return Math.Max(tick, runtimeTicksPerLevel * tick);
 
-			double range = Math.Max(tick, barHigh - barLow);
-			// Target roughly 8 to 14 rows for an average bar so numbers are always legible and never overlap
-			double rawRows = range / baseStep;
-			if (rawRows >= 5.0 && rawRows <= 16.0)
-				return baseStep;
+			double stepFromBar = Math.Max(tick, medianBarRange / 10.0);
+			double targetScreenRows = Math.Max(12.0, Math.Min(34.0, usablePanelHeightPx / 18.5));
+			double stepFromVisibleSpan = visibleSpan > 0 ? (visibleSpan / targetScreenRows) : stepFromBar;
 
-			// Use a consistent session-wide step derived from reference price (approx 0.04% of price, snapped to nice tick multiples)
-			double idealStep = refPrice * 0.00045;
-			if (range / Math.Max(tick, idealStep) > 16.0)
-				idealStep = range / 13.0;
-			else if (range / Math.Max(tick, idealStep) < 5.0 && range >= 6 * tick)
-				idealStep = range / 8.0;
+			double idealStep = Math.Max(stepFromBar, stepFromVisibleSpan);
+			if (medianBarRange > tick * 4 && idealStep > medianBarRange * 0.45)
+				idealStep = Math.Max(stepFromBar, medianBarRange * 0.35);
 
-			int ticks = Math.Max(1, (int)Math.Round(idealStep / tick));
-			// Snap to clean multiples: 1, 2, 5, 10, 20, 25, 50, 100, 200, 500
-			int[] niceSteps = { 1, 2, 4, 5, 10, 15, 20, 25, 40, 50, 100, 150, 200, 250, 500, 1000 };
+			int rawTicks = Math.Max(1, (int)Math.Round(idealStep / tick));
+			int[] niceSteps = { 1, 2, 3, 4, 5, 8, 10, 12, 15, 20, 25, 30, 40, 50, 75, 100, 150, 200, 250, 500, 1000 };
 			int best = niceSteps[0];
-			int bestDiff = Math.Abs(ticks - best);
+			int bestDiff = Math.Abs(rawTicks - best);
 			for (int i = 1; i < niceSteps.Length; i++)
 			{
-				int d = Math.Abs(ticks - niceSteps[i]);
+				int d = Math.Abs(rawTicks - niceSteps[i]);
 				if (d < bestDiff)
 				{
 					best = niceSteps[i];
 					bestDiff = d;
 				}
 			}
+			lastEffectiveAutoTicks = best;
 			return best * tick;
 		}
 
@@ -1667,17 +2095,26 @@ namespace NinjaTrader.NinjaScript.Indicators
 			double lastClose = bars.GetClose(count - 1);
 			long lastVol = bars.GetVolume(count - 1);
 
+			int visFirst = Math.Max(0, chartBars.FromIndex);
+			int visLast = Math.Min(count - 1, chartBars.ToIndex);
+			double visMin = double.MaxValue;
+			double visMax = double.MinValue;
+			for (int i = visFirst; i <= visLast; i++)
+			{
+				double l = bars.GetLow(i);
+				double h = bars.GetHigh(i);
+				if (l < visMin) visMin = l;
+				if (h > visMax) visMax = h;
+			}
+			double visibleSpan = (visMax > visMin && visMin < double.MaxValue) ? (visMax - visMin) : (TickSize * 20);
+			if (Math.Abs(runtimeYZoomFactor - 1.0) > 0.01)
+				visibleSpan /= runtimeYZoomFactor;
+
+			float panelH = ChartPanel != null ? ChartPanel.H : 620f;
+			float usableH = Math.Max(180f, panelH - 90f);
+
 			lock (dataLock)
 			{
-				if (count == lastComputedBarCount &&
-					Math.Abs(lastClose - lastComputedLastClose) < 1e-9 &&
-					lastVol == lastComputedLastVol &&
-					barCache.Count > 0)
-				{
-					return;
-				}
-
-				// Compute median bar range over recent 60 bars to pick a consistent, clean price step across visible bars
 				int sampleStart = Math.Max(0, count - 80);
 				List<double> ranges = new List<double>(count - sampleStart);
 				for (int i = sampleStart; i < count; i++)
@@ -1686,14 +2123,23 @@ namespace NinjaTrader.NinjaScript.Indicators
 					if (r > 0) ranges.Add(r);
 				}
 				ranges.Sort();
-				double medianRange = ranges.Count > 0 ? ranges[ranges.Count / 2] : (TickSize * 20);
-				double uniformStep = DetermineEffectivePriceStep(lastClose - medianRange * 0.5, lastClose + medianRange * 0.5, lastClose);
+				double medianRange = ranges.Count > 0 ? ranges[ranges.Count / 2] : (TickSize * 15);
+				double uniformStep = ComputeReadablePriceStep(medianRange, visibleSpan, usableH);
+
+				if (count == lastComputedBarCount &&
+					Math.Abs(lastClose - lastComputedLastClose) < 1e-9 &&
+					lastVol == lastComputedLastVol &&
+					Math.Abs(uniformStep - lastComputedUniformStep) < 1e-9 &&
+					barCache.Count > 0)
+				{
+					return;
+				}
 
 				long sessionCumDelta = 0;
 				DateTime currentSessionDate = DateTime.MinValue;
 				Dictionary<long, long> sessionVolByBucket = new Dictionary<long, long>();
 
-				int startIdx = Math.Max(0, count - 600);
+				int startIdx = Math.Max(0, count - 800);
 				bool useNtSessionBreaks = (EffectiveDataFeed == AK10XOrderflowDataFeed.NinjaTrader);
 				for (int i = startIdx; i < count; i++)
 				{
@@ -1725,21 +2171,23 @@ namespace NinjaTrader.NinjaScript.Indicators
 					sessionCumDelta += fpBar.Delta;
 					fpBar.CumulativeDelta = sessionCumDelta;
 
-					// Update developing session profile (POC + 70% VA)
-					for (int lvIdx = 0; lvIdx < fpBar.Levels.Count; lvIdx++)
+					if (ShowSessionVA)
 					{
-						FootprintLevel lv = fpBar.Levels[lvIdx];
-						long bKey = (long)Math.Floor((lv.Price + 1e-9) / uniformStep);
-						sessionVolByBucket.TryGetValue(bKey, out long sv);
-						sessionVolByBucket[bKey] = sv + lv.TotalVolume;
+						for (int lvIdx = 0; lvIdx < fpBar.Levels.Count; lvIdx++)
+						{
+							FootprintLevel lv = fpBar.Levels[lvIdx];
+							long bKey = (long)Math.Floor((lv.Price + 1e-9) / uniformStep);
+							sessionVolByBucket.TryGetValue(bKey, out long sv);
+							sessionVolByBucket[bKey] = sv + lv.TotalVolume;
+						}
+						ComputeDevelopingSessionProfile(sessionVolByBucket, uniformStep, fpBar);
 					}
-
-					ComputeDevelopingSessionProfile(sessionVolByBucket, uniformStep, fpBar);
 				}
 
 				lastComputedBarCount = count;
 				lastComputedLastClose = lastClose;
 				lastComputedLastVol = lastVol;
+				lastComputedUniformStep = uniformStep;
 			}
 		}
 
@@ -1755,8 +2203,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 			double close = bars.GetClose(barIdx);
 			long totalVol = Math.Max(1L, bars.GetVolume(barIdx));
 
-			// Align every row bucket to exact multiples of step: [b * step, (b + 1) * step]
-			// so horizontal box borders sit directly on the chart's horizontal price lines across all bars
 			long minBucket = (long)Math.Floor((low + 1e-9) / step);
 			long maxBucket = (long)Math.Floor((high - 1e-9) / step);
 			if (maxBucket < minBucket) maxBucket = minBucket;
@@ -1777,7 +2223,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 				EffectivePriceStep = step
 			};
 
-			// Check if we have live real-time ticks (or NinjaTrader historical 1-Tick Bid x Ask data) accumulated for this bar
 			DateTime barSlotKey = GetBarSlotKey(time);
 			LiveTickAccumulator tickAcc = null;
 			if (liveAccumulators.TryGetValue(barIdx, out LiveTickAccumulator liveAcc) && liveAcc.TotalTickVolume > 0)
@@ -1791,49 +2236,54 @@ namespace NinjaTrader.NinjaScript.Indicators
 				tickAcc = histAcc;
 			}
 
+			bool usedTickAcc = false;
 			if (tickAcc != null)
 			{
-				fp.IsLiveAccumulated = true;
+				List<FootprintLevel> tempLevels = new List<FootprintLevel>(numLevels);
 				for (int r = 0; r < numLevels; r++)
 				{
-					double lvPrice = (minBucket + r + 0.5) * step;
-					fp.Levels.Add(new FootprintLevel { Price = lvPrice });
+					tempLevels.Add(new FootprintLevel { Price = (minBucket + r + 0.5) * step });
 				}
+
+				double minValidPx = low - Math.Max(tick * 2.0, step * 0.5);
+				double maxValidPx = high + Math.Max(tick * 2.0, step * 0.5);
+				long inRangeVol = 0;
 
 				foreach (var kv in tickAcc.BidByTickKey)
 				{
 					double p = kv.Key * tick;
+					if (p < minValidPx || p > maxValidPx)
+						continue;
 					int idx = Math.Max(0, Math.Min(numLevels - 1, (int)((long)Math.Floor((p + 1e-9) / step) - minBucket)));
-					fp.Levels[idx].BidVolume += kv.Value;
+					tempLevels[idx].BidVolume += kv.Value;
+					inRangeVol += kv.Value;
 				}
 				foreach (var kv in tickAcc.AskByTickKey)
 				{
 					double p = kv.Key * tick;
+					if (p < minValidPx || p > maxValidPx)
+						continue;
 					int idx = Math.Max(0, Math.Min(numLevels - 1, (int)((long)Math.Floor((p + 1e-9) / step) - minBucket)));
-					fp.Levels[idx].AskVolume += kv.Value;
+					tempLevels[idx].AskVolume += kv.Value;
+					inRangeVol += kv.Value;
 				}
 
-				// If chart was reloaded mid-bar so some price buckets in [low, high] missed earlier ticks, backfill so no empty 0|0 row appears
-				bool isBullLive = close >= open;
-				for (int r = 0; r < numLevels; r++)
+				if (inRangeVol > 0 && (barIdx >= bars.Count - 1 || inRangeVol >= totalVol * 0.35))
 				{
-					if (fp.Levels[r].BidVolume == 0 && fp.Levels[r].AskVolume == 0)
-					{
-						if (isBullLive) fp.Levels[r].AskVolume = 1;
-						else fp.Levels[r].BidVolume = 1;
-					}
+					usedTickAcc = true;
+					fp.IsLiveAccumulated = true;
+					fp.Levels.AddRange(tempLevels);
+					fp.BuyVolume = fp.Levels.Sum(l => l.AskVolume);
+					fp.SellVolume = fp.Levels.Sum(l => l.BidVolume);
+					fp.TotalVolume = Math.Max(1L, fp.BuyVolume + fp.SellVolume);
+					fp.Delta = fp.BuyVolume - fp.SellVolume;
+					fp.MinDelta = tickAcc.MinDelta;
+					fp.MaxDelta = tickAcc.MaxDelta;
 				}
-
-				fp.BuyVolume = fp.Levels.Sum(l => l.AskVolume);
-				fp.SellVolume = fp.Levels.Sum(l => l.BidVolume);
-				fp.TotalVolume = fp.BuyVolume + fp.SellVolume;
-				fp.Delta = fp.BuyVolume - fp.SellVolume;
-				fp.MinDelta = tickAcc.MinDelta;
-				fp.MaxDelta = tickAcc.MaxDelta;
 			}
-			else
+
+			if (!usedTickAcc)
 			{
-				// Reconstruct realistic intrabar Bid x Ask footprint using 1-Minute sub-bars from the selected Data Feed when available, or OHLC trajectory:
 				bool isBull = close >= open;
 				double bodyMid = (open + close) * 0.5;
 				double range = Math.Max(step, snappedHigh - snappedLow);
@@ -1847,6 +2297,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 					for (int s = 0; s < subBars.Count; s++)
 					{
 						SubBar1M sb = subBars[s];
+						if (sb.High < low - step || sb.Low > high + step)
+							continue;
 						bool sbBull = sb.Close >= sb.Open;
 						double sbBodyRatio = Math.Abs(sb.Close - sb.Open) / Math.Max(tick, sb.High - sb.Low);
 						double sbAskShare = sbBull ? (0.56 + 0.24 * sbBodyRatio) : (0.44 - 0.24 * sbBodyRatio);
@@ -1875,34 +2327,22 @@ namespace NinjaTrader.NinjaScript.Indicators
 					if (rawAsk[r] > 0 || rawBid[r] > 0)
 						continue;
 					double p = (minBucket + r + 0.5) * step;
-					// Volume profile distribution: higher density inside candle body and near typical price
 					double distFromBody = Math.Abs(p - bodyMid) / (range * 0.55 + step);
 					double bellWeight = Math.Exp(-0.85 * distFromBody * distFromBody);
 
 					bool inBody = p >= Math.Min(open, close) - step * 0.25 && p <= Math.Max(open, close) + step * 0.25;
 					if (inBody) bellWeight *= 1.45;
 
-					// Deterministic intrabar micro-structure variance so realistic diagonal imbalances appear at key levels
 					int hash = ((barIdx * 73856093) ^ (r * 19349663)) & 0x7FFFFFFF;
-					double microVar = 0.65 + (hash % 71) * 0.01; // 0.65 .. 1.35
+					double microVar = 0.65 + (hash % 71) * 0.01;
 					double rowWeight = Math.Max(0.08, bellWeight * microVar);
 
-					// Determine Ask (Buy) vs Bid (Sell) ratio at this price level along the OHLC path
 					double relPos = numLevels > 1 ? (double)r / (numLevels - 1) : 0.5;
 					double bodyRatio = Math.Abs(close - open) / Math.Max(tick, high - low);
-					double askShare;
-					if (isBull)
-					{
-						// Bullish bar: strong buying through body and upper half, selling absorption near low wick
-						askShare = 0.52 + 0.16 * bodyRatio + 0.14 * (relPos - 0.35);
-					}
-					else
-					{
-						// Bearish bar: strong selling through body and lower half, buying exhaustion near high wick
-						askShare = 0.48 - 0.16 * bodyRatio - 0.14 * (0.65 - relPos);
-					}
+					double askShare = isBull
+						? (0.52 + 0.16 * bodyRatio + 0.14 * (relPos - 0.35))
+						: (0.48 - 0.16 * bodyRatio - 0.14 * (0.65 - relPos));
 
-					// Inject realistic localized orderflow aggression spikes (creating authentic 400% diagonal imbalances at breakout/absorption levels)
 					int spikeSelector = ((barIdx * 31 + r * 17) & 0x7FFFFFFF) % 11;
 					if (spikeSelector == 2 && isBull && p >= open)
 						askShare = 0.84;
@@ -1943,10 +2383,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				fp.BuyVolume = sumBuy;
 				fp.SellVolume = sumSell;
-				fp.TotalVolume = sumBuy + sumSell;
+				fp.TotalVolume = Math.Max(1L, sumBuy + sumSell);
 				fp.Delta = sumBuy - sumSell;
 
-				// Compute realistic intrabar MinDelta & MaxDelta based on OHLC legs
 				double upperWickRatio = (high - Math.Max(open, close)) / Math.Max(tick, high - low);
 				double lowerWickRatio = (Math.Min(open, close) - low) / Math.Max(tick, high - low);
 				if (fp.Delta >= 0)
@@ -1961,7 +2400,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 			}
 
-			// Compute Bar POC & 70% Bar Value Area
 			int pocIdx = 0;
 			long maxRowVol = -1;
 			for (int r = 0; r < fp.Levels.Count; r++)
@@ -2007,12 +2445,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 				fp.VaHigh = fp.Levels[upIdx].Price;
 			}
 
-			// Compute Diagonal Bid/Ask Imbalances (STOCK_USER.xml: 400% ratio, Filter >= 10)
 			double ratio = Math.Max(1.5, ImbalancePercentage / 100.0);
 			long minFilter = Math.Max(1, ImbalanceFilter);
 			for (int r = 0; r < fp.Levels.Count; r++)
 			{
-				// Diagonal Bid Imbalance: Bid at level[r] vs Ask at level[r + 1]
 				if (r < fp.Levels.Count - 1)
 				{
 					long bidV = fp.Levels[r].BidVolume;
@@ -2020,7 +2456,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 					if (bidV >= minFilter && bidV >= Math.Max(1L, diagAskV) * ratio)
 						fp.Levels[r].HasBidImbalance = true;
 				}
-				// Diagonal Ask Imbalance: Ask at level[r] vs Bid at level[r - 1]
 				if (r > 0)
 				{
 					long askV = fp.Levels[r].AskVolume;
@@ -2095,7 +2530,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		}
 		#endregion
 
-		#region SharpDX Direct2D Rendering
+		#region SharpDX Inside-Box Buyer & Seller Candle Orderflow Rendering
 		public override void OnCalculateMinMax()
 		{
 			if (ChartBars == null || ChartBars.Bars == null || ChartBars.Count <= 0)
@@ -2108,62 +2543,70 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (lastBar < firstBar)
 				return;
 
+			float barSpacing = (ChartControl != null && ChartControl.Properties != null) ? ChartControl.Properties.BarDistance : BarSpacePx;
+			float blend = Math.Max(0f, Math.Min(1f, (barSpacing - (CandlestickZoomThresholdPx - 8f)) / 16f));
+
 			double minPrice = double.MaxValue;
 			double maxPrice = double.MinValue;
-			double refStep = TickSize > 0 ? TickSize * 20 : 1.0;
+			double refStep = TickSize > 0 ? TickSize * 10 : 1.0;
 
 			lock (dataLock)
 			{
 				for (int idx = firstBar; idx <= lastBar; idx++)
 				{
-					if (barCache.TryGetValue(idx, out FootprintBarData fp) && fp != null)
+					double rawLow = ChartBars.Bars.GetLow(idx);
+					double rawHigh = ChartBars.Bars.GetHigh(idx);
+					double barLowEdge = rawLow;
+					double barHighEdge = rawHigh;
+
+					if (blend > 0.01f && barCache.TryGetValue(idx, out FootprintBarData fp) && fp != null)
 					{
 						if (fp.EffectivePriceStep > 0)
 							refStep = fp.EffectivePriceStep;
 						double halfStep = refStep * 0.5;
-						double barLowEdge = (fp.Levels != null && fp.Levels.Count > 0)
+						double fpLow = (fp.Levels != null && fp.Levels.Count > 0)
 							? Math.Min(fp.Low, fp.Levels[0].Price - halfStep)
 							: (fp.Low - halfStep);
-						double barHighEdge = (fp.Levels != null && fp.Levels.Count > 0)
+						double fpHigh = (fp.Levels != null && fp.Levels.Count > 0)
 							? Math.Max(fp.High, fp.Levels[fp.Levels.Count - 1].Price + halfStep)
 							: (fp.High + halfStep);
 
-						if (barLowEdge < minPrice) minPrice = barLowEdge;
-						if (barHighEdge > maxPrice) maxPrice = barHighEdge;
+						barLowEdge = rawLow + (fpLow - rawLow) * blend;
+						barHighEdge = rawHigh + (fpHigh - rawHigh) * blend;
 					}
-					else
-					{
-						double l = ChartBars.Bars.GetLow(idx);
-						double h = ChartBars.Bars.GetHigh(idx);
-						if (l < minPrice) minPrice = l;
-						if (h > maxPrice) maxPrice = h;
-					}
+
+					if (barLowEdge < minPrice) minPrice = barLowEdge;
+					if (barHighEdge > maxPrice) maxPrice = barHighEdge;
 				}
 			}
 
 			if (minPrice == double.MaxValue || maxPrice == double.MinValue)
 				return;
 
-			if (maxPrice <= minPrice)
-				maxPrice = minPrice + refStep * 6.0;
+			double rawSpan = Math.Max(refStep * 4.0, maxPrice - minPrice);
+			double candlePad = rawSpan * 0.06;
+			double ofPad = Math.Max(rawSpan * 0.06, refStep * 1.8);
+			double pad = candlePad + (ofPad - candlePad) * blend;
+			double paddedMin = minPrice - pad;
+			double paddedMax = maxPrice + pad;
 
-			// Always keep at least 2 full footprint rows blank at both top and bottom (including for the running candle),
-			// plus extra clearance for the Bar Delta box below each bar and the bottom 7-row Statistic Grid.
-			double paddedMin = minPrice - refStep * 3.0;
-			double paddedMax = maxPrice + refStep * 2.5;
-			double span = Math.Max(refStep * 6.0, paddedMax - paddedMin);
+			if (Math.Abs(runtimeYZoomFactor - 1.0) > 0.01)
+			{
+				double mid = (paddedMin + paddedMax) * 0.5;
+				double halfSpan = ((paddedMax - paddedMin) * 0.5) / runtimeYZoomFactor;
+				paddedMin = mid - halfSpan;
+				paddedMax = mid + halfSpan;
+			}
 
+			double span = Math.Max(TickSize * 6, paddedMax - paddedMin);
 			float panelH = ChartPanel != null ? ChartPanel.H : 600f;
-			int statRows = 7;
-			float statRowH = 20f;
-			float statGridH = runtimeShowStatGrid ? (statRows * statRowH + 6f) : 0f;
-			float topHeaderH = 58f;
-			float bottomReservePx = statGridH + 22f;
-			float usableH = Math.Max(140f, panelH - topHeaderH - bottomReservePx);
+			float deltaBarReserve = runtimeShowStatGrid ? 88f : 26f;
+			float topHeaderH = 56f;
+			float usableH = Math.Max(150f, panelH - topHeaderH - deltaBarReserve);
 
 			double pricePerPx = span / usableH;
 			MaxValue = paddedMax + topHeaderH * pricePerPx;
-			MinValue = paddedMin - bottomReservePx * pricePerPx;
+			MinValue = paddedMin - deltaBarReserve * pricePerPx;
 		}
 
 		protected override void OnRender(ChartControl chartControl, ChartScale chartScale)
@@ -2173,11 +2616,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			EnsureMouseEventsSubscribed();
 
-			// Apply wide footprint bar spacing once on load without mutating BarMarginRight mid-render
 			if (!initialBarWidthApplied && chartControl.Properties != null)
 			{
 				initialBarWidthApplied = true;
-				if (chartControl.Properties.BarDistance < 75f)
+				if (chartControl.Properties.BarDistance < 45f)
 				{
 					chartControl.Properties.BarDistance = BarSpacePx;
 					chartControl.Dispatcher.InvokeAsync(TriggerChartScrollbarRefresh);
@@ -2199,64 +2641,90 @@ namespace NinjaTrader.NinjaScript.Indicators
 			float panelW = ChartPanel.W;
 			float panelH = ChartPanel.H;
 
-			int statRows = 7;
-			float statRowH = 20f;
-			float statGridH = runtimeShowStatGrid ? (statRows * statRowH + 6f) : 0f;
-			float chartBottomY = (float)Math.Round(panelY + panelH - statGridH);
+			// 3-Row Bottom Table: Row 1 = Momentum (BMC/SMC), Row 2 = Strength (Buyer/Seller), Row 3 = Delta (3 x 20px = 60px)
+			float deltaStripH = 60f;
+			float bottomWatermarkGutter = 16f;
+			float chartBottomY = runtimeShowStatGrid
+				? (float)Math.Round(panelY + panelH - deltaStripH - bottomWatermarkGutter)
+				: (float)Math.Round(panelY + panelH - bottomWatermarkGutter);
+
+			bool light = runtimeLightTheme;
 
 			var oldAntialias = RenderTarget.AntialiasMode;
+			var oldTextAntialias = RenderTarget.TextAntialiasMode;
 			RenderTarget.AntialiasMode = AntialiasMode.PerPrimitive;
+			RenderTarget.TextAntialiasMode = SharpDX.Direct2D1.TextAntialiasMode.Cleartype;
 
 			try
 			{
-				// Create Direct2D Brushes matching STOCK_USER.xml exact palette
-				using (var brushPocYellow = new SolidColorBrush(RenderTarget, new Color4(1.0f, 1.0f, 0.0f, 0.98f)))       // #FFFF00 Yellow Bar POC
-				using (var brushBarVaFill = new SolidColorBrush(RenderTarget, new Color4(0.498f, 1.0f, 0.831f, 0.16f)))   // #7FFFD4 Aquamarine 20% Bar VA
-				using (var brushBarVaLine = new SolidColorBrush(RenderTarget, new Color4(0.498f, 1.0f, 0.831f, 0.75f)))
-				using (var brushBidCluster = new SolidColorBrush(RenderTarget, new Color4(0.85f, 0.15f, 0.20f, 0.52f)))   // #FF0000 Left Bid Cluster
-				using (var brushAskCluster = new SolidColorBrush(RenderTarget, new Color4(0.05f, 0.58f, 0.25f, 0.55f)))   // #006400 Right Ask Cluster
-				using (var brushFilterTeal = new SolidColorBrush(RenderTarget, new Color4(0.0f, 0.502f, 0.502f, 0.42f)))  // <20 #008080 Teal
-				using (var brushFilterGray = new SolidColorBrush(RenderTarget, new Color4(0.663f, 0.663f, 0.663f, 0.48f)))// >=1500 #A9A9A9 DarkGray
-				using (var brushFilterBlue = new SolidColorBrush(RenderTarget, new Color4(0.255f, 0.412f, 0.882f, 0.60f)))// >=2500 #4169E1 RoyalBlue
-				using (var brushFilterRed = new SolidColorBrush(RenderTarget, new Color4(1.0f, 0.15f, 0.15f, 0.68f)))     // >=3000 #FF0000 Red
-				using (var brushBidImbText = new SolidColorBrush(RenderTarget, new Color4(1.0f, 0.078f, 0.576f, 1.0f)))   // #FF1493 DeepPink Bid Imbalance
-				using (var brushAskImbText = new SolidColorBrush(RenderTarget, new Color4(0.0f, 1.0f, 0.0f, 1.0f)))       // #00FF00 Lime Ask Imbalance
-				using (var brushBidImbZone = new SolidColorBrush(RenderTarget, new Color4(1.0f, 0.078f, 0.576f, 0.22f)))  // Stacked Bid Imbalance S/R Zone (25%)
-				using (var brushAskImbZone = new SolidColorBrush(RenderTarget, new Color4(0.0f, 1.0f, 0.0f, 0.20f)))      // Stacked Ask Imbalance S/R Zone (25%)
-				using (var brushTextWhite = new SolidColorBrush(RenderTarget, new Color4(0.973f, 0.973f, 1.0f, 0.98f)))   // #F8F8FF GhostWhite
-				using (var brushTextDim = new SolidColorBrush(RenderTarget, new Color4(0.827f, 0.827f, 0.827f, 0.92f)))   // #D3D3D3 LightGray
-				using (var brushBullSpine = new SolidColorBrush(RenderTarget, new Color4(0.0f, 0.92f, 0.48f, 0.98f)))     // Bull Candle Spine
-				using (var brushBearSpine = new SolidColorBrush(RenderTarget, new Color4(1.0f, 0.25f, 0.25f, 0.98f)))     // Bear Candle Spine
-				using (var brushDevVa = new SolidColorBrush(RenderTarget, new Color4(0.255f, 0.412f, 0.882f, 0.90f)))     // #4169E1 Developing Session VA
-				using (var brushDevPoc = new SolidColorBrush(RenderTarget, new Color4(1.0f, 0.647f, 0.0f, 0.92f)))        // #FFA500 Developing Session POC
-				using (var brushDeltaPos = new SolidColorBrush(RenderTarget, new Color4(0.0f, 0.88f, 0.40f, 1.0f)))
-				using (var brushDeltaNeg = new SolidColorBrush(RenderTarget, new Color4(1.0f, 0.26f, 0.30f, 1.0f)))
-				using (var brushBarBoxBg = new SolidColorBrush(RenderTarget, new Color4(0.06f, 0.09f, 0.14f, 0.85f)))
-				using (var brushSpineBoxBg = new SolidColorBrush(RenderTarget, new Color4(0.04f, 0.06f, 0.10f, 0.94f)))
-				using (var brushCellBorder = new SolidColorBrush(RenderTarget, new Color4(0.32f, 0.44f, 0.60f, 0.88f)))
-				using (var brushOuterBoxBorder = new SolidColorBrush(RenderTarget, new Color4(0.48f, 0.64f, 0.84f, 0.95f)))
-				using (var brushMidLine = new SolidColorBrush(RenderTarget, new Color4(0.56f, 0.72f, 0.92f, 0.92f)))
-				using (var brushGridBg = new SolidColorBrush(RenderTarget, new Color4(0.055f, 0.082f, 0.133f, 0.96f)))
-				using (var brushLegendBg = new SolidColorBrush(RenderTarget, new Color4(0.08f, 0.115f, 0.185f, 0.98f)))
-				using (var brushDeltaPosBg = new SolidColorBrush(RenderTarget, new Color4(0.0f, 0.52f, 0.20f, 0.46f)))
-				using (var brushDeltaNegBg = new SolidColorBrush(RenderTarget, new Color4(0.68f, 0.10f, 0.14f, 0.46f)))
+				if (light)
 				{
-					float barSpacing = chartControl.Properties != null ? chartControl.Properties.BarDistance : 90f;
-					if (barSpacing < 12f)
+					using (var whiteCanvas = new SolidColorBrush(RenderTarget, new Color4(1.0f, 1.0f, 1.0f, 1.0f)))
+					{
+						RenderTarget.FillRectangle(new RectangleF(panelX, panelY, panelW, panelH), whiteCanvas);
+					}
+				}
+
+				// Vivid High-Contrast Buyer (#10CC8B Emerald-Teal) & Seller (#F4433F Bright Red) Candle Palette
+				// Matching zoomed-out candlesticks AND inside-box candle 1-for-1 (ZERO outside candle!)
+				using (var brushBuyerCandle = new SolidColorBrush(RenderTarget, new Color4(0.063f, 0.800f, 0.545f, 1.0f)))    // #10CC8B Vivid Buyer Teal-Green
+				using (var brushSellerCandle = new SolidColorBrush(RenderTarget, new Color4(0.957f, 0.263f, 0.247f, 1.0f)))   // #F4433F Vivid Seller Bright Red
+				using (var brushBoxBg = new SolidColorBrush(RenderTarget, light
+					? new Color4(0.965f, 0.975f, 0.988f, 0.94f)
+					: new Color4(0.065f, 0.088f, 0.128f, 0.92f)))
+				using (var brushSpineLaneBg = new SolidColorBrush(RenderTarget, light
+					? new Color4(0.925f, 0.942f, 0.965f, 0.95f)
+					: new Color4(0.045f, 0.062f, 0.092f, 0.95f)))
+				using (var brushBoxBorder = new SolidColorBrush(RenderTarget, light
+					? new Color4(0.74f, 0.80f, 0.87f, 0.90f)
+					: new Color4(0.18f, 0.25f, 0.35f, 0.88f)))
+				using (var brushRowGrid = new SolidColorBrush(RenderTarget, light
+					? new Color4(0.82f, 0.86f, 0.91f, 0.65f)
+					: new Color4(0.16f, 0.22f, 0.31f, 0.42f)))
+				using (var brushAskImbBlock = new SolidColorBrush(RenderTarget, new Color4(0.045f, 0.635f, 0.435f, 0.92f)))   // Crisp Buyer Emerald Imbalance Cell
+				using (var brushBidImbBlock = new SolidColorBrush(RenderTarget, new Color4(0.840f, 0.195f, 0.215f, 0.92f)))   // Crisp Seller Red Imbalance Cell
+				using (var brushImbWhiteText = new SolidColorBrush(RenderTarget, new Color4(1.0f, 1.0f, 1.0f, 1.0f)))
+				using (var brushNormalText = new SolidColorBrush(RenderTarget, light
+					? new Color4(0.12f, 0.16f, 0.22f, 0.98f)
+					: new Color4(0.90f, 0.94f, 0.98f, 0.98f)))
+				using (var brushZeroText = new SolidColorBrush(RenderTarget, light
+					? new Color4(0.45f, 0.52f, 0.60f, 0.82f)
+					: new Color4(0.50f, 0.57f, 0.66f, 0.80f)))
+				using (var brushPocOutline = new SolidColorBrush(RenderTarget, light
+					? new Color4(0.85f, 0.45f, 0.04f, 0.92f)
+					: new Color4(1.0f, 0.80f, 0.12f, 0.92f)))
+				using (var brushHalfpackLine = new SolidColorBrush(RenderTarget, light
+					? new Color4(0.06f, 0.10f, 0.18f, 0.98f)
+					: new Color4(1.0f, 1.0f, 1.0f, 0.98f)))
+				using (var brushAskVolShade = new SolidColorBrush(RenderTarget, new Color4(0.063f, 0.800f, 0.545f, light ? 0.22f : 0.30f)))
+				using (var brushBidVolShade = new SolidColorBrush(RenderTarget, new Color4(0.957f, 0.263f, 0.247f, light ? 0.22f : 0.30f)))
+				using (var brushDeltaBadgePosBg = new SolidColorBrush(RenderTarget, new Color4(0.045f, 0.38f, 0.28f, 0.92f)))
+				using (var brushDeltaBadgeNegBg = new SolidColorBrush(RenderTarget, new Color4(0.46f, 0.13f, 0.15f, 0.92f)))
+				using (var brushHeightBadgeBg = new SolidColorBrush(RenderTarget, light
+					? new Color4(0.91f, 0.94f, 0.98f, 0.95f)
+					: new Color4(0.09f, 0.13f, 0.20f, 0.94f)))
+				using (var brushHeightBadgeBorder = new SolidColorBrush(RenderTarget, light
+					? new Color4(0.68f, 0.76f, 0.86f, 0.90f)
+					: new Color4(0.22f, 0.31f, 0.45f, 0.88f)))
+				using (var brushHeightBadgeText = new SolidColorBrush(RenderTarget, light
+					? new Color4(0.10f, 0.18f, 0.30f, 0.98f)
+					: new Color4(0.84f, 0.92f, 1.0f, 0.98f)))
+				using (var brushBidImbZone = new SolidColorBrush(RenderTarget, new Color4(0.94f, 0.24f, 0.24f, 0.14f)))
+				using (var brushAskImbZone = new SolidColorBrush(RenderTarget, new Color4(0.06f, 0.78f, 0.53f, 0.14f)))
+				using (var brushDevVa = new SolidColorBrush(RenderTarget, new Color4(0.22f, 0.58f, 0.96f, 0.80f)))
+				using (var brushDevPoc = new SolidColorBrush(RenderTarget, new Color4(0.96f, 0.60f, 0.08f, 0.88f)))
+				{
+					float barSpacing = chartControl.Properties != null ? chartControl.Properties.BarDistance : BarSpacePx;
+					if (barSpacing < 3f)
 					{
 						if (lastBar > firstBar)
 							barSpacing = Math.Abs(chartControl.GetXByBarIndex(ChartBars, lastBar) - chartControl.GetXByBarIndex(ChartBars, firstBar)) / (float)(lastBar - firstBar);
 						else
-							barSpacing = 90f;
+							barSpacing = BarSpacePx;
 					}
 
-					// Keep one full Footprint box width of empty gap after the last bar on the right for clear visibility
 					SyncOneBoxRightGapMargin(chartControl, barSpacing, false);
 
-					float halfColW = (float)Math.Round(Math.Max(8f, Math.Min(95f, barSpacing * 0.46f)));
-					float spineHalfW = (float)Math.Round(Math.Max(3.0f, Math.Min(5.0f, halfColW * 0.11f)));
-
-					// 1. Collect visible FootprintBarData safely
 					List<FootprintBarData> visibleBars = new List<FootprintBarData>(lastBar - firstBar + 1);
 					lock (dataLock)
 					{
@@ -2267,213 +2735,43 @@ namespace NinjaTrader.NinjaScript.Indicators
 						}
 					}
 
-					// 2. Use native chartScale Y-mapping snapped to integer pixels so every box row border sits on the exact same horizontal line
-					float sampleStep = visibleBars.Count > 0 ? (float)visibleBars[visibleBars.Count - 1].EffectivePriceStep : (float)(TickSize * 20);
+					float sampleStep = visibleBars.Count > 0 ? (float)visibleBars[visibleBars.Count - 1].EffectivePriceStep : (float)(TickSize * 10);
 					double midP = visibleBars.Count > 0 ? visibleBars[visibleBars.Count - 1].Close : 1000.0;
-
 					Func<double, float> priceToY = (double price) => (float)chartScale.GetYByValue(price);
 
 					float rawRowH = Math.Abs(chartScale.GetYByValue(midP) - chartScale.GetYByValue(midP + sampleStep));
-					float rowH = Math.Max(10f, Math.Min(28f, rawRowH));
+					bool isCandlestickZoom = (barSpacing < CandlestickZoomThresholdPx);
 
-					// Clip main candle area strictly above the bottom Statistic Grid
-					RenderTarget.PushAxisAlignedClip(new RectangleF(panelX, panelY, panelW, Math.Max(40f, chartBottomY - panelY - 2f)), AntialiasMode.PerPrimitive);
+					RenderTarget.PushAxisAlignedClip(new RectangleF(panelX, panelY, panelW, Math.Max(40f, chartBottomY - panelY - 1f)), AntialiasMode.PerPrimitive);
 					try
 					{
-						// 3. Render Stacked Imbalance S/R Zones first (behind clusters)
 						if (runtimeShowImbZones && visibleBars.Count > 0)
 						{
 							RenderStackedImbalanceZones(chartControl, priceToY, visibleBars, lastBar, barSpacing, chartBottomY,
-								brushBidImbZone, brushAskImbZone, brushBidImbText, brushAskImbText);
+								brushBidImbZone, brushAskImbZone, brushSellerCandle, brushBuyerCandle);
 						}
 
-						// 4. Render Developing Session VA & POC Step Lines
-						if (ShowSessionVA && visibleBars.Count > 1)
+						if (ShowSessionVA && visibleBars.Count > 1 && !isCandlestickZoom)
 						{
 							RenderDevelopingSessionLines(chartControl, priceToY, visibleBars, barSpacing, chartBottomY, brushDevVa, brushDevPoc);
 						}
 
-						float fontSize = Math.Max(8.0f, Math.Min(11.5f, Math.Min(rowH * 0.68f, halfColW * 0.28f)));
-						bool drawClusterNumbers = (halfColW >= 18f && rawRowH >= 8.0f);
-
-						var sharedDw = NinjaTrader.Core.Globals.DirectWriteFactory;
-						using (var tfCluster = new TextFormat(sharedDw, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, fontSize))
-						using (var tfDeltaBadge = new TextFormat(sharedDw, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, Math.Max(8.5f, Math.Min(10.5f, halfColW * 0.25f))))
+						if (isCandlestickZoom)
 						{
-							tfCluster.TextAlignment = SharpDX.DirectWrite.TextAlignment.Center;
-							tfCluster.ParagraphAlignment = ParagraphAlignment.Center;
-							tfCluster.WordWrapping = WordWrapping.NoWrap;
-
-							tfDeltaBadge.TextAlignment = SharpDX.DirectWrite.TextAlignment.Center;
-							tfDeltaBadge.ParagraphAlignment = ParagraphAlignment.Center;
-							tfDeltaBadge.WordWrapping = WordWrapping.NoWrap;
-
-							// 5. Render each 5-Minute Footprint Bar INSIDE the Grid Column [prevGridX..currGridX] with Center Candle & Mid-Line Inside the Box
-							for (int v = 0; v < visibleBars.Count; v++)
-							{
-								FootprintBarData fp = visibleBars[v];
-								GetBarGridColumnBounds(chartControl, fp.BarIndex, barSpacing, out float leftFullX, out float rightFullX, out float cx);
-								float fullBoxW = rightFullX - leftFullX;
-								if (rightFullX < panelX || leftFullX > panelX + panelW)
-									continue;
-
-								float step = (float)fp.EffectivePriceStep;
-								float halfStep = step * 0.5f;
-
-								long maxSideVol = 1;
-								for (int r = 0; r < fp.Levels.Count; r++)
-								{
-									if (fp.Levels[r].BidVolume > maxSideVol) maxSideVol = fp.Levels[r].BidVolume;
-									if (fp.Levels[r].AskVolume > maxSideVol) maxSideVol = fp.Levels[r].AskVolume;
-								}
-
-								float availSideW = Math.Max(4f, (fullBoxW * 0.5f) - spineHalfW);
-
-								float barBoxTopY = float.MaxValue;
-								float barBoxBotY = float.MinValue;
-								if (fp.Levels.Count > 0)
-								{
-									float t0 = priceToY(fp.Levels[fp.Levels.Count - 1].Price + halfStep);
-									float b0 = priceToY(fp.Levels[0].Price - halfStep);
-									barBoxTopY = Math.Min(t0, b0);
-									barBoxBotY = Math.Max(t0, b0);
-
-									// Fill full Footprint bar box background and center candle spine channel first
-									var outerBgRect = new RectangleF(leftFullX, barBoxTopY, fullBoxW, Math.Max(4f, barBoxBotY - barBoxTopY));
-									RenderTarget.FillRectangle(outerBgRect, brushBarBoxBg);
-
-									var centerChannelBgRect = new RectangleF(cx - spineHalfW, barBoxTopY, spineHalfW * 2f, Math.Max(4f, barBoxBotY - barBoxTopY));
-									RenderTarget.FillRectangle(centerChannelBgRect, brushSpineBoxBg);
-								}
-
-								// 5a. Draw 70% Bar Value Area Background Box
-								if (ShowBarVA && fp.Levels.Count > 0)
-								{
-									float vaTopY = priceToY(fp.VaHigh + halfStep);
-									float vaBotY = priceToY(fp.VaLow - halfStep);
-									if (vaBotY > vaTopY)
-									{
-										float clampedTop = Math.Max(panelY, Math.Min(chartBottomY, vaTopY));
-										float clampedBot = Math.Max(panelY, Math.Min(chartBottomY, vaBotY));
-										if (clampedBot > clampedTop)
-										{
-											var vaRect = new RectangleF(leftFullX, clampedTop, fullBoxW, clampedBot - clampedTop);
-											RenderTarget.FillRectangle(vaRect, brushBarVaFill);
-											RenderTarget.DrawRectangle(vaRect, brushBarVaLine, 1.1f);
-										}
-									}
-								}
-
-								// 5b. Draw Left (Bid) & Right (Ask) Cluster Bricks + Continuous Horizontal Row Lines + Volume Numbers
-								float pocTopY = -1f;
-								float pocBotY = -1f;
-								for (int r = 0; r < fp.Levels.Count; r++)
-								{
-									FootprintLevel lv = fp.Levels[r];
-									float yTop = priceToY(lv.Price + halfStep);
-									float yBot = priceToY(lv.Price - halfStep);
-									float cellH = Math.Max(2f, yBot - yTop);
-									if (yBot < panelY || yTop > chartBottomY)
-										continue;
-
-									float cellTop = yTop + 0.5f;
-									float drawH = Math.Max(1.5f, cellH - 1.0f);
-
-									// Left Cluster (Bid / Sell Volume)
-									float bidRatio = Math.Min(1.0f, Math.Max(0.22f, (float)lv.BidVolume / maxSideVol));
-									float bidBarW = availSideW * bidRatio;
-									var bidBarRect = new RectangleF(cx - spineHalfW - bidBarW, cellTop, bidBarW, drawH);
-									RenderTarget.FillRectangle(bidBarRect, SelectVolumeFilterBrush(lv.BidVolume, true, brushBidCluster, brushAskCluster, brushFilterTeal, brushFilterGray, brushFilterBlue, brushFilterRed));
-
-									// Right Cluster (Ask / Buy Volume)
-									float askRatio = Math.Min(1.0f, Math.Max(0.22f, (float)lv.AskVolume / maxSideVol));
-									float askBarW = availSideW * askRatio;
-									var askBarRect = new RectangleF(cx + spineHalfW, cellTop, askBarW, drawH);
-									RenderTarget.FillRectangle(askBarRect, SelectVolumeFilterBrush(lv.AskVolume, false, brushBidCluster, brushAskCluster, brushFilterTeal, brushFilterGray, brushFilterBlue, brushFilterRed));
-
-									// Unbroken horizontal row border across the entire box (Left + Center Spine + Right)
-									var fullRowRect = new RectangleF(leftFullX, yTop, fullBoxW, cellH);
-									RenderTarget.DrawRectangle(fullRowRect, brushCellBorder, 0.85f);
-
-									// Imbalance Cell Highlights (DeepPink Left / Lime Right)
-									if (ShowImbalance && lv.HasBidImbalance)
-									{
-										var imbLeftRect = new RectangleF(leftFullX + 0.5f, cellTop, availSideW - 0.5f, drawH);
-										RenderTarget.DrawRectangle(imbLeftRect, brushBidImbText, 1.4f);
-									}
-									if (ShowImbalance && lv.HasAskImbalance)
-									{
-										var imbRightRect = new RectangleF(cx + spineHalfW, cellTop, availSideW - 0.5f, drawH);
-										RenderTarget.DrawRectangle(imbRightRect, brushAskImbText, 1.4f);
-									}
-
-									if (ShowBarPOC && lv.IsPoc)
-									{
-										pocTopY = yTop;
-										pocBotY = yBot;
-									}
-
-									// Draw Bid x Ask Volume Numbers inside their respective Left & Right boxes
-									if (drawClusterNumbers && drawH >= 8.0f)
-									{
-										var leftTextRect = new RectangleF(leftFullX + 1f, yTop, availSideW - 2f, cellH);
-										var rightTextRect = new RectangleF(cx + spineHalfW + 1f, yTop, availSideW - 2f, cellH);
-
-										var bidTxtBrush = (ShowImbalance && lv.HasBidImbalance) ? brushBidImbText : brushTextWhite;
-										var askTxtBrush = (ShowImbalance && lv.HasAskImbalance) ? brushAskImbText : brushTextWhite;
-
-										RenderTarget.DrawText(FormatClusterNumber(lv.BidVolume), tfCluster, leftTextRect, bidTxtBrush);
-										RenderTarget.DrawText(FormatClusterNumber(lv.AskVolume), tfCluster, rightTextRect, askTxtBrush);
-									}
-								}
-
-								// 5c. Draw Center Candle Channel Borders, Mid-Line Divider & Candlestick Spine Inside the Box
-								if (fp.Levels.Count > 0 && barBoxBotY > barBoxTopY)
-								{
-									RenderTarget.DrawLine(new Vector2(cx - spineHalfW, barBoxTopY), new Vector2(cx - spineHalfW, barBoxBotY), brushMidLine, 0.85f);
-									RenderTarget.DrawLine(new Vector2(cx + spineHalfW, barBoxTopY), new Vector2(cx + spineHalfW, barBoxBotY), brushMidLine, 0.85f);
-									RenderTarget.DrawLine(new Vector2(cx, barBoxTopY), new Vector2(cx, barBoxBotY), brushMidLine, 1.0f);
-
-									float yHigh = Math.Max(barBoxTopY, Math.Min(barBoxBotY, priceToY(fp.High)));
-									float yLow = Math.Max(barBoxTopY, Math.Min(barBoxBotY, priceToY(fp.Low)));
-									float yOpen = Math.Max(barBoxTopY + 1f, Math.Min(barBoxBotY - 1f, priceToY(fp.Open)));
-									float yClose = Math.Max(barBoxTopY + 1f, Math.Min(barBoxBotY - 1f, priceToY(fp.Close)));
-									bool isBull = fp.Close >= fp.Open;
-									var spineBrush = isBull ? brushBullSpine : brushBearSpine;
-
-									RenderTarget.DrawLine(new Vector2(cx, yHigh), new Vector2(cx, yLow), spineBrush, 1.8f);
-									float bodyTop = Math.Min(yOpen, yClose);
-									float bodyH = Math.Max(3.0f, Math.Abs(yClose - yOpen));
-									var spineBodyRect = new RectangleF(cx - spineHalfW + 0.8f, bodyTop, (spineHalfW - 0.8f) * 2f, bodyH);
-									RenderTarget.FillRectangle(spineBodyRect, spineBrush);
-
-									// Draw Bar POC Yellow Box (#FFFF00) unbroken across the full row
-									if (ShowBarPOC && pocBotY > pocTopY)
-									{
-										RenderTarget.DrawRectangle(new RectangleF(leftFullX, pocTopY + 0.5f, fullBoxW, Math.Max(2f, pocBotY - pocTopY - 1.0f)), brushPocYellow, 2.0f);
-									}
-
-									// Outer Box Frame enclosing the entire Candle + Data cluster
-									var outerBoxRect = new RectangleF(leftFullX, barBoxTopY, fullBoxW, barBoxBotY - barBoxTopY);
-									RenderTarget.DrawRectangle(outerBoxRect, brushOuterBoxBorder, 1.35f);
-								}
-
-								// 5d. Draw Bar Delta Summary Box with the Exact Same Width (leftFullX..rightFullX) Aligned Below the Candle Box
-								if (ShowBarDelta && halfColW >= 14f && barBoxBotY < chartBottomY - 16f)
-								{
-									float deltaY = barBoxBotY + 2f;
-									if (deltaY > panelY + 24f && deltaY + 16f <= chartBottomY)
-									{
-										var deltaRect = new RectangleF(leftFullX, deltaY, fullBoxW, 16f);
-										RenderTarget.FillRectangle(deltaRect, fp.Delta >= 0 ? brushDeltaPosBg : brushDeltaNegBg);
-										RenderTarget.DrawRectangle(deltaRect, fp.Delta >= 0 ? brushDeltaPos : brushDeltaNeg, 1.0f);
-										RenderTarget.DrawLine(new Vector2(cx, deltaY), new Vector2(cx, deltaY + 3.0f), brushMidLine, 0.9f);
-										RenderTarget.DrawLine(new Vector2(cx, deltaY + 13.0f), new Vector2(cx, deltaY + 16.0f), brushMidLine, 0.9f);
-										string deltaStr = (fp.Delta >= 0 ? "+" : "") + FormatClusterNumber(fp.Delta);
-										RenderTarget.DrawText(deltaStr, tfDeltaBadge, deltaRect, fp.Delta >= 0 ? brushDeltaPos : brushDeltaNeg);
-									}
-								}
-							}
+							RenderCleanCandlesticks(chartControl, priceToY, visibleBars, barSpacing, panelX, panelW, brushBuyerCandle, brushSellerCandle);
+						}
+						else
+						{
+							RenderInsideBoxCandleFootprints(
+								chartControl, priceToY, visibleBars, barSpacing, rawRowH,
+								panelX, panelY, panelW, chartBottomY,
+								brushBuyerCandle, brushSellerCandle,
+								brushBoxBg, brushSpineLaneBg, brushBoxBorder, brushRowGrid,
+								brushAskImbBlock, brushBidImbBlock, brushImbWhiteText,
+								brushNormalText, brushZeroText, brushPocOutline, brushHalfpackLine,
+								brushAskVolShade, brushBidVolShade,
+								brushDeltaBadgePosBg, brushDeltaBadgeNegBg,
+								brushHeightBadgeBg, brushHeightBadgeBorder, brushHeightBadgeText);
 						}
 					}
 					finally
@@ -2481,80 +2779,656 @@ namespace NinjaTrader.NinjaScript.Indicators
 						RenderTarget.PopAxisAlignedClip();
 					}
 
-					var gridDw = NinjaTrader.Core.Globals.DirectWriteFactory;
-					using (var tfGrid = new TextFormat(gridDw, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, Math.Max(8.5f, Math.Min(10.5f, halfColW * 0.24f))))
-					using (var tfLegend = new TextFormat(gridDw, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 10.2f))
+					if (runtimeShowStatGrid && visibleBars.Count > 0)
 					{
-						tfGrid.TextAlignment = SharpDX.DirectWrite.TextAlignment.Center;
-						tfGrid.ParagraphAlignment = ParagraphAlignment.Center;
-						tfGrid.WordWrapping = WordWrapping.NoWrap;
-
-						tfLegend.TextAlignment = SharpDX.DirectWrite.TextAlignment.Leading;
-						tfLegend.ParagraphAlignment = ParagraphAlignment.Center;
-						tfLegend.WordWrapping = WordWrapping.NoWrap;
-
-						// 6. Render Bottom 7-Row Statistic Grid (including 1:2 Buy/Sell Column at Row 0)
-						if (runtimeShowStatGrid && statGridH > 0)
-						{
-							RenderBottomStatisticGrid(chartControl, visibleBars, panelX, panelW, chartBottomY, statRowH, barSpacing,
-								tfLegend, tfGrid, brushGridBg, brushLegendBg, brushCellBorder, brushOuterBoxBorder, brushMidLine,
-								brushTextWhite, brushTextDim, brushDeltaPos, brushDeltaNeg, brushDeltaPosBg, brushDeltaNegBg);
-						}
-
-						// 7. Render Top-Left Interactive Header Pill
-						RenderInteractiveHeaderBar(panelX, panelY, barSpacing, sampleStep);
+						RenderThreeRowBottomTable(chartControl, visibleBars, panelX, panelW, chartBottomY + 1f, deltaStripH - 1f, barSpacing, light);
 					}
+
+					RenderSleekTopToolbar(panelX, panelY, barSpacing, sampleStep, isCandlestickZoom);
 				}
 			}
 			catch { }
 			finally
 			{
+				RenderTarget.TextAntialiasMode = oldTextAntialias;
 				RenderTarget.AntialiasMode = oldAntialias;
+			}
+		}
+
+		private void RenderCleanCandlesticks(
+			ChartControl chartControl,
+			Func<double, float> priceToY,
+			List<FootprintBarData> visibleBars,
+			float barSpacing,
+			float panelX,
+			float panelW,
+			SolidColorBrush brushBuyer,
+			SolidColorBrush brushSeller)
+		{
+			float bodyHalfW = Math.Max(1.3f, Math.Min(13f, (float)Math.Floor(barSpacing * 0.35f)));
+			float wickWidth = barSpacing >= 10f ? 1.8f : 1.2f;
+
+			for (int i = 0; i < visibleBars.Count; i++)
+			{
+				FootprintBarData fp = visibleBars[i];
+				float cx = (float)chartControl.GetXByBarIndex(ChartBars, fp.BarIndex);
+				if (cx + bodyHalfW < panelX || cx - bodyHalfW > panelX + panelW)
+					continue;
+
+				float yHigh = priceToY(fp.High);
+				float yLow = priceToY(fp.Low);
+				float yOpen = priceToY(fp.Open);
+				float yClose = priceToY(fp.Close);
+
+				bool isBuyer = fp.Close >= fp.Open;
+				SolidColorBrush brush = isBuyer ? brushBuyer : brushSeller;
+
+				RenderTarget.DrawLine(new Vector2(cx, yHigh), new Vector2(cx, yLow), brush, wickWidth);
+
+				float top = Math.Min(yOpen, yClose);
+				float h = Math.Max(2.5f, Math.Abs(yClose - yOpen));
+				var bodyRect = new RectangleF(cx - bodyHalfW, top, bodyHalfW * 2f, h);
+				RenderTarget.FillRectangle(bodyRect, brush);
+			}
+		}
+
+		/// <summary>
+		/// Renders the clean Footprint Box with ONLY the vivid Inside-Box Candle (zero outside candle!):
+		/// [ Seller Volume (Left)  |  Vivid Solid Buyer/Seller Inside Candle (Center Lane)  |  Buyer Volume (Right) ]
+		/// </summary>
+		private void RenderInsideBoxCandleFootprints(
+			ChartControl chartControl,
+			Func<double, float> priceToY,
+			List<FootprintBarData> visibleBars,
+			float barSpacing,
+			float rawRowH,
+			float panelX,
+			float panelY,
+			float panelW,
+			float chartBottomY,
+			SolidColorBrush brushBuyerCandle,
+			SolidColorBrush brushSellerCandle,
+			SolidColorBrush brushBoxBg,
+			SolidColorBrush brushSpineLaneBg,
+			SolidColorBrush brushBoxBorder,
+			SolidColorBrush brushRowGrid,
+			SolidColorBrush brushAskImbBlock,
+			SolidColorBrush brushBidImbBlock,
+			SolidColorBrush brushImbWhiteText,
+			SolidColorBrush brushNormalText,
+			SolidColorBrush brushZeroText,
+			SolidColorBrush brushPocOutline,
+			SolidColorBrush brushHalfpackLine,
+			SolidColorBrush brushAskVolShade,
+			SolidColorBrush brushBidVolShade,
+			SolidColorBrush brushDeltaBadgePosBg,
+			SolidColorBrush brushDeltaBadgeNegBg,
+			SolidColorBrush brushHeightBadgeBg,
+			SolidColorBrush brushHeightBadgeBorder,
+			SolidColorBrush brushHeightBadgeText)
+		{
+			bool isTwoSide = (runtimeOrderflowMode == AK10XOrderflowMode.Imbalance || runtimeOrderflowMode == AK10XOrderflowMode.VolumeFootprint);
+			float rowH = Math.Max(8f, Math.Min(28f, rawRowH));
+
+			// Vivid Inside-Box Candle geometry: solid ~6px body inside a dedicated 11-12px center lane inside the box
+			float candleBodyHalfW = Math.Max(2.2f, Math.Min(3.4f, barSpacing * 0.032f));
+			float centerLaneHalfW = candleBodyHalfW + 2.6f;
+			float approxSideW = Math.Max(12f, Math.Min(48f, (barSpacing * 0.46f) - centerLaneHalfW));
+
+			float fontSize = Math.Max(8.6f, Math.Min(11.6f, Math.Min(rowH * 0.64f, (isTwoSide ? approxSideW : approxSideW * 1.8f) * 0.34f)));
+			bool showNumbers = (barSpacing >= 50f && rawRowH >= 9.0f);
+
+			var sharedDw = NinjaTrader.Core.Globals.DirectWriteFactory;
+			using (var tfReg = new TextFormat(sharedDw, "Segoe UI", SharpDX.DirectWrite.FontWeight.SemiBold, SharpDX.DirectWrite.FontStyle.Normal, fontSize))
+			using (var tfBold = new TextFormat(sharedDw, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, fontSize))
+			using (var tfBadge = new TextFormat(sharedDw, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, Math.Max(8.5f, Math.Min(10.2f, fontSize * 0.94f))))
+			{
+				tfReg.TextAlignment = SharpDX.DirectWrite.TextAlignment.Center;
+				tfReg.ParagraphAlignment = ParagraphAlignment.Center;
+				tfReg.WordWrapping = WordWrapping.NoWrap;
+
+				tfBold.TextAlignment = SharpDX.DirectWrite.TextAlignment.Center;
+				tfBold.ParagraphAlignment = ParagraphAlignment.Center;
+				tfBold.WordWrapping = WordWrapping.NoWrap;
+
+				tfBadge.TextAlignment = SharpDX.DirectWrite.TextAlignment.Center;
+				tfBadge.ParagraphAlignment = ParagraphAlignment.Center;
+				tfBadge.WordWrapping = WordWrapping.NoWrap;
+
+				for (int v = 0; v < visibleBars.Count; v++)
+				{
+					FootprintBarData fp = visibleBars[v];
+					GetBarGridColumnBounds(chartControl, fp.BarIndex, barSpacing, out float leftBound, out float rightBound, out float cx);
+					if (rightBound < panelX || leftBound > panelX + panelW || fp.Levels.Count == 0)
+						continue;
+
+					// Clean box bounds centered on cx (ZERO outside candle — 100% inside box!)
+					float curSideW = Math.Max(10f, Math.Min(48f, ((rightBound - leftBound) * 0.5f) - centerLaneHalfW - 1.5f));
+					float boxLeft = (float)Math.Round(cx - centerLaneHalfW - curSideW);
+					float centerLeft = (float)Math.Round(cx - centerLaneHalfW);
+					float centerRight = (float)Math.Round(cx + centerLaneHalfW);
+					float boxRight = (float)Math.Round(cx + centerLaneHalfW + curSideW);
+
+					float step = (float)fp.EffectivePriceStep;
+					float halfStep = step * 0.5f;
+
+					float t0 = (float)Math.Round(priceToY(fp.Levels[fp.Levels.Count - 1].Price + halfStep));
+					float b0 = (float)Math.Round(priceToY(fp.Levels[0].Price - halfStep));
+					float barTopY = Math.Min(t0, b0);
+					float barBotY = Math.Max(t0, b0);
+					float boxH = Math.Max(4f, barBotY - barTopY);
+
+					// 1. Clean Footprint Box Backdrop + Dedicated Dark Center Candle Lane
+					var outerBoxRect = new RectangleF(boxLeft, barTopY, boxRight - boxLeft, boxH);
+					RenderTarget.FillRectangle(outerBoxRect, brushBoxBg);
+					RenderTarget.FillRectangle(new RectangleF(centerLeft, barTopY, centerRight - centerLeft, boxH), brushSpineLaneBg);
+
+					long maxSideVol = 1;
+					long maxTotalRowVol = 1;
+					long maxAbsDelta = 1;
+					for (int r = 0; r < fp.Levels.Count; r++)
+					{
+						FootprintLevel lv = fp.Levels[r];
+						if (lv.BidVolume > maxSideVol) maxSideVol = lv.BidVolume;
+						if (lv.AskVolume > maxSideVol) maxSideVol = lv.AskVolume;
+						if (lv.TotalVolume > maxTotalRowVol) maxTotalRowVol = lv.TotalVolume;
+						long ad = Math.Abs(lv.Delta);
+						if (ad > maxAbsDelta) maxAbsDelta = ad;
+					}
+
+					// 2. Seller (Left) & Buyer (Right) Price-Level Cells inside the Box
+					for (int r = 0; r < fp.Levels.Count; r++)
+					{
+						FootprintLevel lv = fp.Levels[r];
+						float ry1 = (float)Math.Round(priceToY(lv.Price + halfStep));
+						float ry2 = (float)Math.Round(priceToY(lv.Price - halfStep));
+						float yTop = Math.Min(ry1, ry2);
+						float yBot = Math.Max(ry1, ry2);
+						float cellH = Math.Max(2f, yBot - yTop);
+						if (yBot < panelY || yTop > chartBottomY)
+							continue;
+
+						if (r > 0 && cellH >= 8f)
+						{
+							RenderTarget.DrawLine(new Vector2(boxLeft, yTop), new Vector2(centerLeft, yTop), brushRowGrid, 0.8f);
+							RenderTarget.DrawLine(new Vector2(centerRight, yTop), new Vector2(boxRight, yTop), brushRowGrid, 0.8f);
+						}
+
+						float blockTop = yTop + 0.8f;
+						float blockH = Math.Max(1.5f, cellH - 1.6f);
+
+						if (runtimeOrderflowMode == AK10XOrderflowMode.Imbalance || runtimeOrderflowMode == AK10XOrderflowMode.VolumeFootprint)
+						{
+							bool drawVolBars = (runtimeOrderflowMode == AK10XOrderflowMode.VolumeFootprint);
+							bool bidImb = ShowImbalance && lv.HasBidImbalance;
+							bool askImb = ShowImbalance && lv.HasAskImbalance;
+
+							if (drawVolBars)
+							{
+								if (!bidImb && lv.BidVolume > 0)
+								{
+									float bw = Math.Max(2f, (centerLeft - boxLeft - 2f) * Math.Min(1f, (float)lv.BidVolume / maxSideVol));
+									RenderTarget.FillRectangle(new RectangleF(centerLeft - bw - 1f, blockTop, bw, blockH), brushBidVolShade);
+								}
+								if (!askImb && lv.AskVolume > 0)
+								{
+									float aw = Math.Max(2f, (boxRight - centerRight - 2f) * Math.Min(1f, (float)lv.AskVolume / maxSideVol));
+									RenderTarget.FillRectangle(new RectangleF(centerRight + 1f, blockTop, aw, blockH), brushAskVolShade);
+								}
+							}
+
+							if (bidImb)
+								RenderTarget.FillRectangle(new RectangleF(boxLeft + 1f, blockTop, centerLeft - boxLeft - 2f, blockH), brushBidImbBlock);
+							if (askImb)
+								RenderTarget.FillRectangle(new RectangleF(centerRight + 1f, blockTop, boxRight - centerRight - 2f, blockH), brushAskImbBlock);
+
+							if (ShowBarPOC && lv.IsPoc)
+							{
+								RenderTarget.DrawLine(new Vector2(boxLeft + 1f, yTop), new Vector2(centerLeft - 1f, yTop), brushPocOutline, 1.2f);
+								RenderTarget.DrawLine(new Vector2(boxLeft + 1f, yBot), new Vector2(centerLeft - 1f, yBot), brushPocOutline, 1.2f);
+								RenderTarget.DrawLine(new Vector2(centerRight + 1f, yTop), new Vector2(boxRight - 1f, yTop), brushPocOutline, 1.2f);
+								RenderTarget.DrawLine(new Vector2(centerRight + 1f, yBot), new Vector2(boxRight - 1f, yBot), brushPocOutline, 1.2f);
+							}
+
+							if (showNumbers)
+							{
+								var leftTxtRect = new RectangleF(boxLeft, yTop, centerLeft - boxLeft, cellH);
+								var rightTxtRect = new RectangleF(centerRight, yTop, boxRight - centerRight, cellH);
+
+								SolidColorBrush bidFg = bidImb ? brushImbWhiteText : (lv.BidVolume == 0 ? brushZeroText : brushNormalText);
+								SolidColorBrush askFg = askImb ? brushImbWhiteText : (lv.AskVolume == 0 ? brushZeroText : brushNormalText);
+
+								RenderTarget.DrawText(FormatGoChartingVol(lv.BidVolume), (bidImb || lv.IsPoc) ? tfBold : tfReg, leftTxtRect, bidFg);
+								RenderTarget.DrawText(FormatGoChartingVol(lv.AskVolume), (askImb || lv.IsPoc) ? tfBold : tfReg, rightTxtRect, askFg);
+							}
+						}
+						else if (runtimeOrderflowMode == AK10XOrderflowMode.Delta)
+						{
+							float dStart = centerRight + 1f;
+							float spanW = Math.Max(8f, boxRight - centerRight - 2f);
+							bool hasImb = ShowImbalance && (lv.Delta > 0 ? lv.HasAskImbalance : lv.HasBidImbalance);
+							if (lv.Delta != 0)
+							{
+								float dw = Math.Max(2f, spanW * Math.Min(1f, (float)Math.Abs(lv.Delta) / maxAbsDelta));
+								RenderTarget.FillRectangle(
+									new RectangleF(dStart, blockTop, dw, blockH),
+									hasImb ? (lv.Delta > 0 ? brushAskImbBlock : brushBidImbBlock) : (lv.Delta > 0 ? brushAskVolShade : brushBidVolShade));
+							}
+							if (showNumbers)
+							{
+								string dStr = (lv.Delta > 0 ? "+" : "") + FormatGoChartingVol(lv.Delta);
+								SolidColorBrush fg = hasImb ? brushImbWhiteText : (lv.Delta > 0 ? brushBuyerCandle : (lv.Delta < 0 ? brushSellerCandle : brushZeroText));
+								RenderTarget.DrawText(dStr, (hasImb || lv.IsPoc) ? tfBold : tfReg, new RectangleF(centerRight, yTop, boxRight - centerRight, cellH), fg);
+								RenderTarget.DrawText(FormatGoChartingVol(lv.TotalVolume), lv.IsPoc ? tfBold : tfReg, new RectangleF(boxLeft, yTop, centerLeft - boxLeft, cellH), brushZeroText);
+							}
+						}
+						else // TotalVolume
+						{
+							float vStart = centerRight + 1f;
+							float spanW = Math.Max(8f, boxRight - centerRight - 2f);
+							if (lv.TotalVolume > 0)
+							{
+								float vw = Math.Max(2f, spanW * Math.Min(1f, (float)lv.TotalVolume / maxTotalRowVol));
+								RenderTarget.FillRectangle(
+									new RectangleF(vStart, blockTop, vw, blockH),
+									lv.Delta >= 0 ? brushAskVolShade : brushBidVolShade);
+							}
+							if (showNumbers)
+							{
+								RenderTarget.DrawText(FormatGoChartingVol(lv.TotalVolume), lv.IsPoc ? tfBold : tfReg, new RectangleF(centerRight, yTop, boxRight - centerRight, cellH), brushNormalText);
+								string dStr = (lv.Delta > 0 ? "+" : "") + FormatGoChartingVol(lv.Delta);
+								RenderTarget.DrawText(dStr, tfReg, new RectangleF(boxLeft, yTop, centerLeft - boxLeft, cellH), lv.Delta >= 0 ? brushBuyerCandle : brushSellerCandle);
+							}
+						}
+					}
+
+					// 3. Outer Box Border & Center Candle Channel Dividers
+					RenderTarget.DrawLine(new Vector2(centerLeft, barTopY), new Vector2(centerLeft, barBotY), brushBoxBorder, 0.9f);
+					RenderTarget.DrawLine(new Vector2(centerRight, barTopY), new Vector2(centerRight, barBotY), brushBoxBorder, 0.9f);
+					RenderTarget.DrawRectangle(outerBoxRect, brushBoxBorder, 1.0f);
+
+					// 4. VIVID INSIDE-BOX CANDLE (Bright solid Buyer Teal-Green / Seller Bright Red — matching outside candle visibility!)
+					bool isBuyerCandle = fp.Close >= fp.Open;
+					SolidColorBrush vividCandleBrush = isBuyerCandle ? brushBuyerCandle : brushSellerCandle;
+
+					float yHigh = Math.Max(barTopY + 1f, Math.Min(barBotY - 1f, priceToY(fp.High)));
+					float yLow = Math.Max(barTopY + 1f, Math.Min(barBotY - 1f, priceToY(fp.Low)));
+					float yOpen = Math.Max(barTopY + 1f, Math.Min(barBotY - 1f, priceToY(fp.Open)));
+					float yClose = Math.Max(barTopY + 1f, Math.Min(barBotY - 1f, priceToY(fp.Close)));
+
+					// Vivid High-to-Low Wick in bright Buyer/Seller color
+					RenderTarget.DrawLine(new Vector2(cx, yHigh), new Vector2(cx, yLow), vividCandleBrush, 2.0f);
+
+					// Vivid Solid Open-to-Close Candle Body inside the center lane
+					float bodyTop = Math.Min(yOpen, yClose);
+					float bodyH = Math.Max(3.5f, Math.Abs(yClose - yOpen));
+					var insideCandleRect = new RectangleF(cx - candleBodyHalfW, bodyTop, candleBodyHalfW * 2f, bodyH);
+					RenderTarget.FillRectangle(insideCandleRect, vividCandleBrush);
+
+					// 4b. CANDLE HALFPACK (50% High-Low Midpoint Line across every candle in Footprint & Imbalance modes)
+					if (runtimeShowHalfpack && isTwoSide)
+					{
+						double trueHalfpack = (fp.High + fp.Low) * 0.5;
+						if (fp.Levels.Count >= 2)
+						{
+							double bestDivPrice = fp.Levels[1].Price - halfStep;
+							double bestDiff = Math.Abs(bestDivPrice - trueHalfpack);
+							for (int r = 2; r < fp.Levels.Count; r++)
+							{
+								double divP = fp.Levels[r].Price - halfStep;
+								double diff = Math.Abs(divP - trueHalfpack);
+								if (diff < bestDiff)
+								{
+									bestDiff = diff;
+									bestDivPrice = divP;
+								}
+							}
+							float yHp = (float)Math.Round(priceToY(bestDivPrice));
+							if (yHp >= panelY && yHp <= chartBottomY)
+							{
+								RenderTarget.DrawLine(new Vector2(boxLeft, yHp), new Vector2(boxRight, yHp), brushHalfpackLine, 2.2f);
+							}
+						}
+						else
+						{
+							float yHp = (float)Math.Round(priceToY(trueHalfpack));
+							if (yHp >= panelY && yHp <= chartBottomY)
+							{
+								float x1 = showNumbers ? centerLeft : boxLeft;
+								float x2 = showNumbers ? centerRight : boxRight;
+								RenderTarget.DrawLine(new Vector2(x1, yHp), new Vector2(x2, yHp), brushHalfpackLine, 2.2f);
+							}
+						}
+					}
+
+					// 5. TOP OF BOX = Per-Bar Delta Pill (+279 / -22)  |  BOTTOM OF BOX = Candle Height (High - Low)
+					if (ShowBarDelta && barSpacing >= 46f)
+					{
+						float pillW = Math.Min(boxRight - boxLeft, Math.Max(36f, (boxRight - boxLeft) * 0.78f));
+
+						// Top of Box: Delta Badge
+						if (barTopY - 17.5f >= panelY + 2f)
+						{
+							string fdStr = (fp.Delta > 0 ? "+" : "") + FormatGoChartingVol(fp.Delta);
+							var topPillRect = new RectangleF(cx - pillW * 0.5f, barTopY - 17.5f, pillW, 14.5f);
+							var topPillRr = new RoundedRectangle { Rect = topPillRect, RadiusX = 3f, RadiusY = 3f };
+							RenderTarget.FillRoundedRectangle(topPillRr, fp.Delta >= 0 ? brushDeltaBadgePosBg : brushDeltaBadgeNegBg);
+							RenderTarget.DrawText(fdStr, tfBadge, topPillRect, fp.Delta >= 0 ? brushBuyerCandle : brushSellerCandle);
+						}
+
+						// Bottom of Box: Candle Height (High - Low)
+						if (barBotY + 18f <= chartBottomY)
+						{
+							double tick = TickSize > 0 ? TickSize : 0.05;
+							double candleHeight = Math.Max(0.0, Math.Round((fp.High - fp.Low) / tick) * tick);
+							string hStr = FormatOrderflowPrice(candleHeight);
+							var botPillRect = new RectangleF(cx - pillW * 0.5f, barBotY + 3f, pillW, 14.5f);
+							var botPillRr = new RoundedRectangle { Rect = botPillRect, RadiusX = 3f, RadiusY = 3f };
+							RenderTarget.FillRoundedRectangle(botPillRr, brushHeightBadgeBg);
+							RenderTarget.DrawRoundedRectangle(botPillRr, brushHeightBadgeBorder, 0.85f);
+							RenderTarget.DrawText(hStr, tfBadge, botPillRect, brushHeightBadgeText);
+						}
+					}
+				}
+			}
+		}
+
+		/// <summary>
+		/// Evaluates Halfpack-based Strength (Buyer/Seller in Green/Red) and Momentum (BMC/SMC) signals for a bar.
+		/// </summary>
+		private void EvaluateHalfpackSignals(
+			FootprintBarData fp,
+			double maxWickRatio,
+			out string strengthLabel,
+			out int strengthTone,
+			out string momentumLabel,
+			out int momentumTone)
+		{
+			strengthLabel = string.Empty;
+			strengthTone = 0;
+			momentumLabel = string.Empty;
+			momentumTone = 0;
+
+			if (fp == null || fp.Levels == null || fp.Levels.Count < 2)
+				return;
+
+			double halfStep = fp.EffectivePriceStep * 0.5;
+			double trueHalfpack = (fp.High + fp.Low) * 0.5;
+
+			int hpDivIdx = 1;
+			double bestDiff = Math.Abs((fp.Levels[1].Price - halfStep) - trueHalfpack);
+			for (int r = 2; r < fp.Levels.Count; r++)
+			{
+				double divP = fp.Levels[r].Price - halfStep;
+				double diff = Math.Abs(divP - trueHalfpack);
+				if (diff < bestDiff)
+				{
+					bestDiff = diff;
+					hpDivIdx = r;
+				}
+			}
+
+			bool hasBuyImbBelow = false;
+			bool hasSellImbBelow = false;
+			for (int r = 0; r < hpDivIdx; r++)
+			{
+				if (fp.Levels[r].HasAskImbalance) hasBuyImbBelow = true;
+				if (fp.Levels[r].HasBidImbalance) hasSellImbBelow = true;
+			}
+
+			bool hasBuyImbAbove = false;
+			bool hasSellImbAbove = false;
+			for (int r = hpDivIdx; r < fp.Levels.Count; r++)
+			{
+				if (fp.Levels[r].HasAskImbalance) hasBuyImbAbove = true;
+				if (fp.Levels[r].HasBidImbalance) hasSellImbAbove = true;
+			}
+
+			bool isGreenCandle = fp.Close >= fp.Open;
+
+			// 2. Strength Rules:
+			// 1) Green Candle: buying imbalance below Halfpack AND buying imbalance above Halfpack => Buyer (Green)
+			// 2) Green Candle: NO buying imbalance below Halfpack AND buying imbalance above Halfpack => Buyer (Red)
+			// 3) Red Candle:   seller imbalance above Halfpack AND seller imbalance below Halfpack => Seller (Red)
+			// 4) Red Candle:   NO seller imbalance above Halfpack AND seller imbalance below Halfpack => Seller (Green)
+			if (isGreenCandle)
+			{
+				if (hasBuyImbBelow && hasBuyImbAbove)
+				{
+					strengthLabel = "Buyer";
+					strengthTone = 1; // Green
+				}
+				else if (!hasBuyImbBelow && hasBuyImbAbove)
+				{
+					strengthLabel = "Buyer";
+					strengthTone = -1; // Red
+				}
+			}
+			else
+			{
+				if (hasSellImbAbove && hasSellImbBelow)
+				{
+					strengthLabel = "Seller";
+					strengthTone = -1; // Red
+				}
+				else if (!hasSellImbAbove && hasSellImbBelow)
+				{
+					strengthLabel = "Seller";
+					strengthTone = 1; // Green
+				}
+			}
+
+			// 3. Momentum Rules:
+			// 1) Green Candle: buying imbalance below & above Halfpack + small wick on top => BMC (Green)
+			// 2) Red Candle:   selling imbalance above & below Halfpack + small wick on bottom => SMC (Red)
+			double tick = TickSize > 0 ? TickSize : 0.05;
+			double barRange = fp.High - fp.Low;
+			if (barRange >= tick * 0.5)
+			{
+				if (isGreenCandle && hasBuyImbBelow && hasBuyImbAbove)
+				{
+					double upperWick = Math.Max(0.0, fp.High - Math.Max(fp.Open, fp.Close));
+					if (upperWick <= barRange * maxWickRatio + 1e-9)
+					{
+						momentumLabel = "BMC";
+						momentumTone = 1; // Green
+					}
+				}
+				else if (!isGreenCandle && hasSellImbAbove && hasSellImbBelow)
+				{
+					double lowerWick = Math.Max(0.0, Math.Min(fp.Open, fp.Close) - fp.Low);
+					if (lowerWick <= barRange * maxWickRatio + 1e-9)
+					{
+						momentumLabel = "SMC";
+						momentumTone = -1; // Red
+					}
+				}
+			}
+		}
+
+		/// <summary>
+		/// Renders the 3-Row Bottom Table with Right-Side Titles:
+		/// Row 1 (Top):    Momentum  -> BMC (Green) / SMC (Red)
+		/// Row 2 (Middle): Strength  -> Buyer (Green/Red) / Seller (Red/Green)
+		/// Row 3 (Bottom): Delta     -> Intensity-shaded Green/Red Delta
+		/// </summary>
+		private void RenderThreeRowBottomTable(
+			ChartControl chartControl,
+			List<FootprintBarData> visibleBars,
+			float panelX,
+			float panelW,
+			float stripTopY,
+			float stripH,
+			float barSpacing,
+			bool light)
+		{
+			long maxAbsDelta = 1;
+			for (int i = 0; i < visibleBars.Count; i++)
+			{
+				long ad = Math.Abs(visibleBars[i].Delta);
+				if (ad > maxAbsDelta) maxAbsDelta = ad;
+			}
+
+			float rowH = (float)Math.Floor(stripH / 3f);
+			float yMom = stripTopY;
+			float yStr = stripTopY + rowH;
+			float yDel = stripTopY + rowH * 2f;
+			float lastRowH = Math.Max(rowH, stripH - rowH * 2f);
+
+			float titleColW = Math.Min(78f, Math.Max(58f, panelW * 0.08f));
+			float titleColLeft = (float)Math.Round(panelX + panelW - titleColW);
+			double maxWickRatio = Math.Max(0.05, Math.Min(0.45, MomentumMaxWickPct / 100.0));
+
+			var dw = NinjaTrader.Core.Globals.DirectWriteFactory;
+			float fontSz = Math.Max(8.4f, Math.Min(10.2f, Math.Min(rowH * 0.56f, barSpacing * 0.13f)));
+			using (var tfCell = new TextFormat(dw, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, fontSz))
+			using (var tfTitle = new TextFormat(dw, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 9.6f))
+			using (var stripBg = new SolidColorBrush(RenderTarget, light ? new Color4(0.95f, 0.965f, 0.98f, 0.98f) : new Color4(0.055f, 0.075f, 0.108f, 0.97f)))
+			using (var gridLineBrush = new SolidColorBrush(RenderTarget, light ? new Color4(0.75f, 0.80f, 0.86f, 0.95f) : new Color4(0.20f, 0.27f, 0.38f, 0.88f)))
+			using (var sepBrush = new SolidColorBrush(RenderTarget, light ? new Color4(0.84f, 0.88f, 0.92f, 0.90f) : new Color4(0.11f, 0.15f, 0.22f, 0.90f)))
+			using (var titleBgBrush = new SolidColorBrush(RenderTarget, light ? new Color4(0.88f, 0.92f, 0.96f, 0.99f) : new Color4(0.075f, 0.105f, 0.155f, 0.99f)))
+			using (var titleBorderBrush = new SolidColorBrush(RenderTarget, light ? new Color4(0.45f, 0.54f, 0.66f, 0.95f) : new Color4(0.55f, 0.65f, 0.78f, 0.90f)))
+			using (var titleTextBrush = new SolidColorBrush(RenderTarget, light ? new Color4(0.08f, 0.13f, 0.20f, 1.0f) : new Color4(0.96f, 0.98f, 1.0f, 1.0f)))
+			using (var greenSignalBg = new SolidColorBrush(RenderTarget, new Color4(0.055f, 0.600f, 0.395f, 0.96f)))
+			using (var redSignalBg = new SolidColorBrush(RenderTarget, new Color4(0.835f, 0.200f, 0.220f, 0.96f)))
+			using (var txtWhite = new SolidColorBrush(RenderTarget, new Color4(1.0f, 1.0f, 1.0f, 1.0f)))
+			using (var txtDark = new SolidColorBrush(RenderTarget, new Color4(0.08f, 0.12f, 0.16f, 1.0f)))
+			using (var cellBrush = new SolidColorBrush(RenderTarget, new Color4(0.1f, 0.6f, 0.3f, 1.0f)))
+			{
+				tfCell.TextAlignment = SharpDX.DirectWrite.TextAlignment.Center;
+				tfCell.ParagraphAlignment = ParagraphAlignment.Center;
+				tfCell.WordWrapping = WordWrapping.NoWrap;
+
+				tfTitle.TextAlignment = SharpDX.DirectWrite.TextAlignment.Center;
+				tfTitle.ParagraphAlignment = ParagraphAlignment.Center;
+				tfTitle.WordWrapping = WordWrapping.NoWrap;
+
+				// Strip backdrop
+				RenderTarget.FillRectangle(new RectangleF(panelX, stripTopY, panelW, stripH), stripBg);
+
+				// Clip bar columns to the left of the Right-Side Title Column
+				RenderTarget.PushAxisAlignedClip(new RectangleF(panelX, stripTopY, Math.Max(10f, titleColLeft - panelX), stripH), AntialiasMode.PerPrimitive);
+				try
+				{
+					for (int i = 0; i < visibleBars.Count; i++)
+					{
+						FootprintBarData fp = visibleBars[i];
+						float cx = (float)chartControl.GetXByBarIndex(ChartBars, fp.BarIndex);
+						float halfSpan = Math.Max(2f, barSpacing * 0.5f);
+						float cLeft = (float)Math.Round(cx - halfSpan);
+						float cRight = (float)Math.Round(cx + halfSpan);
+						if (cRight < panelX || cLeft > titleColLeft)
+							continue;
+
+						float cWidth = Math.Max(2f, cRight - cLeft - 1f);
+
+						EvaluateHalfpackSignals(fp, maxWickRatio,
+							out string strengthLabel, out int strengthTone,
+							out string momentumLabel, out int momentumTone);
+
+						// Row 1 (Top): Momentum (BMC / SMC)
+						if (momentumTone != 0)
+						{
+							var momRect = new RectangleF(cLeft, yMom + 1f, cWidth, rowH - 1.5f);
+							RenderTarget.FillRectangle(momRect, momentumTone > 0 ? greenSignalBg : redSignalBg);
+							if (cWidth >= 28f)
+								RenderTarget.DrawText(momentumLabel, tfCell, momRect, txtWhite);
+							else if (cWidth >= 16f)
+								RenderTarget.DrawText(momentumTone > 0 ? "BM" : "SM", tfCell, momRect, txtWhite);
+						}
+
+						// Row 2 (Middle): Strength (Buyer / Seller)
+						if (strengthTone != 0)
+						{
+							var strRect = new RectangleF(cLeft, yStr + 1f, cWidth, rowH - 1.5f);
+							RenderTarget.FillRectangle(strRect, strengthTone > 0 ? greenSignalBg : redSignalBg);
+							if (cWidth >= 36f)
+								RenderTarget.DrawText(strengthLabel, tfCell, strRect, txtWhite);
+							else if (cWidth >= 16f)
+								RenderTarget.DrawText(strengthLabel.StartsWith("B", StringComparison.Ordinal) ? "B" : "S", tfCell, strRect, txtWhite);
+						}
+
+						// Row 3 (Bottom): Delta (GoCharting intensity-shaded Green/Red)
+						float intensity = (float)Math.Pow(Math.Min(1.0, (double)Math.Abs(fp.Delta) / maxAbsDelta), 0.55);
+						Color4 fillCol;
+						bool useDarkText = false;
+
+						if (fp.Delta >= 0)
+						{
+							float r = 0.50f - 0.42f * intensity;
+							float g = 0.72f - 0.18f * intensity;
+							float b = 0.58f - 0.34f * intensity;
+							fillCol = new Color4(r, g, b, 0.96f);
+							if (intensity < 0.32f) useDarkText = true;
+						}
+						else
+						{
+							float r = 0.88f - 0.02f * intensity;
+							float g = 0.49f - 0.34f * intensity;
+							float b = 0.49f - 0.34f * intensity;
+							fillCol = new Color4(r, g, b, 0.96f);
+						}
+
+						cellBrush.Color = fillCol;
+						var delRect = new RectangleF(cLeft, yDel + 1f, cWidth, lastRowH - 1f);
+						RenderTarget.FillRectangle(delRect, cellBrush);
+
+						if (barSpacing >= 32f)
+						{
+							string dTxt = FormatGoChartingDeltaStrip(fp.Delta);
+							RenderTarget.DrawText(dTxt, tfCell, delRect, useDarkText ? txtDark : txtWhite);
+						}
+
+						// Vertical column separator across all 3 rows
+						RenderTarget.DrawLine(new Vector2(cRight, stripTopY), new Vector2(cRight, stripTopY + stripH), sepBrush, 1.0f);
+					}
+				}
+				finally
+				{
+					RenderTarget.PopAxisAlignedClip();
+				}
+
+				// Horizontal row dividers across entire 3-row table
+				RenderTarget.DrawLine(new Vector2(panelX, stripTopY), new Vector2(panelX + panelW, stripTopY), gridLineBrush, 1.0f);
+				RenderTarget.DrawLine(new Vector2(panelX, yStr), new Vector2(panelX + panelW, yStr), gridLineBrush, 1.0f);
+				RenderTarget.DrawLine(new Vector2(panelX, yDel), new Vector2(panelX + panelW, yDel), gridLineBrush, 1.0f);
+				RenderTarget.DrawLine(new Vector2(panelX, stripTopY + stripH), new Vector2(panelX + panelW, stripTopY + stripH), gridLineBrush, 1.0f);
+
+				// Right-Side Docked Row Title Column: Momentum | Strength | Delta
+				var titleBlockRect = new RectangleF(titleColLeft, stripTopY, panelX + panelW - titleColLeft, stripH);
+				RenderTarget.FillRectangle(titleBlockRect, titleBgBrush);
+				RenderTarget.DrawRectangle(titleBlockRect, titleBorderBrush, 1.1f);
+				RenderTarget.DrawLine(new Vector2(titleColLeft, yStr), new Vector2(panelX + panelW, yStr), titleBorderBrush, 1.0f);
+				RenderTarget.DrawLine(new Vector2(titleColLeft, yDel), new Vector2(panelX + panelW, yDel), titleBorderBrush, 1.0f);
+
+				RenderTarget.DrawText("Momentum", tfTitle, new RectangleF(titleColLeft, yMom, titleColW, rowH), titleTextBrush);
+				RenderTarget.DrawText("Strength", tfTitle, new RectangleF(titleColLeft, yStr, titleColW, rowH), titleTextBrush);
+				RenderTarget.DrawText("Delta", tfTitle, new RectangleF(titleColLeft, yDel, titleColW, lastRowH), titleTextBrush);
 			}
 		}
 
 		private void GetBarGridColumnBounds(ChartControl chartControl, int barIndex, float fallbackSpacing, out float boxLeft, out float boxRight, out float boxCx)
 		{
-			// Center every Footprint candle box, delta badge, and bottom Statistic Grid column directly on GetXByBarIndex(barIndex)
-			// so the bottom X-axis timestamp (e.g., 15:05, 15:10, 15:15, 15:20, 15:25, 15:30) sits dead-center inside every box!
 			float xCenter = (float)chartControl.GetXByBarIndex(ChartBars, barIndex);
 			float span = fallbackSpacing;
 
 			if (barIndex > 0)
 			{
 				float dPrev = xCenter - (float)chartControl.GetXByBarIndex(ChartBars, barIndex - 1);
-				if (dPrev >= 12f && dPrev <= fallbackSpacing * 1.6f)
+				if (dPrev >= 3f && dPrev <= fallbackSpacing * 1.6f)
 					span = dPrev;
 			}
 			else if (ChartBars != null && barIndex + 1 < ChartBars.Count)
 			{
 				float dNext = (float)chartControl.GetXByBarIndex(ChartBars, barIndex + 1) - xCenter;
-				if (dNext >= 12f && dNext <= fallbackSpacing * 1.6f)
+				if (dNext >= 3f && dNext <= fallbackSpacing * 1.6f)
 					span = dNext;
 			}
 
 			boxCx = (float)Math.Round(xCenter);
-			float halfW = Math.Max(4f, (float)Math.Floor(span * 0.5f) - 1f);
+			float halfW = Math.Max(2f, (float)Math.Floor(span * 0.48f));
 			boxLeft = boxCx - halfW;
 			boxRight = boxCx + halfW;
-		}
-
-		private SolidColorBrush SelectVolumeFilterBrush(
-			long vol,
-			bool isBidSide,
-			SolidColorBrush brushBid,
-			SolidColorBrush brushAsk,
-			SolidColorBrush brushTeal,
-			SolidColorBrush brushGray,
-			SolidColorBrush brushBlue,
-			SolidColorBrush brushRed)
-		{
-			// Exact filter tiers from STOCK_USER.xml lines 201-281
-			if (vol >= 3000) return brushRed;
-			if (vol >= 2500) return brushBlue;
-			if (vol >= 1500) return brushGray;
-			if (vol < 20) return brushTeal;
-			return isBidSide ? brushBid : brushAsk;
 		}
 
 		private void RenderDevelopingSessionLines(
@@ -2576,11 +3450,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 				float yVal = priceToY(cur.DevSessionVal);
 
 				if (yPoc > ChartPanel.Y && yPoc < chartBottomY)
-					RenderTarget.DrawLine(new Vector2(x1, yPoc), new Vector2(x2, yPoc), brushDevPoc, 1.8f);
+					RenderTarget.DrawLine(new Vector2(x1, yPoc), new Vector2(x2, yPoc), brushDevPoc, 1.5f);
 				if (yVah > ChartPanel.Y && yVah < chartBottomY)
-					RenderTarget.DrawLine(new Vector2(x1, yVah), new Vector2(x2, yVah), brushDevVa, 1.5f);
+					RenderTarget.DrawLine(new Vector2(x1, yVah), new Vector2(x2, yVah), brushDevVa, 1.2f);
 				if (yVal > ChartPanel.Y && yVal < chartBottomY)
-					RenderTarget.DrawLine(new Vector2(x1, yVal), new Vector2(x2, yVal), brushDevVa, 1.5f);
+					RenderTarget.DrawLine(new Vector2(x1, yVal), new Vector2(x2, yVal), brushDevVa, 1.2f);
 
 				if (i > 0 && visibleBars[i - 1].Time.Date == cur.Time.Date)
 				{
@@ -2591,11 +3465,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 					float pyVal = priceToY(prev.DevSessionVal);
 
 					if (pyPoc > ChartPanel.Y && pyPoc < chartBottomY && yPoc > ChartPanel.Y && yPoc < chartBottomY)
-						RenderTarget.DrawLine(new Vector2(prevX2, pyPoc), new Vector2(x1, yPoc), brushDevPoc, 1.2f);
+						RenderTarget.DrawLine(new Vector2(prevX2, pyPoc), new Vector2(x1, yPoc), brushDevPoc, 1.0f);
 					if (pyVah > ChartPanel.Y && pyVah < chartBottomY && yVah > ChartPanel.Y && yVah < chartBottomY)
-						RenderTarget.DrawLine(new Vector2(prevX2, pyVah), new Vector2(x1, yVah), brushDevVa, 1.1f);
+						RenderTarget.DrawLine(new Vector2(prevX2, pyVah), new Vector2(x1, yVah), brushDevVa, 1.0f);
 					if (pyVal > ChartPanel.Y && pyVal < chartBottomY && yVal > ChartPanel.Y && yVal < chartBottomY)
-						RenderTarget.DrawLine(new Vector2(prevX2, pyVal), new Vector2(x1, yVal), brushDevVa, 1.1f);
+						RenderTarget.DrawLine(new Vector2(prevX2, pyVal), new Vector2(x1, yVal), brushDevVa, 1.0f);
 				}
 			}
 		}
@@ -2620,7 +3494,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 				FootprintBarData fp = visibleBars[i];
 				double halfStep = fp.EffectivePriceStep * 0.5;
 
-				// Find consecutive Bid Imbalances (Supply / Resistance Zone)
 				int runStart = -1;
 				for (int r = 0; r <= fp.Levels.Count; r++)
 				{
@@ -2631,8 +3504,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					}
 					else if (runStart >= 0)
 					{
-						int runLen = r - runStart;
-						if (runLen >= minConsec)
+						if (r - runStart >= minConsec)
 						{
 							zones.Add(new ImbalanceZone
 							{
@@ -2647,7 +3519,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 					}
 				}
 
-				// Find consecutive Ask Imbalances (Demand / Support Zone)
 				runStart = -1;
 				for (int r = 0; r <= fp.Levels.Count; r++)
 				{
@@ -2658,8 +3529,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					}
 					else if (runStart >= 0)
 					{
-						int runLen = r - runStart;
-						if (runLen >= minConsec)
+						if (r - runStart >= minConsec)
 						{
 							zones.Add(new ImbalanceZone
 							{
@@ -2675,7 +3545,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 			}
 
-			// Check zone termination (STOCK_USER.xml: TerminateByBarHighLow, BreakOnSession = true)
 			for (int z = 0; z < zones.Count; z++)
 			{
 				ImbalanceZone zone = zones[z];
@@ -2684,7 +3553,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 					FootprintBarData fp = visibleBars[i];
 					if (fp.BarIndex <= zone.StartBarIndex) continue;
 
-					// Break on session change
 					if (fp.Time.Date != visibleBars[0].Time.Date && i > 0 && fp.Time.Date != visibleBars[i - 1].Time.Date)
 					{
 						zone.EndBarIndex = fp.BarIndex;
@@ -2725,132 +3593,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
-		private void RenderBottomStatisticGrid(
-			ChartControl chartControl,
-			List<FootprintBarData> visibleBars,
-			float panelX,
-			float panelW,
-			float gridTopY,
-			float rowH,
-			float barSpacing,
-			TextFormat tfLegend,
-			TextFormat tfGrid,
-			SolidColorBrush brushGridBg,
-			SolidColorBrush brushLegendBg,
-			SolidColorBrush brushBorder,
-			SolidColorBrush brushOuterBorder,
-			SolidColorBrush brushMidLine,
-			SolidColorBrush brushWhite,
-			SolidColorBrush brushDim,
-			SolidColorBrush brushDeltaPos,
-			SolidColorBrush brushDeltaNeg,
-			SolidColorBrush brushDeltaPosBg,
-			SolidColorBrush brushDeltaNegBg)
-		{
-			string[] labels = { "1:2 Logic", "Buy Vol", "Sell Vol", "Delta", "Cum. Delta", "Min Delta", "Max Delta" };
-			float totalH = labels.Length * rowH;
-			float legendW = 78f;
-
-			// Full grid background & crisp top divider box border between Candles and Datas
-			var fullGridRect = new RectangleF(panelX, gridTopY, panelW, totalH + 4f);
-			RenderTarget.FillRectangle(fullGridRect, brushGridBg);
-			RenderTarget.DrawRectangle(fullGridRect, brushOuterBorder, 1.3f);
-			RenderTarget.DrawLine(new Vector2(panelX, gridTopY), new Vector2(panelX + panelW, gridTopY), brushMidLine, 1.8f);
-
-			// Continuous horizontal row lines across the entire Statistic Grid so all boxes align on unbroken horizontal lines
-			for (int r = 1; r <= labels.Length; r++)
-			{
-				float hy = gridTopY + r * rowH;
-				RenderTarget.DrawLine(new Vector2(panelX, hy), new Vector2(panelX + panelW, hy), brushBorder, 0.85f);
-			}
-
-			// Per-bar columns aligned to the exact same [prevGridX..currGridX] column bounds as the Candle Box above
-			for (int i = 0; i < visibleBars.Count; i++)
-			{
-				FootprintBarData fp = visibleBars[i];
-				GetBarGridColumnBounds(chartControl, fp.BarIndex, barSpacing, out float cellLeft, out float cellRight, out float cx);
-				float cellW = cellRight - cellLeft;
-				if (cellRight < panelX + legendW || cellLeft > panelX + panelW)
-					continue;
-
-				// 1:2 Buyer vs Seller dominance logic:
-				// Buy (Green) when Buyer volume >= 2 * Seller volume
-				// Sell (Red) when Seller volume >= 2 * Buyer volume
-				int ratioSignal = 0;
-				if (fp.BuyVolume > 0 && fp.BuyVolume >= fp.SellVolume * 2)
-					ratioSignal = 1;
-				else if (fp.SellVolume > 0 && fp.SellVolume >= fp.BuyVolume * 2)
-					ratioSignal = -1;
-
-				long[] vals = { 0, fp.BuyVolume, fp.SellVolume, fp.Delta, fp.CumulativeDelta, fp.MinDelta, fp.MaxDelta };
-
-				for (int r = 0; r < labels.Length; r++)
-				{
-					float ry = gridTopY + r * rowH;
-					var cRect = new RectangleF(cellLeft, ry, cellW, rowH);
-
-					if (r == 0)
-					{
-						if (ratioSignal > 0)
-							RenderTarget.FillRectangle(cRect, brushDeltaPosBg);
-						else if (ratioSignal < 0)
-							RenderTarget.FillRectangle(cRect, brushDeltaNegBg);
-					}
-					else if (r == 3 || r == 4)
-					{
-						if (vals[r] > 0) RenderTarget.FillRectangle(cRect, brushDeltaPosBg);
-						else if (vals[r] < 0) RenderTarget.FillRectangle(cRect, brushDeltaNegBg);
-					}
-
-					RenderTarget.DrawRectangle(cRect, brushBorder, 0.9f);
-
-					// Center mid-line ticks aligned with the candle mid-line
-					RenderTarget.DrawLine(new Vector2(cx, ry), new Vector2(cx, ry + 3.5f), brushMidLine, 0.95f);
-					RenderTarget.DrawLine(new Vector2(cx, ry + rowH - 3.5f), new Vector2(cx, ry + rowH), brushMidLine, 0.95f);
-
-					if (cellW >= 24f)
-					{
-						if (r == 0)
-						{
-							if (ratioSignal > 0)
-								RenderTarget.DrawText("Buy", tfGrid, cRect, brushDeltaPos);
-							else if (ratioSignal < 0)
-								RenderTarget.DrawText("Sell", tfGrid, cRect, brushDeltaNeg);
-							else
-								RenderTarget.DrawText("-", tfGrid, cRect, brushDim);
-						}
-						else
-						{
-							SolidColorBrush txtB = brushDim;
-							if (r == 1 || r == 6) txtB = brushDeltaPos;
-							else if (r == 2 || r == 5) txtB = brushDeltaNeg;
-							else if (r == 3 || r == 4) txtB = brushWhite;
-
-							string s = FormatClusterNumber(vals[r]);
-							if ((r == 3 || r == 4) && vals[r] > 0) s = "+" + s;
-							RenderTarget.DrawText(s, tfGrid, cRect, txtB);
-						}
-					}
-				}
-
-				// Outer column box around the bar's statistic cells aligned with the Candle Box above
-				RenderTarget.DrawRectangle(new RectangleF(cellLeft, gridTopY, cellW, totalH), brushOuterBorder, 1.15f);
-			}
-
-			// Draw Left Legend Column on top so it never gets overlapped by scrolling bars
-			var legendRect = new RectangleF(panelX, gridTopY, legendW, totalH + 4f);
-			RenderTarget.FillRectangle(legendRect, brushLegendBg);
-			RenderTarget.DrawRectangle(legendRect, brushOuterBorder, 1.2f);
-
-			for (int r = 0; r < labels.Length; r++)
-			{
-				float ry = gridTopY + r * rowH;
-				var lRect = new RectangleF(panelX + 6f, ry, legendW - 8f, rowH);
-				RenderTarget.DrawLine(new Vector2(panelX, ry + rowH), new Vector2(panelX + legendW, ry + rowH), brushBorder, 0.8f);
-				RenderTarget.DrawText(labels[r], tfLegend, lRect, r == 0 ? brushDeltaPos : brushWhite);
-			}
-		}
-
 		private string FormatOrderflowPrice(double val)
 		{
 			double tick = TickSize > 0 ? TickSize : 0.05;
@@ -2863,71 +3605,101 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return val.ToString("0.##", CultureInfo.InvariantCulture);
 		}
 
-		private void RenderInteractiveHeaderBar(float panelX, float panelY, float barSpacing, float effectiveStep)
+		private void RenderSleekTopToolbar(float panelX, float panelY, float barSpacing, float effectiveStep, bool isCandlestickZoom)
 		{
+			for (int i = 0; i < toolbarBtnRects.Length; i++)
+				toolbarBtnRects[i] = default(RectangleF);
+
 			bool isAccelpix = (EffectiveDataFeed == AK10XOrderflowDataFeed.Accelpix);
-			string feedTag = isAccelpix ? "ACCELPIX" : "NINJATRADER";
-			string feedBtnLabel = isAccelpix ? "Feed: Accelpix ▾" : "Feed: NT8 Feed ▾";
-			double livePx = lastTradePrice > 0 ? lastTradePrice : (double.IsNaN(lastComputedLastClose) ? 0.0 : lastComputedLastClose);
-			string ltpStr = livePx > 0 ? ("  •  LTP: " + FormatOrderflowPrice(livePx)) : "";
-			string headerText = string.Format(CultureInfo.InvariantCulture,
-				"⚡ AK10X Indian Orderflow  •  {0}{1}  •  Step: {2} ({3})",
-				feedTag, ltpStr, FormatOrderflowPrice(effectiveStep), runtimeAutoStep ? "Auto" : (runtimeTicksPerLevel + "T"));
+			string feedShort = isAccelpix ? "Accelpix ▾" : "NT8 Feed ▾";
+			string stepLabel = runtimeAutoStep ? ("Auto " + FormatOrderflowPrice(effectiveStep)) : ("Step " + FormatOrderflowPrice(effectiveStep));
+			string viewToggleLabel = isCandlestickZoom ? "Candle ▸ OF" : "OF ▸ Candle";
+			string themeLabel = runtimeLightTheme ? "White" : "Dark";
 
 			var hdrDw = NinjaTrader.Core.Globals.DirectWriteFactory;
-			using (var tfHeader = new TextFormat(hdrDw, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 10.5f))
-			using (var tfBtn = new TextFormat(hdrDw, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 9.8f))
-			using (var bgBrush = new SolidColorBrush(RenderTarget, new Color4(0.06f, 0.09f, 0.14f, 0.92f)))
-			using (var borderBrush = new SolidColorBrush(RenderTarget, new Color4(0.0f, 0.90f, 0.46f, 0.75f)))
-			using (var feedBorderBrush = new SolidColorBrush(RenderTarget, isAccelpix ? new Color4(0.0f, 0.92f, 0.52f, 0.95f) : new Color4(0.28f, 0.78f, 1.0f, 0.95f)))
-			using (var feedActiveBg = new SolidColorBrush(RenderTarget, isAccelpix ? new Color4(0.04f, 0.44f, 0.28f, 0.96f) : new Color4(0.08f, 0.34f, 0.56f, 0.96f)))
-			using (var hoverBorderBrush = new SolidColorBrush(RenderTarget, new Color4(0.22f, 0.78f, 1.0f, 1.0f)))
-			using (var goldBrush = new SolidColorBrush(RenderTarget, new Color4(1.0f, 0.78f, 0.15f, 1.0f)))
-			using (var btnBg = new SolidColorBrush(RenderTarget, new Color4(0.14f, 0.20f, 0.30f, 0.95f)))
-			using (var btnHoverBg = new SolidColorBrush(RenderTarget, new Color4(0.18f, 0.34f, 0.52f, 0.98f)))
-			using (var btnActiveBg = new SolidColorBrush(RenderTarget, new Color4(0.04f, 0.42f, 0.26f, 0.95f)))
-			using (var whiteBrush = new SolidColorBrush(RenderTarget, new Color4(0.96f, 0.98f, 1.0f, 1.0f)))
+			using (var tfBrand = new TextFormat(hdrDw, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 10.6f))
+			using (var tfBtn = new TextFormat(hdrDw, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 10.0f))
+			using (var barBg = new SolidColorBrush(RenderTarget, runtimeLightTheme ? new Color4(0.95f, 0.96f, 0.98f, 0.96f) : new Color4(0.06f, 0.085f, 0.13f, 0.96f)))
+			using (var barBorder = new SolidColorBrush(RenderTarget, runtimeLightTheme ? new Color4(0.75f, 0.80f, 0.86f, 0.95f) : new Color4(0.26f, 0.35f, 0.48f, 0.90f)))
+			using (var brandBrush = new SolidColorBrush(RenderTarget, new Color4(0.031f, 0.600f, 0.506f, 1.0f)))
+			using (var btnBg = new SolidColorBrush(RenderTarget, runtimeLightTheme ? new Color4(1.0f, 1.0f, 1.0f, 0.98f) : new Color4(0.12f, 0.17f, 0.25f, 0.98f)))
+			using (var btnHoverBg = new SolidColorBrush(RenderTarget, runtimeLightTheme ? new Color4(0.88f, 0.93f, 0.98f, 1.0f) : new Color4(0.20f, 0.30f, 0.45f, 1.0f)))
+			using (var btnActiveBg = new SolidColorBrush(RenderTarget, new Color4(0.031f, 0.600f, 0.506f, 1.0f)))
+			using (var btnBorder = new SolidColorBrush(RenderTarget, runtimeLightTheme ? new Color4(0.75f, 0.80f, 0.86f, 0.95f) : new Color4(0.28f, 0.38f, 0.52f, 0.85f)))
+			using (var btnHoverBorder = new SolidColorBrush(RenderTarget, new Color4(0.031f, 0.600f, 0.506f, 1.0f)))
+			using (var fgActive = new SolidColorBrush(RenderTarget, new Color4(1.0f, 1.0f, 1.0f, 1.0f)))
+			using (var fgInactive = new SolidColorBrush(RenderTarget, runtimeLightTheme ? new Color4(0.15f, 0.20f, 0.28f, 1.0f) : new Color4(0.95f, 0.97f, 1.0f, 1.0f)))
 			{
-				tfHeader.ParagraphAlignment = ParagraphAlignment.Center;
-				tfHeader.WordWrapping = WordWrapping.NoWrap;
+				tfBrand.ParagraphAlignment = ParagraphAlignment.Center;
+				tfBrand.WordWrapping = WordWrapping.NoWrap;
 				tfBtn.TextAlignment = SharpDX.DirectWrite.TextAlignment.Center;
 				tfBtn.ParagraphAlignment = ParagraphAlignment.Center;
+				tfBtn.WordWrapping = WordWrapping.NoWrap;
 
 				float boxX = panelX + 8f;
 				float boxY = panelY + 6f;
-				float availW = ChartPanel != null ? Math.Max(420f, ChartPanel.W - 20f) : 582f;
-				float boxW = Math.Min(availW, 582f);
-				float boxH = 48f;
+				float bh = 23f;
+				float padY = 4.5f;
 
-				var pillRect = new RectangleF(boxX, boxY, boxW, boxH);
-				RenderTarget.FillRectangle(pillRect, bgBrush);
-				RenderTarget.DrawRectangle(pillRect, borderBrush, 1.0f);
+				bool wrapTwoRows = (ChartPanel != null && ChartPanel.W < 895f);
+				float boxH = wrapTwoRows ? 58f : 32f;
+				float boxW = wrapTwoRows ? Math.Min(ChartPanel.W - 16f, 548f) : Math.Min(ChartPanel != null ? ChartPanel.W - 16f : 888f, 888f);
 
-				var titleRect = new RectangleF(boxX + 8f, boxY + 2f, boxW - 16f, 20f);
-				RenderTarget.DrawText(headerText, tfHeader, titleRect, goldBrush);
+				var barRr = new RoundedRectangle { Rect = new RectangleF(boxX, boxY, boxW, boxH), RadiusX = 5f, RadiusY = 5f };
+				RenderTarget.FillRoundedRectangle(barRr, barBg);
+				RenderTarget.DrawRoundedRectangle(barRr, barBorder, 1.0f);
 
-				float bx = boxX + 8f;
-				float by = boxY + 24f;
-				float bh = 19f;
+				float cx = boxX + 10f;
+				float cy = boxY + padY;
 
-				btnStepMinusRect = DrawMiniBtn(bx, by, 44f, bh, "Step -", false, hoveredToolbarBtnIndex == 0, tfBtn, btnBg, btnHoverBg, btnActiveBg, borderBrush, hoverBorderBrush, whiteBrush);
-				bx += 48f;
-				btnStepPlusRect = DrawMiniBtn(bx, by, 44f, bh, "Step +", false, hoveredToolbarBtnIndex == 1, tfBtn, btnBg, btnHoverBg, btnActiveBg, borderBrush, hoverBorderBrush, whiteBrush);
-				bx += 48f;
-				btnAutoStepRect = DrawMiniBtn(bx, by, 44f, bh, "Auto", runtimeAutoStep, hoveredToolbarBtnIndex == 2, tfBtn, btnBg, btnHoverBg, btnActiveBg, borderBrush, hoverBorderBrush, whiteBrush);
-				bx += 48f;
-				btnWidthMinusRect = DrawMiniBtn(bx, by, 48f, bh, "Zoom -", false, hoveredToolbarBtnIndex == 3, tfBtn, btnBg, btnHoverBg, btnActiveBg, borderBrush, hoverBorderBrush, whiteBrush);
-				bx += 52f;
-				btnWidthPlusRect = DrawMiniBtn(bx, by, 48f, bh, "Zoom +", false, hoveredToolbarBtnIndex == 4, tfBtn, btnBg, btnHoverBg, btnActiveBg, borderBrush, hoverBorderBrush, whiteBrush);
-				bx += 52f;
-				btnGridToggleRect = DrawMiniBtn(bx, by, 44f, bh, "Grid", runtimeShowStatGrid, hoveredToolbarBtnIndex == 5, tfBtn, btnBg, btnHoverBg, btnActiveBg, borderBrush, hoverBorderBrush, whiteBrush);
-				bx += 48f;
-				btnZonesToggleRect = DrawMiniBtn(bx, by, 46f, bh, "Zones", runtimeShowImbZones, hoveredToolbarBtnIndex == 6, tfBtn, btnBg, btnHoverBg, btnActiveBg, borderBrush, hoverBorderBrush, whiteBrush);
-				bx += 50f;
-				btnReloadLiveRect = DrawMiniBtn(bx, by, 62f, bh, "Live Sync", true, hoveredToolbarBtnIndex == 7, tfBtn, btnBg, btnHoverBg, btnActiveBg, borderBrush, hoverBorderBrush, whiteBrush);
-				bx += 66f;
-				float feedBtnW = Math.Max(78f, Math.Min(108f, (boxX + boxW - 6f) - bx));
-				btnFeedToggleRect = DrawMiniBtn(bx, by, feedBtnW, bh, feedBtnLabel, true, hoveredToolbarBtnIndex == 8, tfBtn, btnBg, btnHoverBg, feedActiveBg, feedBorderBrush, hoverBorderBrush, whiteBrush);
+				RenderTarget.DrawText("AK10X OF", tfBrand, new RectangleF(cx, cy, 64f, bh), brandBrush);
+				cx += 66f;
+
+				bool act0 = !isCandlestickZoom && runtimeOrderflowMode == AK10XOrderflowMode.VolumeFootprint;
+				toolbarBtnRects[0] = DrawPillBtn(cx, cy, 68f, bh, "Footprint", act0, hoveredToolbarBtnIndex == 0, tfBtn, btnBg, btnHoverBg, btnActiveBg, btnBorder, btnHoverBorder, act0 ? fgActive : fgInactive);
+				cx += 72f;
+
+				bool act1 = !isCandlestickZoom && runtimeOrderflowMode == AK10XOrderflowMode.Imbalance;
+				toolbarBtnRects[1] = DrawPillBtn(cx, cy, 68f, bh, "Imbalance", act1, hoveredToolbarBtnIndex == 1, tfBtn, btnBg, btnHoverBg, btnActiveBg, btnBorder, btnHoverBorder, act1 ? fgActive : fgInactive);
+				cx += 72f;
+
+				bool act2 = !isCandlestickZoom && runtimeOrderflowMode == AK10XOrderflowMode.Delta;
+				toolbarBtnRects[2] = DrawPillBtn(cx, cy, 50f, bh, "Delta", act2, hoveredToolbarBtnIndex == 2, tfBtn, btnBg, btnHoverBg, btnActiveBg, btnBorder, btnHoverBorder, act2 ? fgActive : fgInactive);
+				cx += 54f;
+
+				bool act3 = !isCandlestickZoom && runtimeOrderflowMode == AK10XOrderflowMode.TotalVolume;
+				toolbarBtnRects[3] = DrawPillBtn(cx, cy, 58f, bh, "Volume", act3, hoveredToolbarBtnIndex == 3, tfBtn, btnBg, btnHoverBg, btnActiveBg, btnBorder, btnHoverBorder, act3 ? fgActive : fgInactive);
+				cx += 62f;
+
+				toolbarBtnRects[12] = DrawPillBtn(cx, cy, 26f, bh, "Z-", false, hoveredToolbarBtnIndex == 12, tfBtn, btnBg, btnHoverBg, btnActiveBg, btnBorder, btnHoverBorder, fgInactive);
+				cx += 29f;
+				toolbarBtnRects[4] = DrawPillBtn(cx, cy, 80f, bh, viewToggleLabel, isCandlestickZoom, hoveredToolbarBtnIndex == 4, tfBtn, btnBg, btnHoverBg, btnActiveBg, btnBorder, btnHoverBorder, isCandlestickZoom ? fgActive : fgInactive);
+				cx += 83f;
+				toolbarBtnRects[13] = DrawPillBtn(cx, cy, 26f, bh, "Z+", false, hoveredToolbarBtnIndex == 13, tfBtn, btnBg, btnHoverBg, btnActiveBg, btnBorder, btnHoverBorder, fgInactive);
+				cx += 32f;
+
+				if (wrapTwoRows)
+				{
+					cx = boxX + 10f;
+					cy = boxY + 30f;
+				}
+
+				toolbarBtnRects[5] = DrawPillBtn(cx, cy, 24f, bh, "-", false, hoveredToolbarBtnIndex == 5, tfBtn, btnBg, btnHoverBg, btnActiveBg, btnBorder, btnHoverBorder, fgInactive);
+				cx += 27f;
+				toolbarBtnRects[6] = DrawPillBtn(cx, cy, 74f, bh, stepLabel, runtimeAutoStep, hoveredToolbarBtnIndex == 6, tfBtn, btnBg, btnHoverBg, btnActiveBg, btnBorder, btnHoverBorder, runtimeAutoStep ? fgActive : fgInactive);
+				cx += 77f;
+				toolbarBtnRects[7] = DrawPillBtn(cx, cy, 24f, bh, "+", false, hoveredToolbarBtnIndex == 7, tfBtn, btnBg, btnHoverBg, btnActiveBg, btnBorder, btnHoverBorder, fgInactive);
+				cx += 30f;
+
+				toolbarBtnRects[14] = DrawPillBtn(cx, cy, 36f, bh, "HP", runtimeShowHalfpack, hoveredToolbarBtnIndex == 14, tfBtn, btnBg, btnHoverBg, btnActiveBg, btnBorder, btnHoverBorder, runtimeShowHalfpack ? fgActive : fgInactive);
+				cx += 40f;
+				toolbarBtnRects[8] = DrawPillBtn(cx, cy, 46f, bh, "Zones", runtimeShowImbZones, hoveredToolbarBtnIndex == 8, tfBtn, btnBg, btnHoverBg, btnActiveBg, btnBorder, btnHoverBorder, runtimeShowImbZones ? fgActive : fgInactive);
+				cx += 50f;
+				toolbarBtnRects[9] = DrawPillBtn(cx, cy, 46f, bh, "Delta", runtimeShowStatGrid, hoveredToolbarBtnIndex == 9, tfBtn, btnBg, btnHoverBg, btnActiveBg, btnBorder, btnHoverBorder, runtimeShowStatGrid ? fgActive : fgInactive);
+				cx += 50f;
+				toolbarBtnRects[10] = DrawPillBtn(cx, cy, 46f, bh, themeLabel, runtimeLightTheme, hoveredToolbarBtnIndex == 10, tfBtn, btnBg, btnHoverBg, btnActiveBg, btnBorder, btnHoverBorder, runtimeLightTheme ? fgActive : fgInactive);
+				cx += 50f;
+				toolbarBtnRects[11] = DrawPillBtn(cx, cy, 76f, bh, feedShort, true, hoveredToolbarBtnIndex == 11, tfBtn, btnBg, btnHoverBg, btnActiveBg, btnBorder, btnHoverBorder, fgActive);
 			}
 		}
 
@@ -2945,46 +3717,63 @@ namespace NinjaTrader.NinjaScript.Indicators
 					return;
 
 				string sym = Instrument != null ? Instrument.FullName : "Instrument";
-				using (var bgBrush = new SolidColorBrush(RenderTarget, new Color4(0.071f, 0.086f, 0.114f, 1.0f)))
-				using (var pillBg = new SolidColorBrush(RenderTarget, new Color4(0.09f, 0.13f, 0.20f, 0.96f)))
-				using (var pillBorder = new SolidColorBrush(RenderTarget, new Color4(0.0f, 0.88f, 0.48f, 0.72f)))
-				using (var txtBrush = new SolidColorBrush(RenderTarget, new Color4(0.92f, 0.96f, 1.0f, 0.96f)))
-				using (var tf = new TextFormat(NinjaTrader.Core.Globals.DirectWriteFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.SemiBold, SharpDX.DirectWrite.FontStyle.Normal, 12.5f))
+				using (var bgBrush = new SolidColorBrush(RenderTarget, new Color4(0.055f, 0.075f, 0.105f, 1.0f)))
+				using (var pillBg = new SolidColorBrush(RenderTarget, new Color4(0.08f, 0.12f, 0.18f, 0.96f)))
+				using (var pillBorder = new SolidColorBrush(RenderTarget, new Color4(0.031f, 0.600f, 0.506f, 0.80f)))
+				using (var txtBrush = new SolidColorBrush(RenderTarget, new Color4(0.96f, 0.98f, 1.0f, 1.0f)))
+				using (var tf = new TextFormat(NinjaTrader.Core.Globals.DirectWriteFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 12.5f))
 				{
 					RenderTarget.FillRectangle(new RectangleF(px, py, pw, ph), bgBrush);
 					tf.TextAlignment = SharpDX.DirectWrite.TextAlignment.Center;
 					tf.ParagraphAlignment = ParagraphAlignment.Center;
-					float bw = Math.Min(360f, pw - 32f);
+					float bw = Math.Min(340f, pw - 32f);
 					float bh = 36f;
 					var badgeRect = new RectangleF(px + (pw - bw) * 0.5f, py + (ph - bh) * 0.5f, bw, bh);
-					var rr = new RoundedRectangle { Rect = badgeRect, RadiusX = 6f, RadiusY = 6f };
+					var rr = new RoundedRectangle { Rect = badgeRect, RadiusX = 5f, RadiusY = 5f };
 					RenderTarget.FillRoundedRectangle(rr, pillBg);
-					RenderTarget.DrawRoundedRectangle(rr, pillBorder, 1.0f);
-					RenderTarget.DrawText("⚡ Loading Orderflow Footprint — " + sym + "...", tf, badgeRect, txtBrush);
+					RenderTarget.DrawRoundedRectangle(rr, pillBorder, 1.1f);
+					RenderTarget.DrawText("Loading Orderflow — " + sym + "...", tf, badgeRect, txtBrush);
 				}
 			}
 			catch { }
 		}
 
-		private RectangleF DrawMiniBtn(
+		private RectangleF DrawPillBtn(
 			float x, float y, float w, float h, string text, bool active, bool hovered,
 			TextFormat tf, SolidColorBrush bg, SolidColorBrush hoverBg, SolidColorBrush activeBg,
 			SolidColorBrush border, SolidColorBrush hoverBorder, SolidColorBrush fg)
 		{
 			var r = new RectangleF(x, y, w, h);
-			RenderTarget.FillRectangle(r, hovered ? hoverBg : (active ? activeBg : bg));
-			RenderTarget.DrawRectangle(r, hovered ? hoverBorder : border, hovered ? 1.2f : 0.8f);
+			var rr = new RoundedRectangle { Rect = r, RadiusX = 3.5f, RadiusY = 3.5f };
+			RenderTarget.FillRoundedRectangle(rr, hovered ? hoverBg : (active ? activeBg : bg));
+			RenderTarget.DrawRoundedRectangle(rr, hovered ? hoverBorder : border, hovered ? 1.25f : 0.9f);
 			RenderTarget.DrawText(text, tf, r, fg);
 			return r;
 		}
 
-		private static string FormatClusterNumber(long val)
+		/// <summary>
+		/// GoCharting compact footprint volume format: 0, 450, 750, 1.2K, 5.9K, 14.2K
+		/// </summary>
+		private static string FormatGoChartingVol(long val)
 		{
 			long abs = Math.Abs(val);
 			if (abs >= 1000000)
-				return (val / 1000000.0).ToString("0.0M", CultureInfo.InvariantCulture);
-			if (abs >= 10000)
+				return (val / 1000000.0).ToString("0.#M", CultureInfo.InvariantCulture);
+			if (abs >= 1000)
 				return (val / 1000.0).ToString("0.#K", CultureInfo.InvariantCulture);
+			return val.ToString(CultureInfo.InvariantCulture);
+		}
+
+		/// <summary>
+		/// GoCharting bottom Delta Strip format: 195, -465, 4.68K, 35.04K, -12.42K
+		/// </summary>
+		private static string FormatGoChartingDeltaStrip(long val)
+		{
+			long abs = Math.Abs(val);
+			if (abs >= 1000000)
+				return (val / 1000000.0).ToString("0.##M", CultureInfo.InvariantCulture);
+			if (abs >= 1000)
+				return (val / 1000.0).ToString("0.##K", CultureInfo.InvariantCulture);
 			return val.ToString(CultureInfo.InvariantCulture);
 		}
 		#endregion
@@ -2998,18 +3787,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
 	{
 		private AK10XIndianOrderflow[] cacheAK10XIndianOrderflow;
-		public AK10XIndianOrderflow AK10XIndianOrderflow(AK10XOrderflowDataFeed dataFeed, int ticksPerLevel, bool autoScalePriceStep, int barSpacePx, bool showBarPOC, bool showBarVA, int barVAPercentage, bool showSessionVA, bool showImbalance, double imbalancePercentage, int imbalanceFilter, bool showImbalanceSRZones, int imbalanceSRConsecutiveLevels, bool showBarDelta, bool showStatisticGrid)
+		public AK10XIndianOrderflow AK10XIndianOrderflow(AK10XOrderflowDataFeed dataFeed, AK10XOrderflowMode footprintMode, int candlestickZoomThresholdPx, bool useLightTheme, int ticksPerLevel, bool autoScalePriceStep, int barSpacePx, bool showBarPOC, bool showHalfpack, bool showBarVA, int barVAPercentage, bool showSessionVA, bool showImbalance, double imbalancePercentage, int imbalanceFilter, bool showImbalanceSRZones, int imbalanceSRConsecutiveLevels, bool showBarDelta, bool showStatisticGrid, int momentumMaxWickPct)
 		{
-			return AK10XIndianOrderflow(Input, dataFeed, ticksPerLevel, autoScalePriceStep, barSpacePx, showBarPOC, showBarVA, barVAPercentage, showSessionVA, showImbalance, imbalancePercentage, imbalanceFilter, showImbalanceSRZones, imbalanceSRConsecutiveLevels, showBarDelta, showStatisticGrid);
+			return AK10XIndianOrderflow(Input, dataFeed, footprintMode, candlestickZoomThresholdPx, useLightTheme, ticksPerLevel, autoScalePriceStep, barSpacePx, showBarPOC, showHalfpack, showBarVA, barVAPercentage, showSessionVA, showImbalance, imbalancePercentage, imbalanceFilter, showImbalanceSRZones, imbalanceSRConsecutiveLevels, showBarDelta, showStatisticGrid, momentumMaxWickPct);
 		}
 
-		public AK10XIndianOrderflow AK10XIndianOrderflow(ISeries<double> input, AK10XOrderflowDataFeed dataFeed, int ticksPerLevel, bool autoScalePriceStep, int barSpacePx, bool showBarPOC, bool showBarVA, int barVAPercentage, bool showSessionVA, bool showImbalance, double imbalancePercentage, int imbalanceFilter, bool showImbalanceSRZones, int imbalanceSRConsecutiveLevels, bool showBarDelta, bool showStatisticGrid)
+		public AK10XIndianOrderflow AK10XIndianOrderflow(ISeries<double> input, AK10XOrderflowDataFeed dataFeed, AK10XOrderflowMode footprintMode, int candlestickZoomThresholdPx, bool useLightTheme, int ticksPerLevel, bool autoScalePriceStep, int barSpacePx, bool showBarPOC, bool showHalfpack, bool showBarVA, int barVAPercentage, bool showSessionVA, bool showImbalance, double imbalancePercentage, int imbalanceFilter, bool showImbalanceSRZones, int imbalanceSRConsecutiveLevels, bool showBarDelta, bool showStatisticGrid, int momentumMaxWickPct)
 		{
 			if (cacheAK10XIndianOrderflow != null)
 				for (int idx = 0; idx < cacheAK10XIndianOrderflow.Length; idx++)
-					if (cacheAK10XIndianOrderflow[idx] != null && cacheAK10XIndianOrderflow[idx].DataFeed == dataFeed && cacheAK10XIndianOrderflow[idx].TicksPerLevel == ticksPerLevel && cacheAK10XIndianOrderflow[idx].AutoScalePriceStep == autoScalePriceStep && cacheAK10XIndianOrderflow[idx].BarSpacePx == barSpacePx && cacheAK10XIndianOrderflow[idx].ShowBarPOC == showBarPOC && cacheAK10XIndianOrderflow[idx].ShowBarVA == showBarVA && cacheAK10XIndianOrderflow[idx].BarVAPercentage == barVAPercentage && cacheAK10XIndianOrderflow[idx].ShowSessionVA == showSessionVA && cacheAK10XIndianOrderflow[idx].ShowImbalance == showImbalance && cacheAK10XIndianOrderflow[idx].ImbalancePercentage == imbalancePercentage && cacheAK10XIndianOrderflow[idx].ImbalanceFilter == imbalanceFilter && cacheAK10XIndianOrderflow[idx].ShowImbalanceSRZones == showImbalanceSRZones && cacheAK10XIndianOrderflow[idx].ImbalanceSRConsecutiveLevels == imbalanceSRConsecutiveLevels && cacheAK10XIndianOrderflow[idx].ShowBarDelta == showBarDelta && cacheAK10XIndianOrderflow[idx].ShowStatisticGrid == showStatisticGrid && cacheAK10XIndianOrderflow[idx].EqualsInput(input))
+					if (cacheAK10XIndianOrderflow[idx] != null && cacheAK10XIndianOrderflow[idx].DataFeed == dataFeed && cacheAK10XIndianOrderflow[idx].FootprintMode == footprintMode && cacheAK10XIndianOrderflow[idx].CandlestickZoomThresholdPx == candlestickZoomThresholdPx && cacheAK10XIndianOrderflow[idx].UseLightTheme == useLightTheme && cacheAK10XIndianOrderflow[idx].TicksPerLevel == ticksPerLevel && cacheAK10XIndianOrderflow[idx].AutoScalePriceStep == autoScalePriceStep && cacheAK10XIndianOrderflow[idx].BarSpacePx == barSpacePx && cacheAK10XIndianOrderflow[idx].ShowBarPOC == showBarPOC && cacheAK10XIndianOrderflow[idx].ShowHalfpack == showHalfpack && cacheAK10XIndianOrderflow[idx].ShowBarVA == showBarVA && cacheAK10XIndianOrderflow[idx].BarVAPercentage == barVAPercentage && cacheAK10XIndianOrderflow[idx].ShowSessionVA == showSessionVA && cacheAK10XIndianOrderflow[idx].ShowImbalance == showImbalance && cacheAK10XIndianOrderflow[idx].ImbalancePercentage == imbalancePercentage && cacheAK10XIndianOrderflow[idx].ImbalanceFilter == imbalanceFilter && cacheAK10XIndianOrderflow[idx].ShowImbalanceSRZones == showImbalanceSRZones && cacheAK10XIndianOrderflow[idx].ImbalanceSRConsecutiveLevels == imbalanceSRConsecutiveLevels && cacheAK10XIndianOrderflow[idx].ShowBarDelta == showBarDelta && cacheAK10XIndianOrderflow[idx].ShowStatisticGrid == showStatisticGrid && cacheAK10XIndianOrderflow[idx].MomentumMaxWickPct == momentumMaxWickPct && cacheAK10XIndianOrderflow[idx].EqualsInput(input))
 						return cacheAK10XIndianOrderflow[idx];
-			return CacheIndicator<AK10XIndianOrderflow>(new AK10XIndianOrderflow(){ DataFeed = dataFeed, TicksPerLevel = ticksPerLevel, AutoScalePriceStep = autoScalePriceStep, BarSpacePx = barSpacePx, ShowBarPOC = showBarPOC, ShowBarVA = showBarVA, BarVAPercentage = barVAPercentage, ShowSessionVA = showSessionVA, ShowImbalance = showImbalance, ImbalancePercentage = imbalancePercentage, ImbalanceFilter = imbalanceFilter, ShowImbalanceSRZones = showImbalanceSRZones, ImbalanceSRConsecutiveLevels = imbalanceSRConsecutiveLevels, ShowBarDelta = showBarDelta, ShowStatisticGrid = showStatisticGrid }, input, ref cacheAK10XIndianOrderflow);
+			return CacheIndicator<AK10XIndianOrderflow>(new AK10XIndianOrderflow(){ DataFeed = dataFeed, FootprintMode = footprintMode, CandlestickZoomThresholdPx = candlestickZoomThresholdPx, UseLightTheme = useLightTheme, TicksPerLevel = ticksPerLevel, AutoScalePriceStep = autoScalePriceStep, BarSpacePx = barSpacePx, ShowBarPOC = showBarPOC, ShowHalfpack = showHalfpack, ShowBarVA = showBarVA, BarVAPercentage = barVAPercentage, ShowSessionVA = showSessionVA, ShowImbalance = showImbalance, ImbalancePercentage = imbalancePercentage, ImbalanceFilter = imbalanceFilter, ShowImbalanceSRZones = showImbalanceSRZones, ImbalanceSRConsecutiveLevels = imbalanceSRConsecutiveLevels, ShowBarDelta = showBarDelta, ShowStatisticGrid = showStatisticGrid, MomentumMaxWickPct = momentumMaxWickPct }, input, ref cacheAK10XIndianOrderflow);
 		}
 	}
 }
@@ -3018,14 +3807,14 @@ namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
 {
 	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
 	{
-		public Indicators.AK10XIndianOrderflow AK10XIndianOrderflow(Indicators.AK10XOrderflowDataFeed dataFeed, int ticksPerLevel, bool autoScalePriceStep, int barSpacePx, bool showBarPOC, bool showBarVA, int barVAPercentage, bool showSessionVA, bool showImbalance, double imbalancePercentage, int imbalanceFilter, bool showImbalanceSRZones, int imbalanceSRConsecutiveLevels, bool showBarDelta, bool showStatisticGrid)
+		public Indicators.AK10XIndianOrderflow AK10XIndianOrderflow(Indicators.AK10XOrderflowDataFeed dataFeed, Indicators.AK10XOrderflowMode footprintMode, int candlestickZoomThresholdPx, bool useLightTheme, int ticksPerLevel, bool autoScalePriceStep, int barSpacePx, bool showBarPOC, bool showHalfpack, bool showBarVA, int barVAPercentage, bool showSessionVA, bool showImbalance, double imbalancePercentage, int imbalanceFilter, bool showImbalanceSRZones, int imbalanceSRConsecutiveLevels, bool showBarDelta, bool showStatisticGrid, int momentumMaxWickPct)
 		{
-			return indicator.AK10XIndianOrderflow(Input, dataFeed, ticksPerLevel, autoScalePriceStep, barSpacePx, showBarPOC, showBarVA, barVAPercentage, showSessionVA, showImbalance, imbalancePercentage, imbalanceFilter, showImbalanceSRZones, imbalanceSRConsecutiveLevels, showBarDelta, showStatisticGrid);
+			return indicator.AK10XIndianOrderflow(Input, dataFeed, footprintMode, candlestickZoomThresholdPx, useLightTheme, ticksPerLevel, autoScalePriceStep, barSpacePx, showBarPOC, showHalfpack, showBarVA, barVAPercentage, showSessionVA, showImbalance, imbalancePercentage, imbalanceFilter, showImbalanceSRZones, imbalanceSRConsecutiveLevels, showBarDelta, showStatisticGrid, momentumMaxWickPct);
 		}
 
-		public Indicators.AK10XIndianOrderflow AK10XIndianOrderflow(ISeries<double> input , Indicators.AK10XOrderflowDataFeed dataFeed, int ticksPerLevel, bool autoScalePriceStep, int barSpacePx, bool showBarPOC, bool showBarVA, int barVAPercentage, bool showSessionVA, bool showImbalance, double imbalancePercentage, int imbalanceFilter, bool showImbalanceSRZones, int imbalanceSRConsecutiveLevels, bool showBarDelta, bool showStatisticGrid)
+		public Indicators.AK10XIndianOrderflow AK10XIndianOrderflow(ISeries<double> input, Indicators.AK10XOrderflowDataFeed dataFeed, Indicators.AK10XOrderflowMode footprintMode, int candlestickZoomThresholdPx, bool useLightTheme, int ticksPerLevel, bool autoScalePriceStep, int barSpacePx, bool showBarPOC, bool showHalfpack, bool showBarVA, int barVAPercentage, bool showSessionVA, bool showImbalance, double imbalancePercentage, int imbalanceFilter, bool showImbalanceSRZones, int imbalanceSRConsecutiveLevels, bool showBarDelta, bool showStatisticGrid, int momentumMaxWickPct)
 		{
-			return indicator.AK10XIndianOrderflow(input, dataFeed, ticksPerLevel, autoScalePriceStep, barSpacePx, showBarPOC, showBarVA, barVAPercentage, showSessionVA, showImbalance, imbalancePercentage, imbalanceFilter, showImbalanceSRZones, imbalanceSRConsecutiveLevels, showBarDelta, showStatisticGrid);
+			return indicator.AK10XIndianOrderflow(input, dataFeed, footprintMode, candlestickZoomThresholdPx, useLightTheme, ticksPerLevel, autoScalePriceStep, barSpacePx, showBarPOC, showHalfpack, showBarVA, barVAPercentage, showSessionVA, showImbalance, imbalancePercentage, imbalanceFilter, showImbalanceSRZones, imbalanceSRConsecutiveLevels, showBarDelta, showStatisticGrid, momentumMaxWickPct);
 		}
 	}
 }
@@ -3034,14 +3823,14 @@ namespace NinjaTrader.NinjaScript.Strategies
 {
 	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
 	{
-		public Indicators.AK10XIndianOrderflow AK10XIndianOrderflow(Indicators.AK10XOrderflowDataFeed dataFeed, int ticksPerLevel, bool autoScalePriceStep, int barSpacePx, bool showBarPOC, bool showBarVA, int barVAPercentage, bool showSessionVA, bool showImbalance, double imbalancePercentage, int imbalanceFilter, bool showImbalanceSRZones, int imbalanceSRConsecutiveLevels, bool showBarDelta, bool showStatisticGrid)
+		public Indicators.AK10XIndianOrderflow AK10XIndianOrderflow(Indicators.AK10XOrderflowDataFeed dataFeed, Indicators.AK10XOrderflowMode footprintMode, int candlestickZoomThresholdPx, bool useLightTheme, int ticksPerLevel, bool autoScalePriceStep, int barSpacePx, bool showBarPOC, bool showHalfpack, bool showBarVA, int barVAPercentage, bool showSessionVA, bool showImbalance, double imbalancePercentage, int imbalanceFilter, bool showImbalanceSRZones, int imbalanceSRConsecutiveLevels, bool showBarDelta, bool showStatisticGrid, int momentumMaxWickPct)
 		{
-			return indicator.AK10XIndianOrderflow(Input, dataFeed, ticksPerLevel, autoScalePriceStep, barSpacePx, showBarPOC, showBarVA, barVAPercentage, showSessionVA, showImbalance, imbalancePercentage, imbalanceFilter, showImbalanceSRZones, imbalanceSRConsecutiveLevels, showBarDelta, showStatisticGrid);
+			return indicator.AK10XIndianOrderflow(Input, dataFeed, footprintMode, candlestickZoomThresholdPx, useLightTheme, ticksPerLevel, autoScalePriceStep, barSpacePx, showBarPOC, showHalfpack, showBarVA, barVAPercentage, showSessionVA, showImbalance, imbalancePercentage, imbalanceFilter, showImbalanceSRZones, imbalanceSRConsecutiveLevels, showBarDelta, showStatisticGrid, momentumMaxWickPct);
 		}
 
-		public Indicators.AK10XIndianOrderflow AK10XIndianOrderflow(ISeries<double> input , Indicators.AK10XOrderflowDataFeed dataFeed, int ticksPerLevel, bool autoScalePriceStep, int barSpacePx, bool showBarPOC, bool showBarVA, int barVAPercentage, bool showSessionVA, bool showImbalance, double imbalancePercentage, int imbalanceFilter, bool showImbalanceSRZones, int imbalanceSRConsecutiveLevels, bool showBarDelta, bool showStatisticGrid)
+		public Indicators.AK10XIndianOrderflow AK10XIndianOrderflow(ISeries<double> input, Indicators.AK10XOrderflowDataFeed dataFeed, Indicators.AK10XOrderflowMode footprintMode, int candlestickZoomThresholdPx, bool useLightTheme, int ticksPerLevel, bool autoScalePriceStep, int barSpacePx, bool showBarPOC, bool showHalfpack, bool showBarVA, int barVAPercentage, bool showSessionVA, bool showImbalance, double imbalancePercentage, int imbalanceFilter, bool showImbalanceSRZones, int imbalanceSRConsecutiveLevels, bool showBarDelta, bool showStatisticGrid, int momentumMaxWickPct)
 		{
-			return indicator.AK10XIndianOrderflow(input, dataFeed, ticksPerLevel, autoScalePriceStep, barSpacePx, showBarPOC, showBarVA, barVAPercentage, showSessionVA, showImbalance, imbalancePercentage, imbalanceFilter, showImbalanceSRZones, imbalanceSRConsecutiveLevels, showBarDelta, showStatisticGrid);
+			return indicator.AK10XIndianOrderflow(input, dataFeed, footprintMode, candlestickZoomThresholdPx, useLightTheme, ticksPerLevel, autoScalePriceStep, barSpacePx, showBarPOC, showHalfpack, showBarVA, barVAPercentage, showSessionVA, showImbalance, imbalancePercentage, imbalanceFilter, showImbalanceSRZones, imbalanceSRConsecutiveLevels, showBarDelta, showStatisticGrid, momentumMaxWickPct);
 		}
 	}
 }

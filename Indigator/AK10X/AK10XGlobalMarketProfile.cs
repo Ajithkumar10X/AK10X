@@ -1,6 +1,6 @@
 // AK10X Global Three-Session (Asia: 20 TPOs, London: 11 TPOs, New York: 15 TPOs = 46 TPOs) Market Profile for NinjaTrader 8.
-// Includes Buying & Selling Single Prints, Virgin Level Extensions (PoorHigh/Low, ABPoorHigh/Low, SwingHigh/Low, VPoC, VPPoC),
-// configurable From/To session times (IST), and a 2-pass non-overlapping renderer.
+// Includes Buying & Selling Single Prints, Virgin Level Extensions (PoorHigh/Low, ABPoorHigh/Low, DayHigh/Low, WeeklyHigh/Low, VPoC, VPPoC),
+// TPO-Close Virginity Break Engine, configurable From/To session times (IST), and a 2-pass non-overlapping renderer.
 #region Using declarations
 using System;
 using System.Collections.Generic;
@@ -33,6 +33,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 		Daily = 0,
 		Weekly = 1,
 		Monthly = 2
+	}
+
+	public enum VirginityBreakRuleMode
+	{
+		CrossBased = 0,
+		CloseBased = 1
 	}
 
 	public class AK10XGlobalMarketProfile : Indicator
@@ -135,7 +141,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 			ToggleProfileDropdown,
 			SelectProfileDaily,
 			SelectProfileWeekly,
-			SelectProfileMonthly
+			SelectProfileMonthly,
+			ZoomInVertical,
+			ZoomOutVertical
 		}
 
 		private struct ChartButton
@@ -241,6 +249,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private readonly HashSet<string> unmergedOverrideKeys = new HashSet<string>(StringComparer.Ordinal);
 		private readonly List<ChartButton> activeChartButtons = new List<ChartButton>();
 		private ProfileSession[] activeSessions = new ProfileSession[0];
+		private int lastHiddenChartBar = -1;
 		private int lastVolumeBarIndex = -1;
 		private double lastCumulativeVolume;
 		private double cachedPriceStep;
@@ -252,6 +261,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private System.Windows.Input.MouseButtonEventHandler mouseLeftDownHandler;
 		private int lastHandledMouseTimestamp = int.MinValue;
 		private DateTime lastButtonClickUtc = DateTime.MinValue;
+		private bool isPotentialCanvasDrag;
+		private bool isDraggingCanvas;
+		private float dragStartMouseX;
+		private float dragStartMouseY;
+		private float dragStartScrollPx;
+		private double dragStartPanOffset;
+		private float lastRenderTargetW;
+		private float lastRenderTargetH;
+		private ChartScale lastRenderedChartScale;
+		private double verticalZoomFactor = 1.0;
+		private double verticalPanPriceOffset;
+		private double lastBaseMidPrice;
+		private double lastBasePriceSpan = 10.0;
+		private float lastUsableHeightPx = 600f;
 		private bool? runtimeMinimizeTopLeftOverride;
 		private bool? runtimeMinimizeSummaryOverride;
 		private MarketProfilePeriodMode? runtimeProfileModeOverride;
@@ -299,6 +322,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				IsSuspendedWhileInactive = false;
 
 				TpoSize = 0;
+				AutoScaleTpoByScreenResolution = false;
 				TpoIntervalMinutes = 30;
 				ValueAreaPercent = 70;
 				InitialBalanceMinutes = 60;
@@ -335,10 +359,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 				MarketClose = 153000;
 				SessionLabel = "NSE Cash";
 
+				VirginityBreakRule = VirginityBreakRuleMode.CrossBased;
 				ShowPoorHigh = true;
 				ShowPoorLow = true;
 				ShowSwingHigh = true;
 				ShowSwingLow = true;
+				ShowWeeklyHigh = true;
+				ShowWeeklyLow = true;
 				ShowVirginVAH = true;
 				ShowVirginVAL = true;
 				ShowVirginVPoC = true;
@@ -357,6 +384,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ShowPoorHighLow = true;
 				ShowSummary = true;
 				FixSummaryBoxAtBottom = true;
+				FixSessionHeaderAtTop = true;
 				MinimizeSummaryBoxes = false;
 				ShowTopLeftBox = true;
 				ShowLogoInTopBox = true;
@@ -384,6 +412,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					unmergedOverrideKeys.Clear();
 					activeChartButtons.Clear();
 					activeSessions = GetProfileSessions();
+					lastHiddenChartBar = -1;
 					lastVolumeBarIndex = -1;
 					lastCumulativeVolume = 0;
 					cachedPriceStep = 0;
@@ -518,9 +547,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 					if (hookedChartControl != null)
 					{
 						hookedChartControl.RemoveHandler(System.Windows.UIElement.PreviewMouseLeftButtonDownEvent, mouseLeftDownHandler);
+						hookedChartControl.PreviewMouseMove -= OnChartPreviewMouseMove;
+						hookedChartControl.PreviewMouseLeftButtonUp -= OnChartPreviewMouseLeftButtonUp;
+						hookedChartControl.PreviewMouseWheel -= OnChartPreviewMouseWheel;
 					}
 					cc.RemoveHandler(System.Windows.UIElement.PreviewMouseLeftButtonDownEvent, mouseLeftDownHandler);
 					cc.AddHandler(System.Windows.UIElement.PreviewMouseLeftButtonDownEvent, mouseLeftDownHandler, true);
+					cc.PreviewMouseMove -= OnChartPreviewMouseMove;
+					cc.PreviewMouseLeftButtonUp -= OnChartPreviewMouseLeftButtonUp;
+					cc.PreviewMouseWheel -= OnChartPreviewMouseWheel;
+					cc.PreviewMouseMove += OnChartPreviewMouseMove;
+					cc.PreviewMouseLeftButtonUp += OnChartPreviewMouseLeftButtonUp;
+					cc.PreviewMouseWheel += OnChartPreviewMouseWheel;
 					hookedChartControl = cc;
 					isMouseHooked = true;
 				}
@@ -541,17 +579,23 @@ namespace NinjaTrader.NinjaScript.Indicators
 			ChartControl cc = hookedChartControl;
 			var ownerWin = hookedOwnerWindow;
 			var handler = mouseLeftDownHandler;
-			if (cc != null && handler != null)
+			if (cc != null)
 			{
 				cc.Dispatcher.InvokeAsync(() =>
 				{
-					try { cc.RemoveHandler(System.Windows.UIElement.PreviewMouseLeftButtonDownEvent, handler); } catch { }
-					try
+					if (handler != null)
 					{
-						if (ownerWin != null)
-							ownerWin.RemoveHandler(System.Windows.UIElement.PreviewMouseLeftButtonDownEvent, handler);
+						try { cc.RemoveHandler(System.Windows.UIElement.PreviewMouseLeftButtonDownEvent, handler); } catch { }
+						try
+						{
+							if (ownerWin != null)
+								ownerWin.RemoveHandler(System.Windows.UIElement.PreviewMouseLeftButtonDownEvent, handler);
+						}
+						catch { }
 					}
-					catch { }
+					try { cc.PreviewMouseMove -= OnChartPreviewMouseMove; } catch { }
+					try { cc.PreviewMouseLeftButtonUp -= OnChartPreviewMouseLeftButtonUp; } catch { }
+					try { cc.PreviewMouseWheel -= OnChartPreviewMouseWheel; } catch { }
 				});
 			}
 			hookedOwnerWindow = null;
@@ -559,16 +603,456 @@ namespace NinjaTrader.NinjaScript.Indicators
 			isMouseHooked = false;
 		}
 
+		private float ConvertHorizontalPx(ChartControl cc, double dipX)
+		{
+			try
+			{
+				if (cc != null && cc.PresentationSource != null)
+					return (float)ChartingExtensions.ConvertToHorizontalPixels(dipX, cc.PresentationSource);
+			}
+			catch { }
+			return (float)dipX;
+		}
+
+		private float ConvertVerticalPx(ChartControl cc, double dipY)
+		{
+			try
+			{
+				if (cc != null && cc.PresentationSource != null)
+					return (float)ChartingExtensions.ConvertToVerticalPixels(dipY, cc.PresentationSource);
+			}
+			catch { }
+			return (float)dipY;
+		}
+
+		private static bool IsInteractiveUiControlSource(object originalSource)
+		{
+			try
+			{
+				System.Windows.DependencyObject cur = originalSource as System.Windows.DependencyObject;
+				int guard = 0;
+				while (cur != null && guard++ < 20)
+				{
+					if (cur is System.Windows.Controls.Primitives.Popup ||
+						cur is System.Windows.Controls.Primitives.MenuBase ||
+						cur is System.Windows.Controls.MenuItem ||
+						cur is System.Windows.Controls.ComboBox ||
+						cur is System.Windows.Controls.ComboBoxItem ||
+						cur is System.Windows.Controls.Primitives.TextBoxBase ||
+						cur is System.Windows.Controls.Primitives.ButtonBase ||
+						cur is System.Windows.Controls.Primitives.ScrollBar ||
+						cur is System.Windows.Controls.Primitives.Thumb)
+					{
+						return true;
+					}
+					if (cur is ChartControl || cur is ChartPanel)
+						break;
+
+					System.Windows.DependencyObject next = null;
+					if (cur is System.Windows.Media.Visual || cur is System.Windows.Media.Media3D.Visual3D)
+					{
+						try { next = System.Windows.Media.VisualTreeHelper.GetParent(cur); } catch { }
+					}
+					if (next == null)
+					{
+						try { next = System.Windows.LogicalTreeHelper.GetParent(cur); } catch { }
+					}
+					cur = next;
+				}
+			}
+			catch { }
+			return false;
+		}
+
+		private bool TryGetRenderSurfacePoint(ChartControl cc, System.Windows.Input.MouseEventArgs e, out float surfX, out float surfY)
+		{
+			surfX = -99999f;
+			surfY = -99999f;
+			if (cc == null)
+				return false;
+
+			try
+			{
+				if (cc.OwnerChart != null && cc.OwnerChart.Form != null && cc.OwnerChart.Form.IsHandleCreated)
+				{
+					var form = cc.OwnerChart.Form;
+					Win32Point pt;
+					if (GetCursorPos(out pt) && ScreenToClient(form.Handle, ref pt))
+					{
+						int cw = form.ClientSize.Width;
+						int ch = form.ClientSize.Height;
+						float rtW = lastRenderTargetW;
+						float rtH = lastRenderTargetH;
+						float sx = (cw > 10 && rtW > 10f) ? (rtW / cw) : 1f;
+						float sy = (ch > 10 && rtH > 10f) ? (rtH / ch) : 1f;
+						surfX = pt.X * sx;
+						surfY = pt.Y * sy;
+						return true;
+					}
+				}
+			}
+			catch { }
+
+			if (e != null)
+			{
+				try
+				{
+					if (ChartPanel != null)
+					{
+						System.Windows.Point panelPt = e.GetPosition(ChartPanel);
+						surfX = (float)ChartPanel.X + ConvertHorizontalPx(cc, panelPt.X);
+						surfY = (float)ChartPanel.Y + ConvertVerticalPx(cc, panelPt.Y);
+						return true;
+					}
+					System.Windows.Point wpfPt = e.GetPosition(cc);
+					surfX = ConvertHorizontalPx(cc, wpfPt.X);
+					surfY = ConvertVerticalPx(cc, wpfPt.Y);
+					return true;
+				}
+				catch { }
+			}
+
+			return false;
+		}
+
+		private bool IsHoveringAnyChartButton(ChartControl cc, System.Windows.Input.MouseEventArgs e)
+		{
+			if (cc == null || e == null)
+				return false;
+			try
+			{
+				float surfX, surfY;
+				bool hasSurf = TryGetRenderSurfacePoint(cc, e, out surfX, out surfY);
+
+				System.Windows.Point wpfPt = e.GetPosition(cc);
+				float dipX = (float)wpfPt.X;
+				float dipY = (float)wpfPt.Y;
+				float pxX = ConvertHorizontalPx(cc, wpfPt.X);
+				float pxY = ConvertVerticalPx(cc, wpfPt.Y);
+
+				float panelPxX = -99999f, panelPxY = -99999f, panelDipX = -99999f, panelDipY = -99999f;
+				if (ChartPanel != null)
+				{
+					System.Windows.Point panelPt = e.GetPosition(ChartPanel);
+					panelDipX = (float)ChartPanel.X + (float)panelPt.X;
+					panelDipY = (float)ChartPanel.Y + (float)panelPt.Y;
+					panelPxX = (float)ChartPanel.X + ConvertHorizontalPx(cc, panelPt.X);
+					panelPxY = (float)ChartPanel.Y + ConvertVerticalPx(cc, panelPt.Y);
+				}
+
+				lock (profileLock)
+				{
+					for (int i = activeChartButtons.Count - 1; i >= 0; i--)
+					{
+						RectangleF hitRect = activeChartButtons[i].Rect;
+						hitRect.Inflate(3.5f, 2.5f);
+						if ((hasSurf && hitRect.Contains(surfX, surfY)) ||
+							hitRect.Contains(panelPxX, panelPxY) ||
+							hitRect.Contains(panelDipX, panelDipY) ||
+							hitRect.Contains(pxX, pxY) ||
+							hitRect.Contains(dipX, dipY))
+						{
+							return true;
+						}
+					}
+				}
+			}
+			catch { }
+			return false;
+		}
+
+		private void EnsureAutoYAxisForCustomView()
+		{
+			try
+			{
+				ChartScale cs = lastRenderedChartScale;
+				if (cs != null && cs.Properties != null && cs.Properties.YAxisRangeType != YAxisRangeType.Automatic)
+				{
+					double curSpan = cs.MaxValue - cs.MinValue;
+					if (curSpan > 1e-9 && lastBasePriceSpan > 1e-9)
+					{
+						verticalZoomFactor = Math.Max(0.15, Math.Min(4.0, curSpan / lastBasePriceSpan));
+						verticalPanPriceOffset = 0.5 * (cs.MaxValue + cs.MinValue) - lastBaseMidPrice;
+					}
+					cs.Properties.YAxisRangeType = YAxisRangeType.Automatic;
+				}
+			}
+			catch { }
+		}
+
+		private void ApplyVerticalZoomStep(double ratio, float anchorSurfY = float.NaN)
+		{
+			EnsureAutoYAxisForCustomView();
+			double oldZoom = verticalZoomFactor;
+			double newZoom = Math.Max(0.15, Math.Min(4.0, oldZoom * ratio));
+			if (Math.Abs(newZoom - oldZoom) < 1e-6)
+				return;
+
+			double baseSpan = Math.Max(1e-6, lastBasePriceSpan);
+			double oldSpan = baseSpan * oldZoom;
+			double newSpan = baseSpan * newZoom;
+			double oldMid = lastBaseMidPrice + verticalPanPriceOffset;
+
+			if (!float.IsNaN(anchorSurfY) && lastRenderedChartScale != null && ChartPanel != null)
+			{
+				try
+				{
+					double anchorPrice = lastRenderedChartScale.GetValueByY(anchorSurfY);
+					double oldHigh = oldMid + 0.5 * oldSpan;
+					double u = Math.Max(0.05, Math.Min(0.95, (oldHigh - anchorPrice) / Math.Max(1e-6, oldSpan)));
+					double newHigh = anchorPrice + u * newSpan;
+					double newMid = newHigh - 0.5 * newSpan;
+					verticalPanPriceOffset = newMid - lastBaseMidPrice;
+				}
+				catch { }
+			}
+
+			verticalZoomFactor = newZoom;
+		}
+
+		private void ResetVerticalView()
+		{
+			verticalZoomFactor = 1.0;
+			verticalPanPriceOffset = 0.0;
+			try
+			{
+				if (lastRenderedChartScale != null && lastRenderedChartScale.Properties != null)
+					lastRenderedChartScale.Properties.YAxisRangeType = YAxisRangeType.Automatic;
+			}
+			catch { }
+		}
+
+		private void OnChartPreviewMouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
+		{
+			ChartControl cc = hookedChartControl ?? ChartControl;
+			if (!IsChartControlActive(cc) || e == null || IsInteractiveUiControlSource(e.OriginalSource))
+				return;
+
+			float surfX = -99999f, surfY = -99999f;
+			bool hasSurf = TryGetRenderSurfacePoint(cc, e, out surfX, out surfY);
+			if (ChartPanel != null && hasSurf)
+			{
+				float panelLeft = (float)ChartPanel.X;
+				float panelRight = (float)(ChartPanel.X + ChartPanel.W);
+				float panelTop = (float)ChartPanel.Y;
+				float panelBot = (float)(ChartPanel.Y + ChartPanel.H);
+				if (surfX < panelLeft || surfX > panelRight || surfY < panelTop || surfY > panelBot)
+					return;
+			}
+
+			var mods = System.Windows.Input.Keyboard.Modifiers;
+			if ((mods & System.Windows.Input.ModifierKeys.Control) != 0)
+			{
+				lock (profileLock)
+				{
+					ApplyVerticalZoomStep(e.Delta > 0 ? 0.84 : 1.19, hasSurf ? surfY : float.NaN);
+				}
+				e.Handled = true;
+				ForceRefresh();
+				cc.InvalidateVisual();
+				try { if (cc.OwnerChart != null && cc.OwnerChart.Form != null) cc.OwnerChart.Form.Invalidate(); } catch { }
+				return;
+			}
+
+			if ((mods & System.Windows.Input.ModifierKeys.Shift) != 0)
+			{
+				lock (profileLock)
+				{
+					EnsureAutoYAxisForCustomView();
+					double activeSpan = Math.Max(1e-6, lastBasePriceSpan * verticalZoomFactor);
+					double panStep = activeSpan * 0.085;
+					verticalPanPriceOffset += (e.Delta > 0 ? panStep : -panStep);
+				}
+				e.Handled = true;
+				ForceRefresh();
+				cc.InvalidateVisual();
+				try { if (cc.OwnerChart != null && cc.OwnerChart.Form != null) cc.OwnerChart.Form.Invalidate(); } catch { }
+				return;
+			}
+
+			float deltaStep = Math.Max(8f, Math.Abs(e.Delta) * 1.05f);
+			bool needMorePast = false;
+			int nextDaysToFetch = 0;
+			lock (profileLock)
+			{
+				hasManualPixelScroll = true;
+				if (float.IsNaN(currentScrollPx))
+					currentScrollPx = maxScrollCached;
+				if (e.Delta > 0)
+				{
+					if (currentScrollPx <= 8f)
+					{
+						needMorePast = true;
+						nextDaysToFetch = Math.Min(365, Math.Max(65, highestBackfillDaysRequested + 30));
+					}
+					currentScrollPx = Math.Max(0f, currentScrollPx - deltaStep);
+				}
+				else if (e.Delta < 0)
+					currentScrollPx = Math.Min(Math.Max(0f, maxScrollCached), currentScrollPx + deltaStep);
+			}
+			if (needMorePast)
+				TriggerHistoricalBackfillIfNeeded(nextDaysToFetch);
+
+			e.Handled = true;
+			ForceRefresh();
+			cc.InvalidateVisual();
+			try { if (cc.OwnerChart != null && cc.OwnerChart.Form != null) cc.OwnerChart.Form.Invalidate(); } catch { }
+		}
+
 		private void OnChartPreviewMouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
 		{
 			ChartControl cc = hookedChartControl ?? ChartControl;
-			if (!IsChartControlActive(cc))
+			if (!IsChartControlActive(cc) || e == null || IsInteractiveUiControlSource(e.OriginalSource))
 				return;
 
 			if (TryHandleChartButtonClick(cc, e))
 			{
 				e.Handled = true;
+				return;
 			}
+
+			try
+			{
+				if (ChartPanel != null)
+				{
+					float surfX, surfY;
+					if (TryGetRenderSurfacePoint(cc, e, out surfX, out surfY))
+					{
+						float panelLeft = (float)ChartPanel.X;
+						float panelRight = (float)(ChartPanel.X + ChartPanel.W);
+						float panelTop = (float)ChartPanel.Y;
+						float panelBot = (float)(ChartPanel.Y + ChartPanel.H);
+						if (surfX >= panelLeft && surfX <= panelRight - 48f && surfY >= panelTop + 4f && surfY <= panelBot - 6f)
+						{
+							lock (profileLock)
+							{
+								EnsureAutoYAxisForCustomView();
+								isPotentialCanvasDrag = true;
+								isDraggingCanvas = false;
+								dragStartMouseX = surfX;
+								dragStartMouseY = surfY;
+								dragStartScrollPx = float.IsNaN(currentScrollPx) ? maxScrollCached : currentScrollPx;
+								dragStartPanOffset = verticalPanPriceOffset;
+							}
+						}
+					}
+				}
+			}
+			catch { }
+		}
+
+		private void OnChartPreviewMouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+		{
+			ChartControl cc = hookedChartControl ?? ChartControl;
+			if (!IsChartControlActive(cc) || e == null)
+				return;
+
+			if (!isPotentialCanvasDrag && !isDraggingCanvas)
+			{
+				try
+				{
+					bool overBtn = !IsInteractiveUiControlSource(e.OriginalSource) && IsHoveringAnyChartButton(cc, e);
+					if (overBtn && cc.Cursor != System.Windows.Input.Cursors.Hand)
+						cc.Cursor = System.Windows.Input.Cursors.Hand;
+					else if (!overBtn && (cc.Cursor == System.Windows.Input.Cursors.Hand || cc.Cursor == System.Windows.Input.Cursors.SizeWE || cc.Cursor == System.Windows.Input.Cursors.SizeAll))
+						cc.Cursor = null;
+				}
+				catch { }
+				return;
+			}
+
+			if (e.LeftButton != System.Windows.Input.MouseButtonState.Pressed)
+			{
+				isPotentialCanvasDrag = false;
+				isDraggingCanvas = false;
+				try
+				{
+					if (cc.IsMouseCaptured) cc.ReleaseMouseCapture();
+					if (cc.Cursor == System.Windows.Input.Cursors.SizeWE || cc.Cursor == System.Windows.Input.Cursors.SizeAll) cc.Cursor = null;
+				}
+				catch { }
+				return;
+			}
+
+			try
+			{
+				float curPxX, curPxY;
+				if (!TryGetRenderSurfacePoint(cc, e, out curPxX, out curPxY))
+				{
+					System.Windows.Point p = e.GetPosition(cc);
+					curPxX = ConvertHorizontalPx(cc, p.X);
+					curPxY = ConvertVerticalPx(cc, p.Y);
+				}
+
+				float deltaX = curPxX - dragStartMouseX;
+				float deltaY = curPxY - dragStartMouseY;
+				if (!isDraggingCanvas)
+				{
+					if (Math.Abs(deltaX) < 3.5f && Math.Abs(deltaY) < 4.5f)
+						return;
+					isDraggingCanvas = true;
+					try { cc.CaptureMouse(); } catch { }
+				}
+
+				bool moved = false;
+				lock (profileLock)
+				{
+					if (Math.Abs(deltaX) >= 1.0f)
+					{
+						hasManualPixelScroll = true;
+						float targetScroll = Math.Max(0f, Math.Min(Math.Max(0f, maxScrollCached), dragStartScrollPx - deltaX));
+						if (float.IsNaN(currentScrollPx) || Math.Abs(targetScroll - currentScrollPx) >= 0.35f)
+						{
+							currentScrollPx = targetScroll;
+							moved = true;
+						}
+					}
+
+					bool allowVerticalPan = Math.Abs(verticalZoomFactor - 1.0) > 0.02
+						|| Math.Abs(dragStartPanOffset) > 1e-9
+						|| (Math.Abs(deltaY) >= 8.0f && Math.Abs(deltaY) > Math.Abs(deltaX) * 0.85f);
+					if (allowVerticalPan && Math.Abs(deltaY) >= 1.5f)
+					{
+						EnsureAutoYAxisForCustomView();
+						double activeSpan = Math.Max(1e-6, lastBasePriceSpan * verticalZoomFactor);
+						double ptsPerPx = activeSpan / Math.Max(120.0, lastUsableHeightPx);
+						double targetPan = dragStartPanOffset + deltaY * ptsPerPx;
+						if (Math.Abs(targetPan - verticalPanPriceOffset) > 1e-7)
+						{
+							verticalPanPriceOffset = targetPan;
+							moved = true;
+						}
+					}
+
+					var desiredCursor = allowVerticalPan ? System.Windows.Input.Cursors.SizeAll : System.Windows.Input.Cursors.SizeWE;
+					if (cc.Cursor != desiredCursor)
+						cc.Cursor = desiredCursor;
+				}
+
+				if (moved)
+				{
+					ForceRefresh();
+					cc.InvalidateVisual();
+					try { if (cc.OwnerChart != null && cc.OwnerChart.Form != null) cc.OwnerChart.Form.Invalidate(); } catch { }
+				}
+			}
+			catch { }
+		}
+
+		private void OnChartPreviewMouseLeftButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
+		{
+			isPotentialCanvasDrag = false;
+			isDraggingCanvas = false;
+			try
+			{
+				ChartControl cc = hookedChartControl ?? ChartControl;
+				if (cc != null)
+				{
+					if (cc.IsMouseCaptured) cc.ReleaseMouseCapture();
+					if (cc.Cursor == System.Windows.Input.Cursors.SizeWE || cc.Cursor == System.Windows.Input.Cursors.SizeAll) cc.Cursor = null;
+				}
+			}
+			catch { }
 		}
 
 		private bool TryHandleChartButtonClick(ChartControl cc, System.Windows.Input.MouseButtonEventArgs e)
@@ -772,6 +1256,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 				case ChartButtonAction.ScrollLiveDay:
 					hasManualPixelScroll = false;
 					currentScrollPx = float.MaxValue;
+					ResetVerticalView();
+					isProfileDropdownOpen = false;
+					break;
+
+				case ChartButtonAction.ZoomInVertical:
+					ApplyVerticalZoomStep(0.80);
+					isProfileDropdownOpen = false;
+					break;
+
+				case ChartButtonAction.ZoomOutVertical:
+					ApplyVerticalZoomStep(1.25);
 					isProfileDropdownOpen = false;
 					break;
 
@@ -785,6 +1280,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					isProfileDropdownOpen = false;
 					hasManualPixelScroll = false;
 					currentScrollPx = float.MaxValue;
+					ResetVerticalView();
 					break;
 
 				case ChartButtonAction.SelectProfileWeekly:
@@ -793,6 +1289,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					isProfileDropdownOpen = false;
 					hasManualPixelScroll = false;
 					currentScrollPx = float.MaxValue;
+					ResetVerticalView();
 					TriggerHistoricalBackfillIfNeeded(65);
 					break;
 
@@ -802,6 +1299,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					isProfileDropdownOpen = false;
 					hasManualPixelScroll = false;
 					currentScrollPx = float.MaxValue;
+					ResetVerticalView();
 					TriggerHistoricalBackfillIfNeeded(180);
 					break;
 			}
@@ -914,28 +1412,33 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		protected override void OnBarUpdate()
 		{
-			if (CurrentBars == null || CurrentBars.Length < 2)
+			if (CurrentBars == null || CurrentBars.Length < 1)
 				return;
 
 			if (BarsInProgress == 0)
 			{
-				if (CurrentBars[0] < 0)
+				int curPrimary = CurrentBars[0];
+				if (curPrimary < 0)
 					return;
 
-				BarBrushes[0] = Brushes.Transparent;
-				CandleOutlineBrushes[0] = Brushes.Transparent;
+				for (int back = 0; curPrimary - back > lastHiddenChartBar && back <= curPrimary; back++)
+				{
+					BarBrushes[back] = Brushes.Transparent;
+					CandleOutlineBrushes[back] = Brushes.Transparent;
+				}
+				lastHiddenChartBar = curPrimary;
 
 				lock (profileLock)
 				{
 					DateTime chartDate = Times[0][0].Date;
 					if (!chartDayFirstBar.ContainsKey(chartDate))
-						chartDayFirstBar[chartDate] = CurrentBars[0];
-					chartDayLastBar[chartDate] = CurrentBars[0];
+						chartDayFirstBar[chartDate] = curPrimary;
+					chartDayLastBar[chartDate] = curPrimary;
 				}
 				return;
 			}
 
-			if (BarsInProgress != 1 || CurrentBars[1] < 0)
+			if (CurrentBars.Length < 2 || BarsInProgress != 1 || CurrentBars[1] < 0)
 				return;
 
 			if (activeSessions == null || activeSessions.Length == 0)
@@ -1010,6 +1513,24 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private const float MinReadableTpoRowPx = 11.8f;
 		private const float MaxComfortableTpoRowPx = 16.5f;
 
+		private void ComputeTopLayoutOffsets(out float topSessionBarOffset, out float canvasTopOffset, out float topPadPx)
+		{
+			float hudBottom = ShowTopLeftBox
+				? (6f + (IsTopLeftBoxMinimized ? 27f : 72f))
+				: 32f;
+			topSessionBarOffset = hudBottom + 3f;
+			if (FixSessionHeaderAtTop)
+			{
+				canvasTopOffset = topSessionBarOffset + 36f;
+				topPadPx = canvasTopOffset + 20f;
+			}
+			else
+			{
+				canvasTopOffset = hudBottom + 2f;
+				topPadPx = hudBottom + 42f;
+			}
+		}
+
 		public override void OnCalculateMinMax()
 		{
 			double minVal = double.MaxValue;
@@ -1018,7 +1539,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			float panelLeft = ChartPanel != null ? (float)ChartPanel.X : 0f;
 			float panelRight = ChartPanel != null ? (float)(ChartPanel.X + ChartPanel.W) : 1800f;
 			float panelH = ChartPanel != null ? (float)ChartPanel.H : 820f;
-			float topPadPx = (ShowTopLeftBox && !IsTopLeftBoxMinimized) ? 108f : 62f;
+			float unusedTopBarOff, unusedCanvasTopOff, topPadPx;
+			ComputeTopLayoutOffsets(out unusedTopBarOff, out unusedCanvasTopOff, out topPadPx);
 			float botPadPx = (ShowSummary && FixSummaryBoxAtBottom)
 				? (IsSummaryBoxMinimized ? 78f : 164f)
 				: 46f;
@@ -1074,12 +1596,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 				double rawPriceSpan = Math.Max(baseStep * 6.0, maxVal - minVal);
 				double rawRows = rawPriceSpan / baseStep + 2.0;
 				float rawPxPerRow = usableH / (float)Math.Max(1.0, rawRows);
-				int groupMult = rawPxPerRow < MinReadableTpoRowPx
-					? Math.Max(1, (int)Math.Ceiling(MinReadableTpoRowPx / Math.Max(0.4f, rawPxPerRow)))
-					: 1;
-				int reqMult = (int)Math.Ceiling((maxSingleSessionSpan / baseStep + 1.0) / Math.Max(12.0, usableH / MinReadableTpoRowPx));
-				if (reqMult > groupMult)
-					groupMult = reqMult;
+				int groupMult = 1;
+				if (AutoScaleTpoByScreenResolution)
+				{
+					groupMult = rawPxPerRow < MinReadableTpoRowPx
+						? Math.Max(1, (int)Math.Ceiling(MinReadableTpoRowPx / Math.Max(0.4f, rawPxPerRow)))
+						: 1;
+					int reqMult = (int)Math.Ceiling((maxSingleSessionSpan / baseStep + 1.0) / Math.Max(12.0, usableH / MinReadableTpoRowPx));
+					if (reqMult > groupMult)
+						groupMult = reqMult;
+				}
 				double renderStep = baseStep * groupMult;
 
 				double lowEdge = minVal - renderStep * 0.6;
@@ -1091,6 +1617,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 					lowEdge = mid - 0.5 * minComfortableSpan;
 					highEdge = mid + 0.5 * minComfortableSpan;
 				}
+
+				double baseMid = 0.5 * (highEdge + lowEdge);
+				double baseSpan = Math.Max(renderStep * 3.0, highEdge - lowEdge);
+				lastBaseMidPrice = baseMid;
+				lastBasePriceSpan = baseSpan;
+				lastUsableHeightPx = usableH;
+
+				double activeZoom = Math.Max(0.15, Math.Min(4.0, verticalZoomFactor));
+				double activeSpan = Math.Max(renderStep * 3.0, baseSpan * activeZoom);
+				double activeMid = baseMid + verticalPanPriceOffset;
+				highEdge = activeMid + 0.5 * activeSpan;
+				lowEdge = activeMid - 0.5 * activeSpan;
 
 				double ptsPerPx = (highEdge - lowEdge) / usableH;
 				MaxValue = highEdge + topPadPx * ptsPerPx;
@@ -2346,7 +2884,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					dstRow.Volume += srcRow.Volume;
 					foreach (int p in srcRow.Periods)
 					{
-						int shifted = Math.Min(LetterSequence.Length - 1, p + periodOffset);
+						int shifted = p + periodOffset;
 						dstRow.Periods.Add(shifted);
 						if (shifted > merged.LastPeriod)
 							merged.LastPeriod = shifted;
@@ -2356,7 +2894,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				foreach (KeyValuePair<int, PeriodSlice> kv in s.PeriodSlices)
 				{
 					PeriodSlice srcSlice = kv.Value;
-					int shiftedIdx = Math.Min(LetterSequence.Length - 1, srcSlice.PeriodIndex + periodOffset);
+					int shiftedIdx = srcSlice.PeriodIndex + periodOffset;
 					PeriodSlice dstSlice;
 					if (!merged.PeriodSlices.TryGetValue(shiftedIdx, out dstSlice))
 					{
@@ -2675,6 +3213,92 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return groups;
 		}
 
+		private enum LevelBreakMode
+		{
+			CloseAbove = 0,
+			CloseBelow = 1,
+			CrossClose = 2
+		}
+
+		private DateTime GetReferenceNow(List<DayProfile> sessions = null)
+		{
+			bool isPlayback = false;
+			try
+			{
+				isPlayback = NinjaTrader.Cbi.Connection.PlaybackConnection != null
+					&& NinjaTrader.Cbi.Connection.PlaybackConnection.Status == ConnectionStatus.Connected;
+			}
+			catch { }
+
+			if (isPlayback && sessions != null && sessions.Count > 0)
+			{
+				DateTime maxSample = DateTime.MinValue;
+				for (int i = 0; i < sessions.Count; i++)
+				{
+					if (sessions[i] != null && sessions[i].LastSampleTime > maxSample)
+						maxSample = sessions[i].LastSampleTime;
+				}
+				if (maxSample > DateTime.MinValue)
+					return maxSample;
+			}
+			return DateTime.Now;
+		}
+
+		private DateTime GetTradingDayCloseTime(DateTime sessionDate)
+		{
+			DateTime dt = sessionDate.Date;
+			ProfileSession[] sessions = (activeSessions != null && activeSessions.Length > 0) ? activeSessions : GetProfileSessions();
+			if (sessions == null || sessions.Length == 0)
+				return dt.AddDays(1).AddHours(2.5);
+
+			DateTime maxClose = DateTime.MinValue;
+			for (int i = 0; i < sessions.Length; i++)
+			{
+				ProfileSession ps = sessions[i];
+				int dur = ps.CloseSeconds > ps.OpenSeconds
+					? (ps.CloseSeconds - ps.OpenSeconds)
+					: (24 * 3600 - ps.OpenSeconds + ps.CloseSeconds);
+				if (dur <= 0)
+					dur = 24 * 3600;
+				DateTime c = dt.AddSeconds(ps.OpenSeconds + dur);
+				if (c > maxClose)
+					maxClose = c;
+			}
+			return maxClose;
+		}
+
+		private static DateTime GetMondayOfWeek(DateTime dt)
+		{
+			int diff = ((int)dt.DayOfWeek + 6) % 7;
+			return dt.Date.AddDays(-diff);
+		}
+
+		private static string FormatWeekRangeLabel(DateTime weekMonday, DateTime weekFriday)
+		{
+			if (weekMonday.Month == weekFriday.Month)
+				return weekMonday.ToString("dd", CultureInfo.InvariantCulture) + "-" + weekFriday.ToString("dd MMM", CultureInfo.InvariantCulture);
+			return weekMonday.ToString("ddMMM", CultureInfo.InvariantCulture) + "-" + weekFriday.ToString("ddMMM", CultureInfo.InvariantCulture);
+		}
+
+		private double GetVirginBreakEpsilon()
+		{
+			double tick = (Instrument == null || Instrument.MasterInstrument == null || Instrument.MasterInstrument.TickSize <= 0)
+				? 0.01
+				: Instrument.MasterInstrument.TickSize;
+			return Math.Max(1e-7, tick * 0.15);
+		}
+
+		private static bool IsRawSessionRunning(DayProfile rawSess, bool isLatestRaw, DateTime refNow)
+		{
+			if (!isLatestRaw || rawSess == null)
+				return false;
+			if (rawSess.SessionCloseTime > DateTime.MinValue)
+				return refNow < rawSess.SessionCloseTime;
+			int exp = Math.Max(1, rawSess.ExpectedPeriodCount);
+			int prn = Math.Max(rawSess.PeriodSlices.Count, rawSess.LastPeriod + 1);
+			return prn < exp;
+		}
+
 		private bool IsSessionRunning(DayProfile day, bool isLatestSession)
 		{
 			if (!isLatestSession || day == null)
@@ -2702,12 +3326,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 			if (mode == MarketProfilePeriodMode.Weekly)
 			{
-				DateTime weekEnd = day.SessionDate.Date.AddDays(5).AddHours(3);
+				DateTime weekEnd = GetTradingDayCloseTime(day.SessionDate.Date.AddDays(4));
 				return refNow < weekEnd;
 			}
-
-			if (MergeAllDaySessions && day.SessionDate.Date == refNow.Date)
-				return true;
 
 			if (day.SessionCloseTime > DateTime.MinValue)
 				return refNow < day.SessionCloseTime;
@@ -2717,43 +3338,199 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return prn < exp;
 		}
 
-		// Computes how far horizontally a level from sessions[currentIdx] extends:
-		// - If broken by a subsequent session j > currentIdx, extends horizontally until sessions[j].IbX (where it breaks) and returns false.
-		// - If never broken by any subsequent session, extends all the way to panelRight - 6f (Virgin) and returns true.
-		private static bool GetLevelExtensionX(
+		private bool IsTpoSliceClosed(DayProfile session, PeriodSlice slice, bool isSessionRunning, DateTime refNow)
+		{
+			if (session == null || slice == null)
+				return false;
+			if (!isSessionRunning)
+				return true;
+			if (slice.PeriodIndex < session.LastPeriod)
+				return true;
+
+			if (EffectiveProfileMode == MarketProfilePeriodMode.Daily
+				&& !session.IsMerged
+				&& session.EffectiveOpenTime > DateTime.MinValue
+				&& session.SessionCloseTime > session.EffectiveOpenTime)
+			{
+				double activeWinMin = Math.Max((double)Math.Max(1, TpoIntervalMinutes), (session.SessionCloseTime - session.EffectiveOpenTime).TotalMinutes);
+				double bracketMin = activeWinMin / Math.Max(1, session.ExpectedPeriodCount);
+				DateTime sliceEnd = session.EffectiveOpenTime.AddMinutes((slice.PeriodIndex + 1) * bracketMin);
+				return refNow >= sliceEnd;
+			}
+
+			if (session.SessionCloseTime > DateTime.MinValue && refNow >= session.SessionCloseTime)
+				return true;
+
+			return false;
+		}
+
+		private bool IsRawTpoSliceClosed(DayProfile rawSess, PeriodSlice slice, bool isRawRunning, DateTime refNow)
+		{
+			if (rawSess == null || slice == null)
+				return false;
+			if (!isRawRunning)
+				return true;
+			if (slice.PeriodIndex < rawSess.LastPeriod)
+				return true;
+
+			if (rawSess.EffectiveOpenTime > DateTime.MinValue && rawSess.SessionCloseTime > rawSess.EffectiveOpenTime)
+			{
+				double activeWinMin = Math.Max((double)Math.Max(1, TpoIntervalMinutes), (rawSess.SessionCloseTime - rawSess.EffectiveOpenTime).TotalMinutes);
+				double bracketMin = activeWinMin / Math.Max(1, rawSess.ExpectedPeriodCount);
+				DateTime sliceEnd = rawSess.EffectiveOpenTime.AddMinutes((slice.PeriodIndex + 1) * bracketMin);
+				return refNow >= sliceEnd;
+			}
+
+			return false;
+		}
+
+		private static bool DoesClosedTpoBreakLevel(
+			double tpoOpen,
+			double tpoHigh,
+			double tpoLow,
+			double tpoClose,
+			double levelPrice,
+			double eps,
+			LevelBreakMode mode,
+			ref int currentSide,
+			double originMidPrice)
+		{
+			if (mode == LevelBreakMode.CloseAbove)
+				return tpoClose > levelPrice + eps;
+			if (mode == LevelBreakMode.CloseBelow)
+				return tpoClose < levelPrice - eps;
+
+			if (currentSide > 0)
+				return tpoClose < levelPrice - eps;
+			if (currentSide < 0)
+				return tpoClose > levelPrice + eps;
+
+			if (tpoOpen > levelPrice + eps)
+			{
+				currentSide = 1;
+				return tpoClose < levelPrice - eps;
+			}
+			if (tpoOpen < levelPrice - eps)
+			{
+				currentSide = -1;
+				return tpoClose > levelPrice + eps;
+			}
+			if (tpoHigh > levelPrice + eps && tpoLow < levelPrice - eps)
+			{
+				if (originMidPrice > levelPrice + eps && tpoClose < levelPrice - eps)
+					return true;
+				if (originMidPrice < levelPrice - eps && tpoClose > levelPrice + eps)
+					return true;
+			}
+			if (tpoClose > levelPrice + eps)
+				currentSide = 1;
+			else if (tpoClose < levelPrice - eps)
+				currentSide = -1;
+			return false;
+		}
+
+		private DayProfile FindRenderedSessionForRaw(List<DayProfile> allSessions, DayProfile rawSess)
+		{
+			if (allSessions == null || allSessions.Count == 0 || rawSess == null)
+				return null;
+
+			for (int i = 0; i < allSessions.Count; i++)
+			{
+				DayProfile d = allSessions[i];
+				if (d.ProfileKey == rawSess.ProfileKey || (d.SourceProfileKeys != null && d.SourceProfileKeys.Contains(rawSess.ProfileKey)))
+					return d;
+			}
+
+			MarketProfilePeriodMode mode = EffectiveProfileMode;
+			if (mode == MarketProfilePeriodMode.Weekly)
+			{
+				DateTime wkMon = GetMondayOfWeek(rawSess.SessionDate);
+				for (int i = 0; i < allSessions.Count; i++)
+				{
+					if (allSessions[i].SessionDate.Date == wkMon)
+						return allSessions[i];
+				}
+			}
+			else if (mode == MarketProfilePeriodMode.Monthly)
+			{
+				for (int i = 0; i < allSessions.Count; i++)
+				{
+					if (allSessions[i].SessionDate.Year == rawSess.SessionDate.Year && allSessions[i].SessionDate.Month == rawSess.SessionDate.Month)
+						return allSessions[i];
+				}
+			}
+
+			return null;
+		}
+
+		private static bool DoesCrossBreakLevel(double sessionHigh, double sessionLow, double levelPrice, LevelBreakMode mode, int originSide)
+		{
+			const double crossEps = 1e-5;
+			if (mode == LevelBreakMode.CloseAbove)
+				return sessionHigh >= levelPrice - crossEps;
+			if (mode == LevelBreakMode.CloseBelow)
+				return sessionLow <= levelPrice + crossEps;
+			if (originSide > 0)
+				return sessionLow <= levelPrice + crossEps;
+			if (originSide < 0)
+				return sessionHigh >= levelPrice - crossEps;
+			return sessionLow <= levelPrice + crossEps && sessionHigh >= levelPrice - crossEps;
+		}
+
+		// Computes horizontal Virgin extension using selected VirginityBreakRule (CrossBased default vs CloseBased TPO-Close):
+		private bool GetLevelExtensionX(
 			List<DayProfile> sessions,
 			int currentIdx,
 			double levelPrice,
-			float xCollapsedRight,
+			float xOriginEnd,
 			float panelRight,
-			out float drawEndX,
-			bool isHighExtreme = false,
-			bool isLowExtreme = false)
+			DateTime refNow,
+			double eps,
+			LevelBreakMode breakMode,
+			out float drawEndX)
 		{
-			const double eps = 1e-5;
+			DayProfile origin = (sessions != null && currentIdx >= 0 && currentIdx < sessions.Count) ? sessions[currentIdx] : null;
+			double originClose = origin != null ? origin.Close : levelPrice;
+			double originMid = origin != null ? 0.5 * (origin.High + origin.Low) : levelPrice;
+			int side = originClose > levelPrice + eps ? 1 : (originClose < levelPrice - eps ? -1 : 0);
+			bool useCloseRule = (VirginityBreakRule == VirginityBreakRuleMode.CloseBased);
+
 			for (int j = currentIdx + 1; j < sessions.Count; j++)
 			{
 				DayProfile next = sessions[j];
 				bool broken = false;
-				if (isHighExtreme)
+
+				if (!useCloseRule)
 				{
-					if (next.High >= levelPrice - eps)
-						broken = true;
-				}
-				else if (isLowExtreme)
-				{
-					if (next.Low <= levelPrice + eps)
-						broken = true;
+					broken = DoesCrossBreakLevel(next.High, next.Low, levelPrice, breakMode, side);
 				}
 				else
 				{
-					if (next.Low <= levelPrice + eps && next.High >= levelPrice - eps)
-						broken = true;
+					bool nextRunning = IsSessionRunning(next, j == sessions.Count - 1);
+					if (next.PeriodSlices != null && next.PeriodSlices.Count > 0)
+					{
+						foreach (KeyValuePair<int, PeriodSlice> kv in next.PeriodSlices)
+						{
+							PeriodSlice sl = kv.Value;
+							if (!IsTpoSliceClosed(next, sl, nextRunning, refNow))
+								continue;
+							if (DoesClosedTpoBreakLevel(sl.Open, sl.High, sl.Low, sl.Close, levelPrice, eps, breakMode, ref side, originMid))
+							{
+								broken = true;
+								break;
+							}
+						}
+					}
+					else if (!nextRunning)
+					{
+						if (DoesClosedTpoBreakLevel(next.Open, next.High, next.Low, next.Close, levelPrice, eps, breakMode, ref side, originMid))
+							broken = true;
+					}
 				}
 
 				if (broken)
 				{
-					drawEndX = Math.Min(panelRight - 6f, Math.Max(xCollapsedRight, next.IbX));
+					drawEndX = Math.Min(panelRight - 6f, Math.Max(xOriginEnd, next.IbX));
 					return false;
 				}
 			}
@@ -2762,10 +3539,109 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return true;
 		}
 
+		private bool GetRawLevelExtensionX(
+			List<DayProfile> rawSessions,
+			int afterRawIdx,
+			List<DayProfile> renderedSessions,
+			double levelPrice,
+			float xOriginEnd,
+			float panelLeft,
+			float panelRight,
+			DateTime refNow,
+			double eps,
+			LevelBreakMode breakMode,
+			out float drawEndX)
+		{
+			DayProfile origin = (rawSessions != null && afterRawIdx >= 0 && afterRawIdx < rawSessions.Count) ? rawSessions[afterRawIdx] : null;
+			double originClose = origin != null ? origin.Close : levelPrice;
+			double originMid = origin != null ? 0.5 * (origin.High + origin.Low) : levelPrice;
+			int side = originClose > levelPrice + eps ? 1 : (originClose < levelPrice - eps ? -1 : 0);
+			bool useCloseRule = (VirginityBreakRule == VirginityBreakRuleMode.CloseBased);
+
+			for (int k = afterRawIdx + 1; k < rawSessions.Count; k++)
+			{
+				DayProfile nextRaw = rawSessions[k];
+				bool broken = false;
+
+				if (!useCloseRule)
+				{
+					broken = DoesCrossBreakLevel(nextRaw.High, nextRaw.Low, levelPrice, breakMode, side);
+				}
+				else
+				{
+					bool nextRunning = IsRawSessionRunning(nextRaw, k == rawSessions.Count - 1, refNow);
+					if (nextRaw.PeriodSlices != null && nextRaw.PeriodSlices.Count > 0)
+					{
+						foreach (KeyValuePair<int, PeriodSlice> kv in nextRaw.PeriodSlices)
+						{
+							PeriodSlice sl = kv.Value;
+							if (!IsRawTpoSliceClosed(nextRaw, sl, nextRunning, refNow))
+								continue;
+							if (DoesClosedTpoBreakLevel(sl.Open, sl.High, sl.Low, sl.Close, levelPrice, eps, breakMode, ref side, originMid))
+							{
+								broken = true;
+								break;
+							}
+						}
+					}
+					else if (!nextRunning)
+					{
+						if (DoesClosedTpoBreakLevel(nextRaw.Open, nextRaw.High, nextRaw.Low, nextRaw.Close, levelPrice, eps, breakMode, ref side, originMid))
+							broken = true;
+					}
+				}
+
+				if (broken)
+				{
+					DayProfile breakCol = FindRenderedSessionForRaw(renderedSessions, nextRaw);
+					if (breakCol == null)
+					{
+						drawEndX = panelLeft - 24f;
+						return false;
+					}
+					drawEndX = Math.Min(panelRight - 6f, Math.Max(xOriginEnd, breakCol.IbX));
+					return false;
+				}
+			}
+
+			drawEndX = panelRight - 6f;
+			return true;
+		}
+
+		private void EnsureVisibleChartCandlesHidden()
+		{
+			try
+			{
+				if (ChartBars != null && BarBrushes != null && CandleOutlineBrushes != null && ChartBars.Count > 0)
+				{
+					int fIdx = Math.Max(0, ChartBars.FromIndex - 2);
+					int tIdx = Math.Min(ChartBars.Count - 1, ChartBars.ToIndex + 2);
+					for (int idx = fIdx; idx <= tIdx; idx++)
+					{
+						if (BarBrushes.Get(idx) == null)
+							BarBrushes.Set(idx, Brushes.Transparent);
+						if (CandleOutlineBrushes.Get(idx) == null)
+							CandleOutlineBrushes.Set(idx, Brushes.Transparent);
+					}
+				}
+			}
+			catch { }
+		}
+
 		protected override void OnRender(ChartControl chartControl, ChartScale chartScale)
 		{
 			if (ChartBars == null || ChartPanel == null || RenderTarget == null || IsInHitTest)
 				return;
+
+			EnsureVisibleChartCandlesHidden();
+
+			try
+			{
+				lastRenderTargetW = RenderTarget.Size.Width;
+				lastRenderTargetH = RenderTarget.Size.Height;
+				lastRenderedChartScale = chartScale;
+			}
+			catch { }
 
 			if (!didAutoAdjustChartProps && chartControl.Properties != null)
 			{
@@ -2789,6 +3665,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 
 			EnsureMouseHookAttached();
+			if ((ShowWeeklyHigh || ShowWeeklyLow) && highestBackfillDaysRequested < 42 && !isBackfillInFlight)
+				TriggerHistoricalBackfillIfNeeded(42);
 
 			lock (profileLock)
 			{
@@ -2844,7 +3722,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 				float bottomDockReserve = (ShowSummary && FixSummaryBoxAtBottom)
 					? (IsSummaryBoxMinimized ? 78f : 164f)
 					: 46f;
-				float topBoxReserve = (ShowTopLeftBox && !IsTopLeftBoxMinimized) ? 108f : 62f;
+				float topSessionBarOffset, canvasTopOffset, topBoxReserve;
+				ComputeTopLayoutOffsets(out topSessionBarOffset, out canvasTopOffset, out topBoxReserve);
+				float topSessionBarY = panelTop + topSessionBarOffset;
+				float canvasTopY = panelTop + canvasTopOffset;
+				float gridTopY = FixSessionHeaderAtTop ? topSessionBarY : canvasTopY;
 				float usableTopY = panelTop + topBoxReserve;
 				float usableBotY = Math.Max(usableTopY + 160f, panelBottom - bottomDockReserve);
 				float targetSpanPx = usableBotY - usableTopY;
@@ -2852,18 +3734,22 @@ namespace NinjaTrader.NinjaScript.Indicators
 				double prelimSpan = Math.Max(baseStep * 6.0, prelimMaxPrice - prelimMinPrice);
 				double rawRowCount = prelimSpan / baseStep + 2.0;
 				float rawPxPerRow = targetSpanPx / (float)Math.Max(1.0, rawRowCount);
-				int groupMult = rawPxPerRow < MinReadableTpoRowPx
-					? Math.Max(1, (int)Math.Ceiling(MinReadableTpoRowPx / Math.Max(0.4f, rawPxPerRow)))
-					: 1;
-				for (int i = 0; i < allSessions.Count; i++)
+				int groupMult = 1;
+				if (AutoScaleTpoByScreenResolution)
 				{
-					DayProfile vd = allSessions[i];
-					if (vd.IbX < panelLeft + 4f || vd.CollapsedRightX > panelRight - 178f || vd.Rows.Count == 0)
-						continue;
-					int daySpanBins = vd.Rows.Keys.Max() - vd.Rows.Keys.Min() + 1;
-					int reqMult = (int)Math.Ceiling(daySpanBins / Math.Max(12.0, targetSpanPx / MinReadableTpoRowPx));
-					if (reqMult > groupMult)
-						groupMult = reqMult;
+					groupMult = rawPxPerRow < MinReadableTpoRowPx
+						? Math.Max(1, (int)Math.Ceiling(MinReadableTpoRowPx / Math.Max(0.4f, rawPxPerRow)))
+						: 1;
+					for (int i = 0; i < allSessions.Count; i++)
+					{
+						DayProfile vd = allSessions[i];
+						if (vd.IbX < panelLeft + 4f || vd.CollapsedRightX > panelRight - 178f || vd.Rows.Count == 0)
+							continue;
+						int daySpanBins = vd.Rows.Keys.Max() - vd.Rows.Keys.Min() + 1;
+						int reqMult = (int)Math.Ceiling(daySpanBins / Math.Max(12.0, targetSpanPx / MinReadableTpoRowPx));
+						if (reqMult > groupMult)
+							groupMult = reqMult;
+					}
 				}
 
 				double step = baseStep * groupMult;
@@ -2913,7 +3799,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				double safePriceSpan = Math.Max(step * 6.0, visMaxPrice - visMinPrice);
 				double visSteps = Math.Max(6.0, safePriceSpan / step);
 				float fitPxPerStep = targetSpanPx / (float)visSteps;
-				float sharedPxPerStep = Math.Min(MaxComfortableTpoRowPx, Math.Max(MinReadableTpoRowPx, fitPxPerStep));
+				float effectiveMinRowPx = AutoScaleTpoByScreenResolution ? MinReadableTpoRowPx : 3.5f;
+				float sharedPxPerStep = Math.Min(MaxComfortableTpoRowPx, Math.Max(effectiveMinRowPx, fitPxPerStep));
 				float sharedTotalSpanPx = Math.Min(targetSpanPx, (float)visSteps * sharedPxPerStep);
 				float sharedMidY = 0.5f * (usableTopY + usableBotY);
 				float sharedTopY = Math.Max(usableTopY, sharedMidY - sharedTotalSpanPx * 0.5f);
@@ -2922,10 +3809,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 				float testYHigh = (float)chartScale.GetYByValue(visMaxPrice);
 				float testYLow = (float)chartScale.GetYByValue(visMinPrice);
 				float testSpanPx = Math.Abs(testYLow - testYHigh);
-				float chartScalePxPerStep = (float)(testSpanPx / Math.Max(1.0, visSteps));
-				bool useFallbackYScale = chartScalePxPerStep < (MinReadableTpoRowPx - 1.2f)
-					|| testYLow < panelTop + 40f
-					|| testYHigh > panelBottom - 40f;
+				bool useFallbackYScale = testSpanPx < 1.0f
+					|| float.IsNaN(testYHigh)
+					|| float.IsInfinity(testYHigh)
+					|| float.IsNaN(testYLow)
+					|| float.IsInfinity(testYLow);
 
 				Func<double, float> priceToY = (double price) =>
 				{
@@ -3065,19 +3953,295 @@ namespace NinjaTrader.NinjaScript.Indicators
 						double avgIbRange = allIbRanges.Count > 0 ? allIbRanges.Average() : step * 6;
 
 						// =========================================================================
-						// PASS 1: Draw Background Separators, Value Area Boxes, Virgin Single Print Rays & Virgin Extending Lines
-						// (STRICTLY VIRGIN ONLY: any level crossed by a subsequent session is NOT extended!)
+						// PASS 1: Draw Background Separators, Virgin Single Print Rays & Virgin Extending Lines
+						// (STRICT TPO-CLOSE VIRGINITY RULE: Virginity breaks ONLY when a closed TPO closes above/below the line!)
 						// =========================================================================
+						DateTime refNow = GetReferenceNow(rawSessions);
+						double breakEps = GetVirginBreakEpsilon();
+
+						// 1A. Closed Monday–Friday Weekly High & Weekly Low Virgin Lines (never on running week)
+						if ((ShowWeeklyHigh || ShowWeeklyLow) && rawSessions.Count > 0)
+						{
+							Dictionary<DateTime, List<int>> weekMap = new Dictionary<DateTime, List<int>>();
+							List<DateTime> orderedWeeks = new List<DateTime>();
+							for (int rIdx = 0; rIdx < rawSessions.Count; rIdx++)
+							{
+								DayProfile rs = rawSessions[rIdx];
+								if (rs.SessionDate.DayOfWeek < DayOfWeek.Monday || rs.SessionDate.DayOfWeek > DayOfWeek.Friday)
+									continue;
+								DateTime wkMon = GetMondayOfWeek(rs.SessionDate);
+								List<int> wList;
+								if (!weekMap.TryGetValue(wkMon, out wList))
+								{
+									wList = new List<int>();
+									weekMap[wkMon] = wList;
+									orderedWeeks.Add(wkMon);
+								}
+								wList.Add(rIdx);
+							}
+							orderedWeeks.Sort();
+
+							for (int wIdx = 0; wIdx < orderedWeeks.Count; wIdx++)
+							{
+								DateTime wkMon = orderedWeeks[wIdx];
+								DateTime wkFri = wkMon.AddDays(4);
+								List<int> wIndices = weekMap[wkMon];
+								if (wIndices.Count == 0)
+									continue;
+
+								if (wIdx == 0 && orderedWeeks.Count > 1 && rawSessions[wIndices[0]].SessionDate.Date > wkMon.AddDays(1))
+									continue;
+
+								bool anyRunningInWeek = false;
+								double wkHigh = double.MinValue;
+								double wkLow = double.MaxValue;
+								int highRawIdx = wIndices[0];
+								int lowRawIdx = wIndices[0];
+								for (int k = 0; k < wIndices.Count; k++)
+								{
+									int rIdx = wIndices[k];
+									DayProfile rs = rawSessions[rIdx];
+									if (IsRawSessionRunning(rs, rIdx == rawSessions.Count - 1, refNow))
+										anyRunningInWeek = true;
+									if (rs.High > wkHigh)
+									{
+										wkHigh = rs.High;
+										highRawIdx = rIdx;
+									}
+									if (rs.Low < wkLow)
+									{
+										wkLow = rs.Low;
+										lowRawIdx = rIdx;
+									}
+								}
+
+								bool isWeekClosed = !anyRunningInWeek && (refNow >= GetTradingDayCloseTime(wkFri));
+								if (!isWeekClosed)
+									continue;
+
+								int lastWkRawIdx = wIndices[wIndices.Count - 1];
+								string wkLabel = FormatWeekRangeLabel(wkMon, wkFri);
+
+								if (ShowWeeklyHigh && wkHigh > double.MinValue)
+								{
+									DayProfile highCol = FindRenderedSessionForRaw(allSessions, rawSessions[highRawIdx]);
+									if (highCol == null || highCol.IbX <= panelRight - 178f)
+									{
+										float rawOriginX = highCol != null ? highCol.IbX : (panelLeft - 40f);
+										float rawOriginEndX = highCol != null ? highCol.CollapsedRightX : (panelLeft - 20f);
+										int whBin = PriceToBin(wkHigh, step);
+										float yWkHigh = priceToY(whBin * step + step * 0.5);
+										if (yWkHigh >= canvasTopY && yWkHigh <= panelBottom - 25f)
+										{
+											float wkHighEndX;
+											bool isWkHighVirgin = GetRawLevelExtensionX(
+												rawSessions, lastWkRawIdx, allSessions,
+												wkHigh, rawOriginEndX, panelLeft, panelRight,
+												refNow, breakEps, LevelBreakMode.CloseAbove, out wkHighEndX);
+											float drawStartX = Math.Max(panelLeft + 2f, rawOriginX);
+											if (wkHighEndX > drawStartX + 1.5f)
+												DrawHairlineHorizontal(drawStartX, wkHighEndX, yWkHigh, highExtremeBrush, 1.30f);
+
+											if (isWkHighVirgin)
+											{
+												rightEdgeTags.Add(new RightEdgeTag
+												{
+													Price = wkHigh,
+													IdealY = yWkHigh - 7.5f,
+													Height = 15f,
+													Text = "WeeklyHigh (" + wkLabel + " " + FormatPrice(wkHigh) + ")",
+													Brush = highExtremeBrush,
+													BorderBrush = highExtremeBorderBrush,
+													Priority = 5
+												});
+											}
+										}
+									}
+								}
+
+								if (ShowWeeklyLow && wkLow < double.MaxValue)
+								{
+									DayProfile lowCol = FindRenderedSessionForRaw(allSessions, rawSessions[lowRawIdx]);
+									if (lowCol == null || lowCol.IbX <= panelRight - 178f)
+									{
+										float rawOriginX = lowCol != null ? lowCol.IbX : (panelLeft - 40f);
+										float rawOriginEndX = lowCol != null ? lowCol.CollapsedRightX : (panelLeft - 20f);
+										int wlBin = PriceToBin(wkLow, step);
+										float yWkLow = priceToY(wlBin * step - step * 0.5);
+										if (yWkLow >= canvasTopY && yWkLow <= panelBottom - 25f)
+										{
+											float wkLowEndX;
+											bool isWkLowVirgin = GetRawLevelExtensionX(
+												rawSessions, lastWkRawIdx, allSessions,
+												wkLow, rawOriginEndX, panelLeft, panelRight,
+												refNow, breakEps, LevelBreakMode.CloseBelow, out wkLowEndX);
+											float drawStartX = Math.Max(panelLeft + 2f, rawOriginX);
+											if (wkLowEndX > drawStartX + 1.5f)
+												DrawHairlineHorizontal(drawStartX, wkLowEndX, yWkLow, lowExtremeBrush, 1.30f);
+
+											if (isWkLowVirgin)
+											{
+												rightEdgeTags.Add(new RightEdgeTag
+												{
+													Price = wkLow,
+													IdealY = yWkLow - 7.5f,
+													Height = 15f,
+													Text = "WeeklyLow (" + wkLabel + " " + FormatPrice(wkLow) + ")",
+													Brush = lowExtremeBrush,
+													BorderBrush = lowExtremeBorderBrush,
+													Priority = 5
+												});
+											}
+										}
+									}
+								}
+							}
+						}
+
+						// 1B. Closed Day DayHigh & DayLow Virgin Lines (strictly closed days/sessions only — never on running day or running session)
+						if ((ShowSwingHigh || ShowSwingLow) && rawSessions.Count > 0)
+						{
+							Dictionary<DateTime, List<int>> dayMap = new Dictionary<DateTime, List<int>>();
+							List<DateTime> orderedDays = new List<DateTime>();
+							for (int rIdx = 0; rIdx < rawSessions.Count; rIdx++)
+							{
+								DateTime dDate = rawSessions[rIdx].SessionDate.Date;
+								List<int> dList;
+								if (!dayMap.TryGetValue(dDate, out dList))
+								{
+									dList = new List<int>();
+									dayMap[dDate] = dList;
+									orderedDays.Add(dDate);
+								}
+								dList.Add(rIdx);
+							}
+							orderedDays.Sort();
+
+							for (int dIdx = 0; dIdx < orderedDays.Count; dIdx++)
+							{
+								DateTime dDate = orderedDays[dIdx];
+								List<int> dIndices = dayMap[dDate];
+								if (dIndices.Count == 0)
+									continue;
+
+								bool anyRunningInDay = false;
+								double dHigh = double.MinValue;
+								double dLow = double.MaxValue;
+								int highRawIdx = dIndices[0];
+								int lowRawIdx = dIndices[0];
+								for (int k = 0; k < dIndices.Count; k++)
+								{
+									int rIdx = dIndices[k];
+									DayProfile rs = rawSessions[rIdx];
+									if (IsRawSessionRunning(rs, rIdx == rawSessions.Count - 1, refNow))
+										anyRunningInDay = true;
+									if (rs.High > dHigh)
+									{
+										dHigh = rs.High;
+										highRawIdx = rIdx;
+									}
+									if (rs.Low < dLow)
+									{
+										dLow = rs.Low;
+										lowRawIdx = rIdx;
+									}
+								}
+
+								bool isDayClosed = !anyRunningInDay && (refNow >= GetTradingDayCloseTime(dDate));
+								if (!isDayClosed)
+									continue;
+
+								int lastDayRawIdx = dIndices[dIndices.Count - 1];
+								string dayDateLbl = dDate.ToString("dd MMM", CultureInfo.InvariantCulture);
+
+								if (ShowSwingHigh && dHigh > double.MinValue)
+								{
+									DayProfile highCol = FindRenderedSessionForRaw(allSessions, rawSessions[highRawIdx]);
+									if (highCol == null || highCol.IbX <= panelRight - 178f)
+									{
+										float rawOriginX = highCol != null ? highCol.IbX : (panelLeft - 40f);
+										float rawOriginEndX = highCol != null ? highCol.CollapsedRightX : (panelLeft - 20f);
+										int dhBin = PriceToBin(dHigh, step);
+										float yDayHigh = priceToY(dhBin * step + step * 0.5);
+										if (yDayHigh >= canvasTopY && yDayHigh <= panelBottom - 25f)
+										{
+											float dHighEndX;
+											bool isDayHighVirgin = GetRawLevelExtensionX(
+												rawSessions, lastDayRawIdx, allSessions,
+												dHigh, rawOriginEndX, panelLeft, panelRight,
+												refNow, breakEps, LevelBreakMode.CloseAbove, out dHighEndX);
+											float drawStartX = Math.Max(panelLeft + 2f, rawOriginX);
+											if (dHighEndX > drawStartX + 1.5f)
+												DrawHairlineHorizontal(drawStartX, dHighEndX, yDayHigh, highSwingLineBrush, 0.80f);
+
+											if (isDayHighVirgin)
+											{
+												rightEdgeTags.Add(new RightEdgeTag
+												{
+													Price = dHigh,
+													IdealY = yDayHigh - 7.5f,
+													Height = 15f,
+													Text = "DayHigh (" + dayDateLbl + " " + FormatPrice(dHigh) + ")",
+													Brush = highExtremeBrush,
+													Priority = 3
+												});
+											}
+										}
+									}
+								}
+
+								if (ShowSwingLow && dLow < double.MaxValue)
+								{
+									DayProfile lowCol = FindRenderedSessionForRaw(allSessions, rawSessions[lowRawIdx]);
+									if (lowCol == null || lowCol.IbX <= panelRight - 178f)
+									{
+										float rawOriginX = lowCol != null ? lowCol.IbX : (panelLeft - 40f);
+										float rawOriginEndX = lowCol != null ? lowCol.CollapsedRightX : (panelLeft - 20f);
+										int dlBin = PriceToBin(dLow, step);
+										float yDayLow = priceToY(dlBin * step - step * 0.5);
+										if (yDayLow >= canvasTopY && yDayLow <= panelBottom - 25f)
+										{
+											float dLowEndX;
+											bool isDayLowVirgin = GetRawLevelExtensionX(
+												rawSessions, lastDayRawIdx, allSessions,
+												dLow, rawOriginEndX, panelLeft, panelRight,
+												refNow, breakEps, LevelBreakMode.CloseBelow, out dLowEndX);
+											float drawStartX = Math.Max(panelLeft + 2f, rawOriginX);
+											if (dLowEndX > drawStartX + 1.5f)
+												DrawHairlineHorizontal(drawStartX, dLowEndX, yDayLow, lowSwingLineBrush, 0.80f);
+
+											if (isDayLowVirgin)
+											{
+												rightEdgeTags.Add(new RightEdgeTag
+												{
+													Price = dLow,
+													IdealY = yDayLow - 7.5f,
+													Height = 15f,
+													Text = "DayLow (" + dayDateLbl + " " + FormatPrice(dLow) + ")",
+													Brush = lowExtremeBrush,
+													Priority = 3
+												});
+											}
+										}
+									}
+								}
+							}
+						}
+
+						// 1C. Session Separators, Single Prints, PoorHigh/Low, VAH/VAL, VPoC/VPPoC & MidLine
 						for (int g = 0; g < dateGroups.Count; g++)
 						{
 							DateColumnGroup group = dateGroups[g];
-							if (group.RightX < panelLeft || group.LeftX > panelRight - 178f)
+							if (group.LeftX > panelRight - 178f)
 								continue;
 
-							if (group.LeftX >= panelLeft && group.LeftX <= panelRight - 178f)
-								RenderTarget.DrawLine(new Vector2(group.LeftX, panelTop), new Vector2(group.LeftX, panelBottom), daySepBrush, 1.6f);
-							if (group.RightX >= panelLeft && group.RightX <= panelRight - 178f)
-								RenderTarget.DrawLine(new Vector2(group.RightX, panelTop), new Vector2(group.RightX, panelBottom), daySepBrush, 1.6f);
+							if (group.RightX >= panelLeft)
+							{
+								if (group.LeftX >= panelLeft && group.LeftX <= panelRight - 178f)
+									RenderTarget.DrawLine(new Vector2(group.LeftX, gridTopY), new Vector2(group.LeftX, panelBottom), daySepBrush, 1.6f);
+								if (group.RightX >= panelLeft && group.RightX <= panelRight - 178f)
+									RenderTarget.DrawLine(new Vector2(group.RightX, gridTopY), new Vector2(group.RightX, panelBottom), daySepBrush, 1.6f);
+							}
 
 							for (int sIdx = 0; sIdx < group.Sessions.Count; sIdx++)
 							{
@@ -3091,13 +4255,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 								float xIb = day.IbX;
 								float xCollapsedRight = day.CollapsedRightX;
 
-								if (xIb < panelLeft + 4f || xCollapsedRight > panelRight - 178f)
+								if (xIb > panelRight - 178f)
 									continue;
 
 								if (sIdx > 0 && xSlotLeft >= panelLeft && xSlotLeft <= panelRight - 178f)
 								{
 									RenderTarget.DrawLine(
-										new Vector2(xSlotLeft, panelTop),
+										new Vector2(xSlotLeft, gridTopY),
 										new Vector2(xSlotLeft, panelBottom - 24f),
 										sessionSepBrush, 1.0f, dashedStroke);
 								}
@@ -3113,7 +4277,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 									profileLowY = swapY;
 								}
 
-								// 1. Extending Buying & Selling Single Print Zones (Buying SP -> Bottom SL line & price; Selling SP -> Top SL line & price)
+								// 1. Extending Buying & Selling Single Print Zones (TPO Close Rule: Buying SP breaks on TPO close < bottom SL; Selling SP breaks on TPO close > top SL)
 								if (ShowSinglePrints)
 								{
 									for (int z = 0; z < day.SinglePrintZones.Count; z++)
@@ -3128,7 +4292,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 											ySpTop = ySpBot;
 											ySpBot = sw;
 										}
-										float spH = Math.Max(3.0f, ySpBot - ySpTop);
 										float ySpSlLine = spZone.IsBuying ? ySpBot : ySpTop;
 										float ySpOppLine = spZone.IsBuying ? ySpTop : ySpBot;
 
@@ -3139,33 +4302,45 @@ namespace NinjaTrader.NinjaScript.Indicators
 											spSlPrice,
 											xCollapsedRight,
 											panelRight,
-											out drawEndX,
-											isHighExtreme: !spZone.IsBuying,
-											isLowExtreme: spZone.IsBuying);
+											refNow,
+											breakEps,
+											spZone.IsBuying ? LevelBreakMode.CloseBelow : LevelBreakMode.CloseAbove,
+											out drawEndX);
 
-										if (ySpBot >= panelTop && ySpTop <= panelBottom - 25f)
+										if (ySpBot >= canvasTopY && ySpTop <= panelBottom - 25f)
 										{
-											float drawStartX = Math.Max(panelLeft, xIb);
+											float drawStartX = Math.Max(panelLeft + 2f, xIb);
 											if (drawEndX > drawStartX + 2f)
 											{
 												DxBrush spBorder = spZone.IsBuying ? singleBuyBorderBrush : singleSellBorderBrush;
-												RectangleF spRayRect = new RectangleF(drawStartX, ySpTop, drawEndX - drawStartX, spH);
-												RenderTarget.FillRectangle(spRayRect, spZone.IsBuying ? singleBuyZoneRayBrush : singleSellZoneRayBrush);
-												RenderTarget.DrawLine(
-													new Vector2(drawStartX, ySpOppLine),
-													new Vector2(drawEndX, ySpOppLine),
-													spBorder,
-													1.05f,
-													dashedStroke);
+												float clRayTop = Math.Max(canvasTopY, ySpTop);
+												float clRayBot = Math.Min(panelBottom - 25f, ySpBot);
+												if (clRayBot > clRayTop)
+												{
+													RectangleF spRayRect = new RectangleF(drawStartX, clRayTop, drawEndX - drawStartX, Math.Max(2f, clRayBot - clRayTop));
+													RenderTarget.FillRectangle(spRayRect, spZone.IsBuying ? singleBuyZoneRayBrush : singleSellZoneRayBrush);
+												}
+												if (ySpOppLine >= canvasTopY && ySpOppLine <= panelBottom - 25f)
+												{
+													RenderTarget.DrawLine(
+														new Vector2(drawStartX, ySpOppLine),
+														new Vector2(drawEndX, ySpOppLine),
+														spBorder,
+														1.05f,
+														dashedStroke);
+												}
 												// Bold SL Trigger Line: Bottom line for Buying Single Print, Top line for Selling Single Print
-												RenderTarget.DrawLine(
-													new Vector2(drawStartX, ySpSlLine),
-													new Vector2(drawEndX, ySpSlLine),
-													spBorder,
-													1.85f);
+												if (ySpSlLine >= canvasTopY && ySpSlLine <= panelBottom - 25f)
+												{
+													RenderTarget.DrawLine(
+														new Vector2(drawStartX, ySpSlLine),
+														new Vector2(drawEndX, ySpSlLine),
+														spBorder,
+														1.85f);
+												}
 											}
 
-											if (isSpVirgin)
+											if (isSpVirgin && ySpSlLine >= canvasTopY && ySpSlLine <= panelBottom - 25f)
 											{
 												string spType = spZone.IsBuying ? "Buying SP" : "Selling SP";
 												rightEdgeTags.Add(new RightEdgeTag
@@ -3184,33 +4359,25 @@ namespace NinjaTrader.NinjaScript.Indicators
 									}
 								}
 
-								// 2. Extending High/Low Levels: ALL Highs (SwingHigh / PoorHigh / ABPoorHigh) = Green; ALL Lows (SwingLow / PoorLow / ABPoorLow) = Red
-								// (Hidden on the Running Session — Running Session only shows Value Area High/Low, POC, and Single Prints)
+								// 2. Extending PoorHigh / ABPoorHigh & PoorLow / ABPoorLow Levels (Closed sessions only; DayHigh/DayLow handled per Closed Day in 1B)
 								PriceRow topRow = day.Rows[maxBin];
 								bool isAbPoorHigh = topRow.Periods.Contains(0) && topRow.Periods.Contains(1);
 								bool isPoorHigh = !isAbPoorHigh && topRow.Periods.Count >= 2;
-								string highLevelName = isAbPoorHigh ? "ABPoorHigh" : (isPoorHigh ? "PoorHigh" : "SwingHigh");
-								DxBrush highLevelBrush = highExtremeBrush;
-								StrokeStyle highLevelStroke = (isAbPoorHigh || isPoorHigh) ? dashedStroke : null;
-								bool enableThisHigh = !isRunningSession && ShowPoorHighLow && ((isAbPoorHigh || isPoorHigh) ? ShowPoorHigh : ShowSwingHigh);
+								bool enablePoorHigh = !isRunningSession && ShowPoorHighLow && ShowPoorHigh && (isAbPoorHigh || isPoorHigh);
 
 								PriceRow botRow = day.Rows[minBin];
 								bool isAbPoorLow = botRow.Periods.Contains(0) && botRow.Periods.Contains(1);
 								bool isPoorLow = !isAbPoorLow && botRow.Periods.Count >= 2;
-								string lowLevelName = isAbPoorLow ? "ABPoorLow" : (isPoorLow ? "PoorLow" : "SwingLow");
-								DxBrush lowLevelBrush = lowExtremeBrush;
-								StrokeStyle lowLevelStroke = (isAbPoorLow || isPoorLow) ? dashedStroke : null;
-								bool enableThisLow = !isRunningSession && ShowPoorHighLow && ((isAbPoorLow || isPoorLow) ? ShowPoorLow : ShowSwingLow);
+								bool enablePoorLow = !isRunningSession && ShowPoorHighLow && ShowPoorLow && (isAbPoorLow || isPoorLow);
 
-								if (enableThisHigh && profileHighY >= panelTop && profileHighY <= panelBottom - 25f)
+								if (enablePoorHigh && profileHighY >= canvasTopY && profileHighY <= panelBottom - 25f)
 								{
+									string highLevelName = isAbPoorHigh ? "ABPoorHigh" : "PoorHigh";
 									float drawEndX;
-									bool isHighVirgin = GetLevelExtensionX(allSessions, globalIdx, day.High, xCollapsedRight, panelRight, out drawEndX, isHighExtreme: true);
-									float drawStartX = Math.Max(panelLeft, xIb);
-									if (highLevelStroke != null)
-										DrawHairlineHorizontal(drawStartX, drawEndX, profileHighY, highLevelBrush, 0.65f, highLevelStroke);
-									else
-										DrawHairlineHorizontal(drawStartX, drawEndX, profileHighY, highSwingLineBrush, 0.52f);
+									bool isHighVirgin = GetLevelExtensionX(allSessions, globalIdx, day.High, xCollapsedRight, panelRight, refNow, breakEps, LevelBreakMode.CloseAbove, out drawEndX);
+									float drawStartX = Math.Max(panelLeft + 2f, xIb);
+									if (drawEndX > drawStartX + 1.5f)
+										DrawHairlineHorizontal(drawStartX, drawEndX, profileHighY, highExtremeBrush, 0.70f, dashedStroke);
 
 									if (isHighVirgin)
 									{
@@ -3220,22 +4387,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 											IdealY = profileHighY - 7.5f,
 											Height = 15f,
 											Text = highLevelName + " (" + day.SessionName + " " + FormatPrice(day.High) + ")",
-											Brush = highLevelBrush,
-											BorderBrush = (isAbPoorHigh || isPoorHigh) ? highExtremeBorderBrush : null,
-											Priority = 1
+											Brush = highExtremeBrush,
+											BorderBrush = highExtremeBorderBrush,
+											Priority = 4
 										});
 									}
 								}
 
-								if (enableThisLow && profileLowY >= panelTop && profileLowY <= panelBottom - 25f)
+								if (enablePoorLow && profileLowY >= canvasTopY && profileLowY <= panelBottom - 25f)
 								{
+									string lowLevelName = isAbPoorLow ? "ABPoorLow" : "PoorLow";
 									float drawEndX;
-									bool isLowVirgin = GetLevelExtensionX(allSessions, globalIdx, day.Low, xCollapsedRight, panelRight, out drawEndX, isLowExtreme: true);
-									float drawStartX = Math.Max(panelLeft, xIb);
-									if (lowLevelStroke != null)
-										DrawHairlineHorizontal(drawStartX, drawEndX, profileLowY, lowLevelBrush, 0.65f, lowLevelStroke);
-									else
-										DrawHairlineHorizontal(drawStartX, drawEndX, profileLowY, lowSwingLineBrush, 0.52f);
+									bool isLowVirgin = GetLevelExtensionX(allSessions, globalIdx, day.Low, xCollapsedRight, panelRight, refNow, breakEps, LevelBreakMode.CloseBelow, out drawEndX);
+									float drawStartX = Math.Max(panelLeft + 2f, xIb);
+									if (drawEndX > drawStartX + 1.5f)
+										DrawHairlineHorizontal(drawStartX, drawEndX, profileLowY, lowExtremeBrush, 0.70f, dashedStroke);
 
 									if (isLowVirgin)
 									{
@@ -3245,29 +4411,30 @@ namespace NinjaTrader.NinjaScript.Indicators
 											IdealY = profileLowY - 7.5f,
 											Height = 15f,
 											Text = lowLevelName + " (" + day.SessionName + " " + FormatPrice(day.Low) + ")",
-											Brush = lowLevelBrush,
-											BorderBrush = (isAbPoorLow || isPoorLow) ? lowExtremeBorderBrush : null,
-											Priority = 1
+											Brush = lowExtremeBrush,
+											BorderBrush = lowExtremeBorderBrush,
+											Priority = 4
 										});
 									}
 								}
 
-								// 3. Extending ValueAreaHigh (VAH) & ValueAreaLow (VAL) Lines (with separate Running Session enable/disable controls)
+								// 3. Extending ValueAreaHigh (VAH) & ValueAreaLow (VAL) Lines (completely hidden on all past & current sessions when unchecked)
 								double vahPrice = day.VahBin * dStep;
 								double valPrice = day.ValBin * dStep;
 								float yVahLine = SessionPriceToY(day, day.VahBin * dStep + dStep * 0.5, step);
 								float yValLine = SessionPriceToY(day, day.ValBin * dStep - dStep * 0.5, step);
-								bool allowVahExt = isRunningSession ? (EnableRunningSessionLevels && ShowRunningSessionVAH) : ShowVirginVAH;
-								bool allowValExt = isRunningSession ? (EnableRunningSessionLevels && ShowRunningSessionVAL) : ShowVirginVAL;
+								bool allowVahExt = ShowVirginVAH && (!isRunningSession || (EnableRunningSessionLevels && ShowRunningSessionVAH));
+								bool allowValExt = ShowVirginVAL && (!isRunningSession || (EnableRunningSessionLevels && ShowRunningSessionVAL));
 
-								if (allowVahExt && yVahLine >= panelTop && yVahLine <= panelBottom - 25f)
+								if (allowVahExt && yVahLine >= canvasTopY && yVahLine <= panelBottom - 25f)
 								{
 									float vahDrawEndX;
-									bool isVahVirgin = GetLevelExtensionX(allSessions, globalIdx, vahPrice, xCollapsedRight, panelRight, out vahDrawEndX);
-									if (vahDrawEndX > xCollapsedRight + 1f)
+									bool isVahVirgin = GetLevelExtensionX(allSessions, globalIdx, vahPrice, xCollapsedRight, panelRight, refNow, breakEps, LevelBreakMode.CrossClose, out vahDrawEndX);
+									float vahStartX = Math.Max(panelLeft + 2f, xCollapsedRight);
+									if (vahDrawEndX > vahStartX + 1f)
 									{
 										RenderTarget.DrawLine(
-											new Vector2(xCollapsedRight, yVahLine),
+											new Vector2(vahStartX, yVahLine),
 											new Vector2(vahDrawEndX, yVahLine),
 											vaVirginBrush, 1.05f, dashedStroke);
 									}
@@ -3285,14 +4452,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 									}
 								}
 
-								if (allowValExt && yValLine >= panelTop && yValLine <= panelBottom - 25f)
+								if (allowValExt && yValLine >= canvasTopY && yValLine <= panelBottom - 25f)
 								{
 									float valDrawEndX;
-									bool isValVirgin = GetLevelExtensionX(allSessions, globalIdx, valPrice, xCollapsedRight, panelRight, out valDrawEndX);
-									if (valDrawEndX > xCollapsedRight + 1f)
+									bool isValVirgin = GetLevelExtensionX(allSessions, globalIdx, valPrice, xCollapsedRight, panelRight, refNow, breakEps, LevelBreakMode.CrossClose, out valDrawEndX);
+									float valStartX = Math.Max(panelLeft + 2f, xCollapsedRight);
+									if (valDrawEndX > valStartX + 1f)
 									{
 										RenderTarget.DrawLine(
-											new Vector2(xCollapsedRight, yValLine),
+											new Vector2(valStartX, yValLine),
 											new Vector2(valDrawEndX, yValLine),
 											vaVirginBrush, 1.05f, dashedStroke);
 									}
@@ -3310,26 +4478,26 @@ namespace NinjaTrader.NinjaScript.Indicators
 									}
 								}
 
-								// 4. Extending VPoC (POC) & VPPoC (PPoC) Lines (with separate Running Session enable/disable controls)
+								// 4. Extending VPoC (POC) & VPPoC (PPoC) Lines (completely hidden on all past & current sessions when unchecked)
 								double vpocPrice = day.VolumePocBin * dStep;
 								double tpoPocPrice = day.PocBin * dStep;
 								float yVpoc = SessionPriceToY(day, vpocPrice, step);
 								float yTpoPoc = SessionPriceToY(day, tpoPocPrice, step);
-								bool allowVpocLine = !isRunningSession || (EnableRunningSessionLevels && ShowRunningSessionPOC);
-								bool allowVpocExt = isRunningSession ? (EnableRunningSessionLevels && ShowRunningSessionPOC) : ShowVirginVPoC;
-								bool allowVppocLine = !isRunningSession || (EnableRunningSessionLevels && ShowRunningSessionPPOC);
-								bool allowVppocExt = isRunningSession ? (EnableRunningSessionLevels && ShowRunningSessionPPOC) : ShowVirginVPPoC;
+								bool allowVpoc = ShowVirginVPoC && (!isRunningSession || (EnableRunningSessionLevels && ShowRunningSessionPOC));
+								bool allowVppoc = ShowVirginVPPoC && (!isRunningSession || (EnableRunningSessionLevels && ShowRunningSessionPPOC));
 
-								if (allowVpocLine && yVpoc >= panelTop && yVpoc <= panelBottom - 25f)
+								if (allowVpoc && yVpoc >= canvasTopY && yVpoc <= panelBottom - 25f)
 								{
-									float vpocDrawEndX = xCollapsedRight;
-									bool isVpocVirgin = false;
-									if (allowVpocExt)
-										isVpocVirgin = GetLevelExtensionX(allSessions, globalIdx, vpocPrice, xCollapsedRight, panelRight, out vpocDrawEndX);
-									RenderTarget.DrawLine(
-										new Vector2(Math.Max(panelLeft, xIb), yVpoc),
-										new Vector2(vpocDrawEndX, yVpoc),
-										pocLineBrush, 1.3f);
+									float vpocDrawEndX;
+									bool isVpocVirgin = GetLevelExtensionX(allSessions, globalIdx, vpocPrice, xCollapsedRight, panelRight, refNow, breakEps, LevelBreakMode.CrossClose, out vpocDrawEndX);
+									float vpocStartX = Math.Max(panelLeft + 2f, xIb);
+									if (vpocDrawEndX > vpocStartX + 1f)
+									{
+										RenderTarget.DrawLine(
+											new Vector2(vpocStartX, yVpoc),
+											new Vector2(vpocDrawEndX, yVpoc),
+											pocLineBrush, 1.3f);
+									}
 									if (isVpocVirgin)
 									{
 										rightEdgeTags.Add(new RightEdgeTag
@@ -3344,16 +4512,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 									}
 								}
 
-								if (allowVppocLine && (day.PocBin != day.VolumePocBin || !allowVpocLine) && yTpoPoc >= panelTop && yTpoPoc <= panelBottom - 25f)
+								if (allowVppoc && (day.PocBin != day.VolumePocBin || !allowVpoc) && yTpoPoc >= canvasTopY && yTpoPoc <= panelBottom - 25f)
 								{
-									float tpoDrawEndX = xCollapsedRight;
-									bool isVppocVirgin = false;
-									if (allowVppocExt)
-										isVppocVirgin = GetLevelExtensionX(allSessions, globalIdx, tpoPocPrice, xCollapsedRight, panelRight, out tpoDrawEndX);
-									RenderTarget.DrawLine(
-										new Vector2(Math.Max(panelLeft, xIb), yTpoPoc),
-										new Vector2(tpoDrawEndX, yTpoPoc),
-										vppocLineBrush, 1.0f, dashedStroke);
+									float tpoDrawEndX;
+									bool isVppocVirgin = GetLevelExtensionX(allSessions, globalIdx, tpoPocPrice, xCollapsedRight, panelRight, refNow, breakEps, LevelBreakMode.CrossClose, out tpoDrawEndX);
+									float vppocStartX = Math.Max(panelLeft + 2f, xIb);
+									if (tpoDrawEndX > vppocStartX + 1f)
+									{
+										RenderTarget.DrawLine(
+											new Vector2(vppocStartX, yTpoPoc),
+											new Vector2(tpoDrawEndX, yTpoPoc),
+											vppocLineBrush, 1.0f, dashedStroke);
+									}
 									if (isVppocVirgin)
 									{
 										rightEdgeTags.Add(new RightEdgeTag
@@ -3368,19 +4538,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 									}
 								}
 
-								// 5. Session Midline & Extending Virgin Midline (hidden on Running Session; extends on completed sessions until broken)
+								// 5. Session Midline & Extending Virgin Midline (completely hidden on all past & current sessions when ShowVirginMidLine is unchecked)
 								double midPrice = (day.High + day.Low) * 0.5;
 								float yMid = (profileHighY + profileLowY) * 0.5f;
-								if (!isRunningSession && yMid >= panelTop && yMid <= panelBottom - 25f)
+								if (ShowVirginMidLine && !isRunningSession && yMid >= canvasTopY && yMid <= panelBottom - 25f)
 								{
-									float midDrawEndX = xCollapsedRight;
-									bool isMidVirgin = false;
-									if (ShowVirginMidLine)
-										isMidVirgin = GetLevelExtensionX(allSessions, globalIdx, midPrice, xCollapsedRight, panelRight, out midDrawEndX);
-									RenderTarget.DrawLine(
-										new Vector2(Math.Max(panelLeft, xIb), yMid),
-										new Vector2(midDrawEndX, yMid),
-										midLineBrush, 1.1f, dashedStroke);
+									float midDrawEndX;
+									bool isMidVirgin = GetLevelExtensionX(allSessions, globalIdx, midPrice, xCollapsedRight, panelRight, refNow, breakEps, LevelBreakMode.CrossClose, out midDrawEndX);
+									float midStartX = Math.Max(panelLeft + 2f, xIb);
+									if (midDrawEndX > midStartX + 1f)
+									{
+										RenderTarget.DrawLine(
+											new Vector2(midStartX, yMid),
+											new Vector2(midDrawEndX, yMid),
+											midLineBrush, 1.1f, dashedStroke);
+									}
 									if (isMidVirgin)
 									{
 										rightEdgeTags.Add(new RightEdgeTag
@@ -3403,6 +4575,30 @@ namespace NinjaTrader.NinjaScript.Indicators
 						// =========================================================================
 						float fullBannerStripW = Math.Max(40f, (panelRight - 180f) - (panelLeft + 2f));
 						RenderTarget.FillRectangle(new RectangleF(panelLeft + 2f, panelBottom - 23f, fullBannerStripW, 22f), dateBannerBgBrush);
+
+						if (FixSessionHeaderAtTop)
+						{
+							RectangleF topSessionStripRect = new RectangleF(panelLeft + 2f, topSessionBarY, fullBannerStripW, 35f);
+							RenderTarget.FillRectangle(topSessionStripRect, dateBannerBgBrush);
+							RenderTarget.DrawRectangle(topSessionStripRect, cardBorderBrush, 1.0f);
+
+							for (int tg = 0; tg < dateGroups.Count; tg++)
+							{
+								DateColumnGroup tGrp = dateGroups[tg];
+								if (tGrp.RightX < panelLeft || tGrp.LeftX > panelRight - 178f)
+									continue;
+								if (tGrp.LeftX >= panelLeft + 2f && tGrp.LeftX <= panelRight - 180f)
+									RenderTarget.DrawLine(new Vector2(tGrp.LeftX, topSessionBarY), new Vector2(tGrp.LeftX, topSessionBarY + 35f), daySepBrush, 1.6f);
+								if (tGrp.RightX >= panelLeft + 2f && tGrp.RightX <= panelRight - 180f)
+									RenderTarget.DrawLine(new Vector2(tGrp.RightX, topSessionBarY), new Vector2(tGrp.RightX, topSessionBarY + 35f), daySepBrush, 1.6f);
+								for (int ts = 1; ts < tGrp.Sessions.Count; ts++)
+								{
+									float divX = tGrp.Sessions[ts].SlotLeftX;
+									if (divX >= panelLeft + 2f && divX <= panelRight - 180f)
+										RenderTarget.DrawLine(new Vector2(divX, topSessionBarY), new Vector2(divX, topSessionBarY + 35f), cardBorderBrush, 1.0f);
+								}
+							}
+						}
 
 						for (int g = 0; g < dateGroups.Count; g++)
 						{
@@ -3540,13 +4736,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 									profileLowY = swapY;
 								}
 
-								// Include the '#' close marker in maxRowCells so '#' NEVER overlaps the last TPO letter!
+								float sampleRowYA = SessionPriceToY(day, poc * dStep + dStep * 0.5, step);
+								float sampleRowYB = SessionPriceToY(day, poc * dStep - dStep * 0.5, step);
+								float sampleRowH = Math.Max(1.0f, Math.Abs(sampleRowYB - sampleRowYA));
+
+								// Adaptive Letter Spacing & Font Size (Layer 2 Adaptive Rendering Engine)
 								int maxRowCells = Math.Max(1, day.Rows.Max(kv => kv.Value.Periods.Count + (kv.Key == closeBin ? 1 : 0)));
 								float baseCollapsedSlotW = Math.Max(224f, xCollapsedRight - xIb);
 								float volWidth = ShowVolumeProfile ? 38f : 0f;
 								float availTpoW = Math.Max(40f, baseCollapsedSlotW - volWidth - 14f);
-								float maxCellW = Math.Max(9.8f, Math.Min(11.6f, FontSize * 0.90f));
-								float letterWidth = Math.Min(maxCellW, Math.Max(6.5f, availTpoW / Math.Max(1, maxRowCells)));
+								float baseCellW = Math.Max(9.8f, Math.Min(11.6f, FontSize * 0.90f));
+								float adaptiveMaxCellW = sampleRowH < 9.5f
+									? Math.Max(7.0f, Math.Min(baseCellW, sampleRowH * 1.15f))
+									: Math.Min(13.2f, Math.Max(baseCellW, sampleRowH * 0.86f));
+								float letterWidth = Math.Min(adaptiveMaxCellW, Math.Max(5.2f, availTpoW / Math.Max(1, maxRowCells)));
 								float collapsedTpoWidth = maxRowCells * letterWidth;
 
 								float xTpo = xIb + 4f;
@@ -3556,28 +4759,30 @@ namespace NinjaTrader.NinjaScript.Indicators
 								float yValB = SessionPriceToY(day, val * dStep - dStep * 0.5, step);
 								float yVaTop = Math.Min(yVahA, yValB);
 								float yVaBot = Math.Max(yVahA, yValB);
-								bool showProfileVah = !isRunningSession || (EnableRunningSessionLevels && ShowRunningSessionVAH);
-								bool showProfileVal = !isRunningSession || (EnableRunningSessionLevels && ShowRunningSessionVAL);
+								float clampedVaTop = Math.Max(canvasTopY, yVaTop);
+								float clampedVaBot = Math.Min(panelBottom - 25f, yVaBot);
+								bool showProfileVah = ShowVirginVAH && (!isRunningSession || (EnableRunningSessionLevels && ShowRunningSessionVAH));
+								bool showProfileVal = ShowVirginVAL && (!isRunningSession || (EnableRunningSessionLevels && ShowRunningSessionVAL));
 
-								// 1. Shaded Value Area Box + Dashed Cyan Borders
-								if (showProfileVah || showProfileVal)
+								// 1. Shaded Value Area Box + Dashed Cyan Borders (cleanly clipped during vertical scroll / zoom)
+								if ((showProfileVah || showProfileVal) && clampedVaBot > clampedVaTop + 1f)
 								{
 									RenderTarget.FillRectangle(
-										new RectangleF(xIb, yVaTop, Math.Max(4f, xCollapsedRight - xIb), Math.Max(2f, yVaBot - yVaTop)),
+										new RectangleF(xIb, clampedVaTop, Math.Max(4f, xCollapsedRight - xIb), Math.Max(2f, clampedVaBot - clampedVaTop)),
 										vaFillBrush);
 								}
-								if (showProfileVah)
+								if (showProfileVah && yVaTop >= canvasTopY && yVaTop <= panelBottom - 25f)
 									RenderTarget.DrawLine(new Vector2(xIb, yVaTop), new Vector2(xCollapsedRight, yVaTop), vaBorderBrush, 1.0f, dashedStroke);
-								if (showProfileVal)
+								if (showProfileVal && yVaBot >= canvasTopY && yVaBot <= panelBottom - 25f)
 									RenderTarget.DrawLine(new Vector2(xIb, yVaBot), new Vector2(xCollapsedRight, yVaBot), vaBorderBrush, 1.0f, dashedStroke);
 
-								float sampleRowYA = SessionPriceToY(day, poc * dStep + dStep * 0.5, step);
-								float sampleRowYB = SessionPriceToY(day, poc * dStep - dStep * 0.5, step);
-								float sampleRowH = Math.Max(1.0f, Math.Abs(sampleRowYB - sampleRowYA));
+								float minFontFloor = AutoScaleTpoByScreenResolution ? 5.8f : 4.4f;
+								float minLetterRowH = AutoScaleTpoByScreenResolution ? 6.5f : 4.2f;
+								float maxFontCeil = Math.Max((float)Math.Max(9, FontSize), Math.Min(14.5f, sampleRowH * 0.82f));
 								float letterFontPx = Math.Min(
-									(float)Math.Max(9, FontSize),
-									Math.Min(Math.Max(5.8f, sampleRowH * 0.78f), Math.Max(5.8f, letterWidth * 0.98f)));
-								float splitLetterFontPx = Math.Min(10.0f, Math.Max(5.8f, sampleRowH * 0.76f));
+									maxFontCeil,
+									Math.Min(Math.Max(minFontFloor, sampleRowH * 0.80f), Math.Max(minFontFloor, letterWidth * 0.96f)));
+								float splitLetterFontPx = Math.Min(Math.Max(10.5f, maxFontCeil), Math.Max(minFontFloor, sampleRowH * 0.78f));
 
 								using (var letterFormat = new DxTextFormat(Core.Globals.DirectWriteFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, letterFontPx))
 								using (var splitLetterFormat = new DxTextFormat(Core.Globals.DirectWriteFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, splitLetterFontPx))
@@ -3599,7 +4804,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 										float yB = SessionPriceToY(day, bin * dStep - dStep * 0.5, step);
 										float y = Math.Min(yA, yB);
 										float h = Math.Max(1.0f, Math.Abs(yB - yA));
-										if (y > panelBottom - 25f || y + h < panelTop)
+										if (y < canvasTopY - 0.5f || y + h > panelBottom - 24f)
 											continue;
 
 										// Highlight interior Buying Single Prints (Emerald Green) & Selling Single Prints (Crimson Red)
@@ -3631,7 +4836,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 										}
 
 										List<int> sortedPeriods = row.Periods.OrderBy(p => p).ToList();
-										if (h >= 6.5f)
+										if (h >= minLetterRowH && letterWidth >= 4.8f)
 										{
 											for (int colIdx = 0; colIdx < sortedPeriods.Count; colIdx++)
 											{
@@ -3658,13 +4863,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 										}
 										else
 										{
+											float cellVGap = h >= 2.2f ? 0.5f : 0.0f;
+											float cellHGap = letterWidth >= 4.0f ? 0.5f : 0.15f;
 											for (int colIdx = 0; colIdx < sortedPeriods.Count; colIdx++)
 											{
 												int period = sortedPeriods[colIdx];
 												int safePeriod = Math.Max(0, Math.Min(period, LetterSequence.Length - 1));
 												float lx = xTpo + colIdx * letterWidth;
 												DxBrush cellBrush = (bin == openBin && colIdx == 0) ? whiteBrush : letterBrushes[safePeriod % letterBrushes.Length];
-												RenderTarget.FillRectangle(new RectangleF(lx + 0.6f, y + 0.4f, Math.Max(1.0f, letterWidth - 1.2f), Math.Max(1.0f, h - 0.8f)), cellBrush);
+												RenderTarget.FillRectangle(new RectangleF(lx + cellHGap, y + cellVGap * 0.5f, Math.Max(1.0f, letterWidth - cellHGap * 2f), Math.Max(1.0f, h - cellVGap)), cellBrush);
+											}
+											if (bin == closeBin)
+											{
+												float hashX = xTpo + sortedPeriods.Count * letterWidth;
+												RenderTarget.FillRectangle(new RectangleF(hashX + cellHGap, y + cellVGap * 0.5f, Math.Max(1.0f, letterWidth - cellHGap * 2f), Math.Max(1.0f, h - cellVGap)), redBrush);
 											}
 										}
 
@@ -3699,7 +4911,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 											float ySpSlLine = spz.IsBuying ? ySpBot : ySpTop;
 											DxBrush spBorder = spz.IsBuying ? singleBuyBorderBrush : singleSellBorderBrush;
 
-											if (ySpSlLine >= panelTop && ySpSlLine <= panelBottom - 25f)
+											if (ySpSlLine >= canvasTopY && ySpSlLine <= panelBottom - 25f)
 											{
 												RenderTarget.DrawLine(
 													new Vector2(xTpo - 1.5f, ySpSlLine),
@@ -3721,7 +4933,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 												float yZ = spz.IsBuying ? (ySpBot - 12.5f) : (ySpTop + 0.5f);
 												yZ = Math.Max(profileHighY + 4f, Math.Min(profileLowY - 14f, yZ));
-												if (yZ >= panelTop + 4f && yZ <= panelBottom - 36f)
+												if (yZ >= canvasTopY + 2f && yZ <= panelBottom - 36f)
 												{
 													float availRightW = (xVol - 3f) - (xTpo + maxNearCells * letterWidth + 6f);
 													if (availRightW >= 46f)
@@ -3745,10 +4957,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 									if (ShowVolumeProfile && volWidth > 0)
 									{
-										RenderTarget.DrawLine(
-											new Vector2(xVol, profileHighY),
-											new Vector2(xVol, profileLowY),
-											spineLineBrush, 1.0f);
+										float ySpHigh = Math.Max(canvasTopY, profileHighY);
+										float ySpLow = Math.Min(panelBottom - 25f, profileLowY);
+										if (ySpLow > ySpHigh)
+										{
+											RenderTarget.DrawLine(
+												new Vector2(xVol, ySpHigh),
+												new Vector2(xVol, ySpLow),
+												spineLineBrush, 1.0f);
+										}
 									}
 
 									// 3. Green Initial Balance (IB) vertical bar on the left spine
@@ -3756,10 +4973,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 									{
 										float yIbH = SessionPriceToY(day, day.InitialBalanceHigh, step);
 										float yIbL = SessionPriceToY(day, day.InitialBalanceLow, step);
-										RenderTarget.DrawLine(new Vector2(xIb, yIbH), new Vector2(xIb, yIbL), ibBarBrush, 2.4f);
+										float yIbTop = Math.Max(canvasTopY, Math.Min(yIbH, yIbL));
+										float yIbBot = Math.Min(panelBottom - 25f, Math.Max(yIbH, yIbL));
+										if (yIbBot > yIbTop)
+											RenderTarget.DrawLine(new Vector2(xIb, yIbTop), new Vector2(xIb, yIbBot), ibBarBrush, 2.4f);
 									}
 
-									// Precompute Top Level Pill (PoorHigh / ABPoorHigh only; SwingHigh box removed) & Session Header Y coordinates
+									// Precompute Top Level Pill (PoorHigh / ABPoorHigh only; SwingHigh box removed) & Fixed Top Session Header Y coordinates
 									PriceRow topRow = day.Rows[maxBin];
 									bool isAbPoorHigh = topRow.Periods.Contains(0) && topRow.Periods.Contains(1);
 									bool isPoorHigh = !isAbPoorHigh && topRow.Periods.Count >= 2;
@@ -3768,16 +4988,27 @@ namespace NinjaTrader.NinjaScript.Indicators
 									DxBrush highLevelBrush = highExtremeBrush;
 
 									float topTagY = profileHighY - 17f;
-									float headerY = Math.Max(panelTop + 6f, (showTopPoorBox ? topTagY - 36f : profileHighY - 36f));
+									float headerY = FixSessionHeaderAtTop
+										? (topSessionBarY + 2f)
+										: Math.Max(canvasTopY + 4f, (showTopPoorBox ? topTagY - 36f : profileHighY - 36f));
 									float btnRowY = headerY + 17f;
 
-									// 4. Split / Expanded TPO & Volume Profile for ANY Selected Session (zero text overlap with SwingHigh or right-edge tags)
+									// 4. Split / Expanded TPO & Volume Profile for ANY Selected Session (docked in Fixed Top Session Bar when FixSessionHeaderAtTop is enabled)
 									if (day.IsSplitExpanded && day.PeriodSlices.Count > 0)
 									{
 										float xSplitStart = xCollapsedRight + 12f;
 										float xSplitEnd = Math.Min(xSlotRight - 6f, panelRight - 178f);
 										if (xSplitEnd > xSplitStart + 65f)
 										{
+											if (FixSessionHeaderAtTop && xSplitStart - 6f >= panelLeft + 4f && xSplitStart - 6f <= panelRight - 180f)
+											{
+												RenderTarget.DrawLine(
+													new Vector2(xSplitStart - 6f, topSessionBarY),
+													new Vector2(xSplitStart - 6f, topSessionBarY + 35f),
+													cardBorderBrush,
+													1.0f);
+											}
+
 											float splitAvailW = xSplitEnd - xSplitStart;
 											List<PeriodSlice> orderedSlices = day.PeriodSlices.Values.OrderBy(ps => ps.PeriodIndex).ToList();
 											int sliceCount = Math.Max(1, orderedSlices.Count);
@@ -3787,25 +5018,28 @@ namespace NinjaTrader.NinjaScript.Indicators
 											float totalSplitVolW = volBarCount > 0
 												? (volBarCount * singleVolW + (volBarCount - 1) * volColGap)
 												: 0f;
-											float splitColW = Math.Min(10.6f, Math.Max(7.0f, (splitAvailW - totalSplitVolW - 16f) / Math.Max(5, sliceCount + 1)));
-											float xSplitVol = Math.Min(xSplitEnd - totalSplitVolW - 2f, xSplitStart + 6f + (sliceCount + 1) * splitColW + 6f);
+											float maxSplitColW = sampleRowH < 9.5f
+												? Math.Max(7.2f, Math.Min(10.6f, sampleRowH * 1.15f))
+												: Math.Min(12.2f, Math.Max(10.6f, sampleRowH * 0.85f));
+											float splitColW = Math.Min(maxSplitColW, Math.Max(6.6f, (splitAvailW - totalSplitVolW - 16f) / Math.Max(5, sliceCount)));
+											float xSplitVol = Math.Min(xSplitEnd - totalSplitVolW - 2f, xSplitStart + 6f + sliceCount * splitColW + 8f);
 
-											// Split Profile Header Banner aligned at headerY (well ABOVE SwingHigh and profileHighY!)
+											// Split Profile Header Banner aligned inside Fixed Top Session Bar at headerY
 											float splitHeaderW = Math.Min(164f, Math.Max(118f, splitAvailW));
 											RectangleF splitHdrPill = new RectangleF(xSplitStart, headerY, splitHeaderW, 16f);
 											RenderTarget.FillRectangle(splitHdrPill, btnActiveBgBrush);
 											RenderTarget.DrawRectangle(splitHdrPill, cyanBrush, 0.8f);
 											DrawText("SPLIT PROFILE (" + day.SessionName + ")", xSplitStart + 4f, headerY, splitHeaderW - 8f, 16f, spTagFormat, cyanBrush);
 
-											if (showProfileVah || showProfileVal)
+											if ((showProfileVah || showProfileVal) && clampedVaBot > clampedVaTop + 1f)
 											{
 												RenderTarget.FillRectangle(
-													new RectangleF(xSplitStart, yVaTop, Math.Max(10f, xSplitEnd - xSplitStart), Math.Max(2f, yVaBot - yVaTop)),
+													new RectangleF(xSplitStart, clampedVaTop, Math.Max(10f, xSplitEnd - xSplitStart), Math.Max(2f, clampedVaBot - clampedVaTop)),
 													vaFillBrush);
 											}
-											if (showProfileVah)
+											if (showProfileVah && yVaTop >= canvasTopY && yVaTop <= panelBottom - 25f)
 												RenderTarget.DrawLine(new Vector2(xSplitStart, yVaTop), new Vector2(xSplitEnd, yVaTop), vaBorderBrush, 1.0f, dashedStroke);
-											if (showProfileVal)
+											if (showProfileVal && yVaBot >= canvasTopY && yVaBot <= panelBottom - 25f)
 												RenderTarget.DrawLine(new Vector2(xSplitStart, yVaBot), new Vector2(xSplitEnd, yVaBot), vaBorderBrush, 1.0f, dashedStroke);
 
 											// Highlight Single Print Zones & SL lines inside Split Profile as well
@@ -3822,13 +5056,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 														ySpTop = ySpBot;
 														ySpBot = sw;
 													}
-													float spH = Math.Max(3.0f, ySpBot - ySpTop);
+													float clSpTop = Math.Max(canvasTopY, ySpTop);
+													float clSpBot = Math.Min(panelBottom - 25f, ySpBot);
 													float ySpSlLine = spz.IsBuying ? ySpBot : ySpTop;
-													if (ySpBot >= panelTop && ySpTop <= panelBottom - 25f)
+													if (clSpBot > clSpTop)
 													{
 														RenderTarget.FillRectangle(
-															new RectangleF(xSplitStart, ySpTop, Math.Max(10f, xSplitEnd - xSplitStart), spH),
+															new RectangleF(xSplitStart, clSpTop, Math.Max(10f, xSplitEnd - xSplitStart), Math.Max(2.0f, clSpBot - clSpTop)),
 															spz.IsBuying ? singleBuyRowBrush : singleSellRowBrush);
+													}
+													if (ySpSlLine >= canvasTopY && ySpSlLine <= panelBottom - 25f)
+													{
 														RenderTarget.DrawLine(
 															new Vector2(xSplitStart, ySpSlLine),
 															new Vector2(xSplitEnd, ySpSlLine),
@@ -3842,64 +5080,107 @@ namespace NinjaTrader.NinjaScript.Indicators
 											{
 												float yIbH = SessionPriceToY(day, day.InitialBalanceHigh, step);
 												float yIbL = SessionPriceToY(day, day.InitialBalanceLow, step);
-												RenderTarget.DrawLine(new Vector2(xSplitStart, yIbH), new Vector2(xSplitStart, yIbL), ibBarBrush, 2.2f);
+												float yIbTop = Math.Max(canvasTopY, Math.Min(yIbH, yIbL));
+												float yIbBot = Math.Min(panelBottom - 25f, Math.Max(yIbH, yIbL));
+												if (yIbBot > yIbTop)
+													RenderTarget.DrawLine(new Vector2(xSplitStart, yIbTop), new Vector2(xSplitStart, yIbBot), ibBarBrush, 2.2f);
 											}
 
-											for (int cIdx = 0; cIdx < orderedSlices.Count; cIdx++)
+											int hpUniformW = Math.Max(4, (int)Math.Round(splitColW - 1.8f));
+											float hpBarH = sampleRowH >= 10.5f ? 2.0f : 1.0f;
+											float splitAtFontPx = Math.Min(splitLetterFontPx * 0.88f, Math.Max(6.8f, splitColW * 0.92f));
+											using (var splitAtFormat = new DxTextFormat(Core.Globals.DirectWriteFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, splitAtFontPx))
 											{
-												PeriodSlice slice = orderedSlices[cIdx];
-												int pIdx = Math.Max(0, Math.Min(slice.PeriodIndex, LetterSequence.Length - 1));
-												string pLetter = LetterSequence[pIdx].ToString();
-												float cx = xSplitStart + 4f + cIdx * splitColW;
-												if (cx + splitColW > xSplitVol - 2f)
-													break;
+												splitAtFormat.TextAlignment = TextAlignment.Center;
+												splitAtFormat.ParagraphAlignment = ParagraphAlignment.Center;
+												splitAtFormat.WordWrapping = WordWrapping.NoWrap;
 
-												// Draw Period Column Header Letter at btnRowY above the Split Profile
-												DrawText(pLetter, cx, btnRowY, splitColW, 14f, splitLetterFormat, letterBrushes[pIdx % letterBrushes.Length]);
-
-												int sMinBin = PriceToBin(slice.Low, dStep);
-												int sMaxBin = PriceToBin(slice.High, dStep);
-												int sOpenBin = PriceToBin(slice.Open, dStep);
-												int sCloseBin = PriceToBin(slice.Close, dStep);
-												int sMidBin = (sMinBin + sMaxBin) / 2;
-
-												for (int b = sMinBin; b <= sMaxBin; b++)
+												for (int cIdx = 0; cIdx < orderedSlices.Count; cIdx++)
 												{
-													float yA = SessionPriceToY(day, b * dStep + dStep * 0.5, step);
-													float yB = SessionPriceToY(day, b * dStep - dStep * 0.5, step);
-													float y = Math.Min(yA, yB);
-													float h = Math.Max(1.0f, Math.Abs(yB - yA));
-													if (y > panelBottom - 25f || y + h < panelTop)
-														continue;
+													PeriodSlice slice = orderedSlices[cIdx];
+													int pIdx = Math.Max(0, Math.Min(slice.PeriodIndex, LetterSequence.Length - 1));
+													string pLetter = LetterSequence[pIdx].ToString();
+													float cx = xSplitStart + 4f + cIdx * splitColW;
+													if (cx + splitColW > xSplitVol - 2f)
+														break;
 
-													// Only the Open letter is colored white; Mid-candle letter is highlighted with a white underline
-													DxBrush lBrush = (b == sOpenBin)
-														? whiteBrush
-														: letterBrushes[pIdx % letterBrushes.Length];
-													if (h >= 6.5f)
-														DrawTpoCellText(pLetter, cx, y, splitColW, h, splitLetterFormat, lBrush);
-													else
-														RenderTarget.FillRectangle(new RectangleF(cx + 0.6f, y + 0.4f, Math.Max(1.0f, splitColW - 1.2f), Math.Max(1.0f, h - 0.8f)), lBrush);
+													// Draw Period Column Header Letter at btnRowY above the Split Profile
+													DrawText(pLetter, cx, btnRowY, splitColW, 14f, splitLetterFormat, letterBrushes[pIdx % letterBrushes.Length]);
 
-													if (b == sMidBin)
+													int sMinBin = PriceToBin(slice.Low, dStep);
+													int sMaxBin = PriceToBin(slice.High, dStep);
+													if (sMaxBin < sMinBin)
 													{
-														float ulY = y + h - 0.8f;
-														RenderTarget.DrawLine(
-															new Vector2(cx + 1.2f, ulY),
-															new Vector2(cx + splitColW - 1.2f, ulY),
-															whiteBrush,
-															1.2f);
+														int swBin = sMinBin;
+														sMinBin = sMaxBin;
+														sMaxBin = swBin;
 													}
-												}
+													int sOpenBin = Math.Max(sMinBin, Math.Min(sMaxBin, PriceToBin(slice.Open, dStep)));
+													int sCloseBin = Math.Max(sMinBin, Math.Min(sMaxBin, PriceToBin(slice.Close, dStep)));
+													int tpoSpanCount = sMaxBin - sMinBin + 1;
+													int sMidBin = sMinBin + (tpoSpanCount / 2);
+													float midRowBotY = float.NaN;
 
-												if (cIdx == orderedSlices.Count - 1 && cx + splitColW * 2f <= xSplitVol)
-												{
-													float yCloseA = SessionPriceToY(day, sCloseBin * dStep + dStep * 0.5, step);
-													float yCloseB = SessionPriceToY(day, sCloseBin * dStep - dStep * 0.5, step);
-													float yClose = Math.Min(yCloseA, yCloseB);
-													float hClose = Math.Max(1.0f, Math.Abs(yCloseB - yCloseA));
-													if (hClose >= 6.5f)
-														DrawTpoCellText("#", cx + splitColW, yClose, splitColW, hClose, splitLetterFormat, redBrush);
+													for (int b = sMinBin; b <= sMaxBin; b++)
+													{
+														float yA = SessionPriceToY(day, b * dStep + dStep * 0.5, step);
+														float yB = SessionPriceToY(day, b * dStep - dStep * 0.5, step);
+														float y = Math.Min(yA, yB);
+														float h = Math.Max(1.0f, Math.Abs(yB - yA));
+														if (y < canvasTopY - 0.5f || y + h > panelBottom - 24f)
+															continue;
+
+														bool isMidTpo = (b == sMidBin);
+														if (isMidTpo)
+															midRowBotY = y + h;
+
+														float txtY = isMidTpo ? (y - 1.0f) : y;
+														float txtH = isMidTpo ? Math.Max(1.0f, h - 1.2f) : h;
+
+														bool isOpenTpo = (b == sOpenBin);
+														bool isCloseTpo = (b == sCloseBin);
+														DxBrush lBrush = (isOpenTpo || isCloseTpo)
+															? whiteBrush
+															: letterBrushes[pIdx % letterBrushes.Length];
+
+														if (h >= Math.Min(minLetterRowH, 5.2f))
+														{
+															if (isOpenTpo && isCloseTpo)
+															{
+																RectangleF atRect = new RectangleF(cx - 1.0f, txtY, splitColW + 2.0f, Math.Max(1.0f, txtH));
+																RenderTarget.DrawText("@", splitAtFormat, atRect, whiteBrush, DrawTextOptions.None);
+															}
+															else
+															{
+																string cellSym = isOpenTpo ? "O" : (isCloseTpo ? "#" : pLetter);
+																DrawTpoCellText(cellSym, cx, txtY, splitColW, txtH, splitLetterFormat, lBrush);
+															}
+														}
+														else
+														{
+															RenderTarget.FillRectangle(new RectangleF(cx + 0.8f, y + 0.5f, Math.Max(1.0f, splitColW - 1.6f), Math.Max(1.0f, h - 1.0f)), lBrush);
+														}
+													}
+
+													// Uniform pixel-snapped Halfpack line: identical width & thickness regardless of TPO letter
+													if (!float.IsNaN(midRowBotY))
+													{
+														float colMidPx = (float)Math.Round(cx + splitColW * 0.5f);
+														float hpLeftPx = (float)Math.Floor(colMidPx - hpUniformW * 0.5f);
+														float hpTopPx = (float)Math.Floor(midRowBotY) - hpBarH;
+
+														var prevAa = RenderTarget.AntialiasMode;
+														RenderTarget.AntialiasMode = AntialiasMode.Aliased;
+														try
+														{
+															RenderTarget.FillRectangle(new RectangleF(hpLeftPx, hpTopPx - 1.0f, hpUniformW, 1.0f), cardBgBrush);
+															RenderTarget.FillRectangle(new RectangleF(hpLeftPx, hpTopPx, hpUniformW, hpBarH), whiteBrush);
+														}
+														finally
+														{
+															RenderTarget.AntialiasMode = prevAa;
+														}
+													}
 												}
 											}
 
@@ -3950,10 +5231,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 														ySliceLow = swY;
 													}
 
-													RenderTarget.DrawLine(
-														new Vector2(vx, Math.Max(panelTop, ySliceHigh)),
-														new Vector2(vx, Math.Min(panelBottom - 25f, ySliceLow)),
-														spineLineBrush, 0.85f);
+													float clSliceHigh = Math.Max(canvasTopY, ySliceHigh);
+													float clSliceLow = Math.Min(panelBottom - 25f, ySliceLow);
+													if (clSliceLow > clSliceHigh)
+													{
+														RenderTarget.DrawLine(
+															new Vector2(vx, clSliceHigh),
+															new Vector2(vx, clSliceLow),
+															spineLineBrush, 0.85f);
+													}
 
 													for (int b = vMinBin; b <= vMaxBin; b++)
 													{
@@ -3961,7 +5247,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 														float yB = SessionPriceToY(day, b * dStep - dStep * 0.5, step);
 														float y = Math.Min(yA, yB);
 														float h = Math.Max(1.0f, Math.Abs(yB - yA));
-														if (y > panelBottom - 25f || y + h < panelTop)
+														if (y < canvasTopY - 0.5f || y + h > panelBottom - 24f)
 															continue;
 
 														double bVol;
@@ -3990,7 +5276,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 									}
 
 									// 5. Opaque Top Level Pill (ABPoorHigh / PoorHigh only — SwingHigh box removed) & Session Header Pill + Interactive [Split] / [Merge] Buttons
-									if (showTopPoorBox)
+									if (showTopPoorBox && topTagY >= canvasTopY + 1f && topTagY <= panelBottom - 42f)
 									{
 										float tagW = 84f;
 										float tagX = (xIb + xCollapsedRight) * 0.5f - tagW * 0.5f;
@@ -4086,7 +5372,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 									DxBrush lowLevelBrush = lowExtremeBrush;
 
 									float botTagY = profileLowY + 3f;
-									if (showBotPoorBox)
+									if (showBotPoorBox && botTagY >= canvasTopY + 2f && botTagY <= panelBottom - 40f)
 									{
 										float tagW = 84f;
 										float tagX = (xIb + xCollapsedRight) * 0.5f - tagW * 0.5f;
@@ -4119,7 +5405,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 						}
 
 						// 8. Deduplicate & De-overlap Right-Edge Virgin Level Tags
-						RenderDeoverlappedRightEdgeTags(rightEdgeTags, step, panelRight, panelTop + 82f, panelBottom - 28f, pillBgBrush, cardBorderBrush, labelRightFormat);
+						RenderDeoverlappedRightEdgeTags(rightEdgeTags, step, panelRight, Math.Max(panelTop + 40f, canvasTopY), panelBottom - 28f, pillBgBrush, cardBorderBrush, labelRightFormat);
 
 						// 9. Top-Left 4-Line AK10X Info Panel with Logo & Min/Max button (controlled by ShowTopLeftBox)
 						if (ShowTopLeftBox)
@@ -4388,9 +5674,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 			float line1Width = MeasureSegmentedLine(lineH, format, line1Segments);
 			float otfWidth = MeasureSegmentedLine(lineH, format, Tuple.Create(otfText, whiteBrush));
 			float btnW = 28f;
+			float zoomBtnW = 26f;
 			float navBtnW = 48f;
 			float btnH = 15.0f;
-			float navGroupW = navBtnW * 3f + 8f;
+			float navGroupW = navBtnW * 3f + zoomBtnW * 2f + 16f;
 			float maxBoxW = Math.Max(480f, (float)ChartPanel.W - 208f);
 			float rightRow1W = isMin ? (navGroupW + 6f + btnW) : btnW;
 			if (6f + logoPadLeft + line1Width + 14f + rightRow1W + 8f > maxBoxW)
@@ -4475,8 +5762,26 @@ namespace NinjaTrader.NinjaScript.Indicators
 				PrimaryKey = "ScrollPast"
 			});
 
+			RectangleF zoomOutBtnRect = new RectangleF((float)Math.Floor(pastBtnRect.X - zoomBtnW - 4f), navRowY, zoomBtnW, btnH);
+			DrawCrispButton(zoomOutBtnRect, btnBgBrush, cyanBrush, "Z-", btnFormat, cyanBrush);
+			activeChartButtons.Add(new ChartButton
+			{
+				Rect = zoomOutBtnRect,
+				Action = ChartButtonAction.ZoomOutVertical,
+				PrimaryKey = "ZoomOutVertical"
+			});
+
+			RectangleF zoomInBtnRect = new RectangleF((float)Math.Floor(zoomOutBtnRect.X - zoomBtnW - 4f), navRowY, zoomBtnW, btnH);
+			DrawCrispButton(zoomInBtnRect, btnBgBrush, cyanBrush, "Z+", btnFormat, cyanBrush);
+			activeChartButtons.Add(new ChartButton
+			{
+				Rect = zoomInBtnRect,
+				Action = ChartButtonAction.ZoomInVertical,
+				PrimaryKey = "ZoomInVertical"
+			});
+
 			float textX = boxX + 6f + logoPadLeft;
-			float line1ClipRight = isMin ? (pastBtnRect.X - 6f) : (minMaxBtnRect.X - 6f);
+			float line1ClipRight = isMin ? (zoomInBtnRect.X - 6f) : (minMaxBtnRect.X - 6f);
 			if (line1ClipRight > textX + 10f)
 			{
 				RenderTarget.PushAxisAlignedClip(new RectangleF(textX, boxY + 2f, line1ClipRight - textX, lineH + 4f), AntialiasMode.PerPrimitive);
@@ -4493,7 +5798,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (isMin)
 				return;
 
-			float line2MaxW = Math.Max(40f, pastBtnRect.X - textX - 8f);
+			float line2MaxW = Math.Max(40f, zoomInBtnRect.X - textX - 8f);
 			DrawText(otfText, textX, boxY + 4f + lineH, line2MaxW, lineH, format, otfUp ? greenBrush : redBrush);
 			DrawText(roundText, textX, boxY + 4f + lineH * 2, boxW - logoPadLeft - 14f, lineH, format, yellowBrush);
 
@@ -4672,8 +5977,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			if (width <= 1.0f || height <= 1.0f || string.IsNullOrEmpty(text))
 				return;
-			float vPad = height >= 10.0f ? 0.4f : 0.1f;
-			float hPad = width >= 8.5f ? 0.3f : 0.0f;
+			float vPad = height >= 11.0f ? 0.45f : (height >= 7.5f ? 0.2f : 0.05f);
+			float hPad = width >= 9.5f ? 0.45f : (width >= 7.0f ? 0.2f : 0.05f);
 			RectangleF cellRect = new RectangleF(x + hPad, y + vPad, Math.Max(1.0f, width - hPad * 2f), Math.Max(1.0f, height - vPad * 2f));
 			RenderTarget.DrawText(text, format, cellRect, brush, DrawTextOptions.Clip);
 		}
@@ -4721,27 +6026,30 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[Display(Name = "TPO size (0 = auto)", GroupName = "Market Profile", Order = 0)]
 		public double TpoSize { get; set; }
 
+		[Display(Name = "Enable Screen-Resolution Auto TPO Size", Description = "Default: Disabled (Recommended — Fixed Calculation Engine + Adaptive Rendering Engine: 100% consistent Auto TPO Size, VPoC, VAH/VAL, Single Prints, Poor & Swing High/Low across all monitors, with adaptive TPO font size, letter spacing, chart zoom, and vertical scrolling). Enable only if you want legacy screen-height row merging.", GroupName = "Market Profile", Order = 1)]
+		public bool AutoScaleTpoByScreenResolution { get; set; }
+
 		[NinjaScriptProperty]
 		[Range(1, 240)]
-		[Display(Name = "TPO interval (minutes)", GroupName = "Market Profile", Order = 1)]
+		[Display(Name = "TPO interval (minutes)", GroupName = "Market Profile", Order = 2)]
 		public int TpoIntervalMinutes { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(50, 90)]
-		[Display(Name = "Value area (%)", GroupName = "Market Profile", Order = 2)]
+		[Display(Name = "Value area (%)", GroupName = "Market Profile", Order = 3)]
 		public int ValueAreaPercent { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(1, 240)]
-		[Display(Name = "Initial balance (minutes)", GroupName = "Market Profile", Order = 3)]
+		[Display(Name = "Initial balance (minutes)", GroupName = "Market Profile", Order = 4)]
 		public int InitialBalanceMinutes { get; set; }
 
 		[NinjaScriptProperty]
 		[Range(1, 365)]
-		[Display(Name = "Days to display", GroupName = "Market Profile", Order = 4)]
+		[Display(Name = "Days to display", GroupName = "Market Profile", Order = 5)]
 		public int DaysToDisplay { get; set; }
 
-		[Display(Name = "Profile Mode (Daily / Weekly / Monthly)", Description = "Select Daily (default), Weekly, or Monthly Market Profile distribution (can also switch live via the top-right PROFILE dropdown on chart)", GroupName = "Market Profile", Order = 5)]
+		[Display(Name = "Profile Mode (Daily / Weekly / Monthly)", Description = "Select Daily (default), Weekly, or Monthly Market Profile distribution (can also switch live via the top-right PROFILE dropdown on chart)", GroupName = "Market Profile", Order = 6)]
 		public MarketProfilePeriodMode ProfileMode { get; set; }
 
 		// 3 Forex Sessions (IST) with From & To Time configuration:
@@ -4830,40 +6138,49 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[Display(Name = "Merge Full Day (Asia + London + NY)", Description = "Merge all 3 sessions of each date into a single 46-TPO composite daily profile", GroupName = "Split & Merge Profiles", Order = 6)]
 		public bool MergeAllDaySessions { get; set; }
 
-		// Virgin Lines & Levels (Strict Virgin-Only Extensions with Individual Enable/Disable Controls)
+		// Virgin Lines & Levels (Complete Hide on All Past & Current Data when Unchecked)
+		[Display(Name = "Virginity Break Rule", Description = "Select Virginity Break Rule for all Virgin Lines & Single Prints: CrossBased (Default — breaks immediately when price crosses/touches the line) or CloseBased (breaks only when a closed TPO closes above/below the line).", GroupName = "Virgin Lines & Levels", Order = 0)]
+		public VirginityBreakRuleMode VirginityBreakRule { get; set; }
+
 		[NinjaScriptProperty]
-		[Display(Name = "Enable Virgin PoorHigh / ABPoorHigh", Description = "Show and extend Virgin PoorHigh and ABPoorHigh lines until broken", GroupName = "Virgin Lines & Levels", Order = 0)]
+		[Display(Name = "Enable Virgin PoorHigh / ABPoorHigh", Description = "Show and extend PoorHigh and ABPoorHigh on closed sessions until broken. When unchecked, hides on all past and current sessions.", GroupName = "Virgin Lines & Levels", Order = 1)]
 		public bool ShowPoorHigh { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Enable Virgin PoorLow / ABPoorLow", Description = "Show and extend Virgin PoorLow and ABPoorLow lines until broken", GroupName = "Virgin Lines & Levels", Order = 1)]
+		[Display(Name = "Enable Virgin PoorLow / ABPoorLow", Description = "Show and extend PoorLow and ABPoorLow on closed sessions until broken. When unchecked, hides on all past and current sessions.", GroupName = "Virgin Lines & Levels", Order = 2)]
 		public bool ShowPoorLow { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Enable Virgin SwingHigh", Description = "Show and extend Virgin SwingHigh lines until broken", GroupName = "Virgin Lines & Levels", Order = 2)]
+		[Display(Name = "Enable Virgin DayHigh", Description = "Show and extend Virgin DayHigh on closed days/sessions only (never on running day or session) until broken.", GroupName = "Virgin Lines & Levels", Order = 3)]
 		public bool ShowSwingHigh { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Enable Virgin SwingLow", Description = "Show and extend Virgin SwingLow lines until broken", GroupName = "Virgin Lines & Levels", Order = 3)]
+		[Display(Name = "Enable Virgin DayLow", Description = "Show and extend Virgin DayLow on closed days/sessions only (never on running day or session) until broken.", GroupName = "Virgin Lines & Levels", Order = 4)]
 		public bool ShowSwingLow { get; set; }
 
+		[Display(Name = "Enable Virgin WeeklyHigh", Description = "Show and extend Virgin Weekly High (closed Monday to Friday week only) until broken.", GroupName = "Virgin Lines & Levels", Order = 5)]
+		public bool ShowWeeklyHigh { get; set; }
+
+		[Display(Name = "Enable Virgin WeeklyLow", Description = "Show and extend Virgin Weekly Low (closed Monday to Friday week only) until broken.", GroupName = "Virgin Lines & Levels", Order = 6)]
+		public bool ShowWeeklyLow { get; set; }
+
 		[NinjaScriptProperty]
-		[Display(Name = "Enable Virgin ValueAreaHigh (with Session)", Description = "Show and extend only Virgin ValueAreaHigh lines with session name until broken", GroupName = "Virgin Lines & Levels", Order = 4)]
+		[Display(Name = "Enable Virgin ValueAreaHigh (with Session)", Description = "Show ValueAreaHigh and extend until broken. When unchecked, hides ValueAreaHigh on all past and current sessions.", GroupName = "Virgin Lines & Levels", Order = 7)]
 		public bool ShowVirginVAH { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Enable Virgin ValueAreaLow (with Session)", Description = "Show and extend only Virgin ValueAreaLow lines with session name until broken", GroupName = "Virgin Lines & Levels", Order = 5)]
+		[Display(Name = "Enable Virgin ValueAreaLow (with Session)", Description = "Show ValueAreaLow and extend until broken. When unchecked, hides ValueAreaLow on all past and current sessions.", GroupName = "Virgin Lines & Levels", Order = 8)]
 		public bool ShowVirginVAL { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Enable Virgin VPoC", Description = "Show and extend only Virgin Volume PoC (VPoC) lines until broken", GroupName = "Virgin Lines & Levels", Order = 6)]
+		[Display(Name = "Enable Virgin VPoC", Description = "Show Volume PoC (VPoC) and extend until broken. When unchecked, hides VPoC on all past and current sessions.", GroupName = "Virgin Lines & Levels", Order = 9)]
 		public bool ShowVirginVPoC { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Enable Virgin VPPoC (TPO PoC)", Description = "Show and extend only Virgin TPO PoC (VPPoC) lines until broken", GroupName = "Virgin Lines & Levels", Order = 7)]
+		[Display(Name = "Enable Virgin VPPoC (TPO PoC)", Description = "Show TPO PoC (VPPoC) and extend until broken. When unchecked, hides VPPoC on all past and current sessions.", GroupName = "Virgin Lines & Levels", Order = 10)]
 		public bool ShowVirginVPPoC { get; set; }
 
-		[Display(Name = "Enable Virgin MidLine", Description = "Show and extend Virgin Session Midline across subsequent sessions until broken", GroupName = "Virgin Lines & Levels", Order = 8)]
+		[Display(Name = "Enable Virgin MidLine", Description = "Show Session MidLine on completed sessions and extend Virgin MidLine until broken. When unchecked, hides MidLine on all past and current sessions.", GroupName = "Virgin Lines & Levels", Order = 11)]
 		public bool ShowVirginMidLine { get; set; }
 
 		// Running Session Enable / Disable Controls (VAH, VAL, POC, PPoC)
@@ -4889,6 +6206,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[NinjaScriptProperty]
 		[Display(Name = "Fix Summary Boxes at Bottom", Description = "When enabled, docks all session summary boxes in a fixed horizontal row at the bottom above the Date bar", GroupName = "Display", Order = 1)]
 		public bool FixSummaryBoxAtBottom { get; set; }
+
+		[Display(Name = "Fix Session Header at Top", Description = "When enabled (Default), docks all Session Details, [Split], [Merge >], and Split Profile headers in one clean Fixed Top Session Bar so they never cover price values or Virgin lines", GroupName = "Display", Order = 2)]
+		public bool FixSessionHeaderAtTop { get; set; }
 
 		[NinjaScriptProperty]
 		[Display(Name = "Minimize Summary Boxes", Description = "Minimize all bottom session summary boxes to a compact 2-line bar (can also toggle via [-] / [+] button on chart)", GroupName = "Display", Order = 2)]

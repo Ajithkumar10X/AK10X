@@ -30,6 +30,7 @@ namespace AK10XInstaller
 			"AK10XGlobalOrderflow.cs",
 			"AK10XIndiaMarketProfile.cs",
 			"AK10XGlobalMarketProfile.cs",
+			"AK10XBigSort.cs",
 			"AK10XMarketProfileScanner.cs",
 			"AK10XOrderflow.cs"
 		};
@@ -37,7 +38,7 @@ namespace AK10XInstaller
 		public SetupForm()
 		{
 			Text = "AK10X Complete Suite — NinjaTrader 8 Protected Setup";
-			Size = new Size(780, 625);
+			Size = new Size(780, 645);
 			StartPosition = FormStartPosition.CenterScreen;
 			FormBorderStyle = FormBorderStyle.FixedDialog;
 			MaximizeBox = false;
@@ -88,7 +89,7 @@ namespace AK10XInstaller
 
 			Label lblSub = new Label
 			{
-				Text = "AK10XIndianOrderflow • AK10XGlobalOrderflow • AK10XTradingWindow • India & Global MarketProfile • Scanner",
+				Text = "Orderflow • AK10XBigSort • AK10XTradingWindow • India & Global MarketProfile • Scanner",
 				Font = new Font("Segoe UI", 8.6f, FontStyle.Regular),
 				ForeColor = Color.FromArgb(185, 198, 215),
 				Location = new Point(106, 46),
@@ -153,7 +154,7 @@ namespace AK10XInstaller
 			{
 				Text = "Included Protected Modules (Compiled in AK10X.Suite.dll — Source Code Hidden)",
 				Location = new Point(20, 170),
-				Size = new Size(722, 136),
+				Size = new Size(722, 154),
 				ForeColor = Color.FromArgb(255, 200, 80)
 			};
 
@@ -164,7 +165,8 @@ namespace AK10XInstaller
 				"✔  3. AK10XTradingWindow — AK10X Trading Screen (Control Center -> New -> AK10X Trading Screen)",
 				"✔  4. AK10XIndiaMarketProfile — India NSE/MCX Market Profile (Daily/Weekly/Monthly, Split/Merge, DTR vs ATR)",
 				"✔  5. AK10XGlobalMarketProfile — Global 3-Session Forex/Commodity Market Profile (Asia / London / New York)",
-				"✔  6. AK10XMarketProfileScanner — Real-Time Accelpix Live Market Profile Scanner (Indicator + Window)"
+				"✔  6. AK10XBigSort — Unified Orderflow + Market Profile Virgin Zones & Right-Side Bar Values",
+				"✔  7. AK10XMarketProfileScanner — Real-Time Accelpix Live Market Profile Scanner (Indicator + Window)"
 			};
 
 			for (int i = 0; i < modDescriptions.Length; i++)
@@ -183,8 +185,8 @@ namespace AK10XInstaller
 
 			btnInstall = new Button
 			{
-				Text = "Install All 6 Modules (Protected)",
-				Location = new Point(20, 316),
+				Text = "Install All 7 Modules (Protected)",
+				Location = new Point(20, 334),
 				Size = new Size(286, 42),
 				FlatStyle = FlatStyle.Flat,
 				BackColor = Color.FromArgb(18, 145, 80),
@@ -198,7 +200,7 @@ namespace AK10XInstaller
 			btnExportZip = new Button
 			{
 				Text = "Save Protected Add-On .ZIP to Desktop",
-				Location = new Point(318, 316),
+				Location = new Point(318, 334),
 				Size = new Size(262, 42),
 				FlatStyle = FlatStyle.Flat,
 				BackColor = Color.FromArgb(25, 95, 148),
@@ -212,7 +214,7 @@ namespace AK10XInstaller
 			btnUninstall = new Button
 			{
 				Text = "Uninstall Suite",
-				Location = new Point(592, 316),
+				Location = new Point(592, 334),
 				Size = new Size(150, 42),
 				FlatStyle = FlatStyle.Flat,
 				BackColor = Color.FromArgb(135, 38, 38),
@@ -226,7 +228,7 @@ namespace AK10XInstaller
 			Label lblLog = new Label
 			{
 				Text = "Installation Status Log:",
-				Location = new Point(20, 366),
+				Location = new Point(20, 384),
 				AutoSize = true,
 				Font = new Font("Segoe UI", 9f, FontStyle.Bold)
 			};
@@ -234,7 +236,7 @@ namespace AK10XInstaller
 
 			txtLog = new TextBox
 			{
-				Location = new Point(20, 388),
+				Location = new Point(20, 406),
 				Size = new Size(722, 180),
 				Multiline = true,
 				ReadOnly = true,
@@ -248,7 +250,7 @@ namespace AK10XInstaller
 
 			AppendLog("Ready. Target NinjaTrader 8 folder: " + defaultNtDir);
 			AppendLog("Mode: PROTECTED VENDOR ASSEMBLY (C# source code hidden inside AK10X.Suite.dll).");
-			AppendLog("Click [Install All 6 Modules (Protected)] to deploy the complete AK10X suite.");
+			AppendLog("Click [Install All 7 Modules (Protected)] to deploy the complete AK10X suite.");
 		}
 
 		private void AppendLog(string msg)
@@ -377,7 +379,8 @@ namespace AK10XInstaller
 					}
 					catch { }
 
-					CleanConfigXmlReferences(Path.Combine(ntDir, "Config.xml"));
+					bool ntRunning = Process.GetProcessesByName("NinjaTrader").Length > 0;
+					CleanConfigXmlReferences(Path.Combine(ntDir, "Config.xml"), true);
 					UpdateCsproj(Path.Combine(customDir, "NinjaTrader.Custom.csproj"), true);
 
 					string zipTarget = Path.Combine(importDir, "AK10X_Protected_NT8_AddOn.zip");
@@ -391,9 +394,18 @@ namespace AK10XInstaller
 						TryBuildCustomDll(customDir, csprojPath);
 					}
 
-					AppendLog("SUCCESS! All 6 AK10X modules installed in Protected Vendor Binary Mode!");
+					AppendLog("SUCCESS! All 7 AK10X modules + New Tab Menu AddOns installed!");
+					if (ntRunning)
+					{
+						AppendLog("NOTE: NinjaTrader 8 is currently open. Press F5 in NinjaScript Editor (or restart NinjaTrader 8) to show 'AK10X Trading Screen' & 'AK10X MP Scanner (Live)' under the New tab.");
+					}
+
+					string nextStepMsg = ntRunning
+						? "\n\nIMPORTANT (NinjaTrader 8 is currently open):\nTo show 'AK10X Trading Screen' and 'AK10X MP Scanner (Live)' under Control Center -> New right now:\n  • Instant (No Restart): Open New -> NinjaScript Editor, then press F5\n  • Or close and restart NinjaTrader 8."
+						: "\n\nOpen NinjaTrader 8 -> Control Center -> New to launch:\n  • AK10X Trading Screen\n  • AK10X MP Scanner (Live)";
+
 					MessageBox.Show(this,
-						"AK10X Complete Suite has been installed in Protected Mode!\n\nIncluded Modules:\n• AK10XIndianOrderflow (Accelpix Default + Data Feed Option)\n• AK10XGlobalOrderflow (NinjaTrader Feed Default + Data Feed Option)\n• AK10XTradingWindow (AK10X Trading Screen)\n• AK10XIndiaMarketProfile\n• AK10XGlobalMarketProfile\n• AK10XMarketProfileScanner\n\nAll source code is protected inside AK10X.Suite.dll with zero NinjaScript Editor compile errors.",
+						"AK10X Complete Suite has been installed in Protected Mode!\n\nIncluded Modules:\n• AK10XIndianOrderflow (Accelpix Default + Data Feed Option)\n• AK10XGlobalOrderflow (NinjaTrader Feed Default + Data Feed Option)\n• AK10XTradingWindow (Control Center -> New -> AK10X Trading Screen)\n• AK10XIndiaMarketProfile\n• AK10XGlobalMarketProfile\n• AK10XBigSort (Orderflow + Market Profile Zones & Right-Side Values)\n• AK10XMarketProfileScanner (Control Center -> New -> AK10X MP Scanner (Live))" + nextStepMsg,
 						"AK10X Suite Installed",
 						MessageBoxButtons.OK,
 						MessageBoxIcon.Information);
@@ -418,7 +430,7 @@ namespace AK10XInstaller
 				ExtractResourceToFile("AK10X_Protected_NT8_AddOn.zip", outZip);
 				AppendLog("Exported Protected NinjaTrader 8 Add-On ZIP to Desktop: " + outZip);
 				MessageBox.Show(this,
-					"Saved Protected Add-On ZIP to Desktop:\n" + outZip + "\n\nContains all 6 AK10X modules in Protected Mode (AK10X.Suite.dll).",
+					"Saved Protected Add-On ZIP to Desktop:\n" + outZip + "\n\nContains all 7 AK10X modules in Protected Mode (AK10X.Suite.dll).",
 					"Protected Add-On ZIP Saved",
 					MessageBoxButtons.OK,
 					MessageBoxIcon.Information);
@@ -432,7 +444,7 @@ namespace AK10XInstaller
 		private void OnUninstallClick(object sender, EventArgs e)
 		{
 			string ntDir = txtNtFolder.Text.Trim();
-			if (MessageBox.Show(this, "Remove all 6 AK10X Suite modules from NinjaTrader 8?", "Confirm Uninstall", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+			if (MessageBox.Show(this, "Remove all 7 AK10X Suite modules from NinjaTrader 8?", "Confirm Uninstall", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
 				return;
 
 			try
@@ -450,7 +462,7 @@ namespace AK10XInstaller
 				if (File.Exists(logoTarget)) try { File.Delete(logoTarget); } catch { }
 				if (File.Exists(addOnBridge)) try { File.Delete(addOnBridge); } catch { }
 
-				CleanConfigXmlReferences(Path.Combine(ntDir, "Config.xml"));
+				CleanConfigXmlReferences(Path.Combine(ntDir, "Config.xml"), false);
 				UpdateCsproj(Path.Combine(customDir, "NinjaTrader.Custom.csproj"), false);
 
 				AppendLog("Uninstalled AK10X Complete Suite cleanly.");
@@ -462,13 +474,98 @@ namespace AK10XInstaller
 			}
 		}
 
-		private static void CleanConfigXmlReferences(string configXmlPath)
+		private static void CleanConfigXmlReferences(string configXmlPath, bool install)
 		{
 			if (!File.Exists(configXmlPath))
 				return;
 			string xml = File.ReadAllText(configXmlPath);
 			string updated = Regex.Replace(xml, @"^[ \t]*<string>\*MyDocuments\*\\NinjaTrader 8\\bin\\Custom\\AK10X\.[^<]+</string>\r?\n?", "", RegexOptions.Multiline | RegexOptions.IgnoreCase);
 			updated = updated.Replace("<Name>AK10XWindowStacker</Name>", "<Name>AK10XTradingWindow</Name>");
+
+			// Remove any nameless/corrupt AddOnAuthorization blocks
+			updated = Regex.Replace(
+				updated,
+				@"[ \t]*<AddOnAuthorization>\s*<IsAuthorized>[^<]*</IsAuthorized>\s*<Time>[^<]*</Time>\s*</AddOnAuthorization>\r?\n?",
+				"",
+				RegexOptions.IgnoreCase);
+			updated = Regex.Replace(
+				updated,
+				@"[ \t]*<AddOnAuthorization>\s*<IsAuthorized>[^<]*</IsAuthorized>\s*<Name>(?:AK10X\.Suite|AK10XSuiteMenuAddOn)</Name>\s*<Time>[^<]*</Time>\s*</AddOnAuthorization>\r?\n?",
+				"",
+				RegexOptions.IgnoreCase);
+
+			string[] addOnKeys = new string[]
+			{
+				"AK10XTradingWindow",
+				"AK10XTradingWindowAddOn",
+				"AK10XMarketProfileScannerAddOn"
+			};
+
+			if (install)
+			{
+				string nowIso = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz");
+				if (updated.IndexOf("<ArrayOfAddOnAuthorization", StringComparison.OrdinalIgnoreCase) < 0)
+				{
+					StringBuilder sbReg = new StringBuilder();
+					sbReg.AppendLine("  <AddOnRegistry>");
+					sbReg.AppendLine("    <ArrayOfAddOnAuthorization xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">");
+					for (int i = 0; i < addOnKeys.Length; i++)
+					{
+						sbReg.AppendLine("      <AddOnAuthorization>");
+						sbReg.AppendLine("        <IsAuthorized>true</IsAuthorized>");
+						sbReg.AppendLine("        <Name>" + addOnKeys[i] + "</Name>");
+						sbReg.AppendLine("        <Time>" + nowIso + "</Time>");
+						sbReg.AppendLine("      </AddOnAuthorization>");
+					}
+					sbReg.Append("    </ArrayOfAddOnAuthorization>\r\n  </AddOnRegistry>");
+
+					if (updated.IndexOf("<AddOnRegistry />", StringComparison.OrdinalIgnoreCase) >= 0)
+					{
+						updated = Regex.Replace(updated, @"[ \t]*<AddOnRegistry\s*/>", sbReg.ToString(), RegexOptions.IgnoreCase);
+					}
+					else
+					{
+						int closeNt = updated.LastIndexOf("</NinjaTrader>", StringComparison.OrdinalIgnoreCase);
+						if (closeNt > 0)
+							updated = updated.Insert(closeNt, sbReg.ToString() + "\r\n");
+					}
+				}
+				else
+				{
+					for (int i = 0; i < addOnKeys.Length; i++)
+					{
+						string key = addOnKeys[i];
+						string patternExisting = @"(<AddOnAuthorization>\s*<IsAuthorized>)(?:true|false)(</IsAuthorized>\s*<Name>" + Regex.Escape(key) + @"</Name>)";
+						if (Regex.IsMatch(updated, patternExisting, RegexOptions.IgnoreCase))
+						{
+							updated = Regex.Replace(updated, patternExisting, "${1}true${2}", RegexOptions.IgnoreCase);
+						}
+						else if (updated.IndexOf("<Name>" + key + "</Name>", StringComparison.OrdinalIgnoreCase) < 0)
+						{
+							int endArr = updated.IndexOf("</ArrayOfAddOnAuthorization>", StringComparison.OrdinalIgnoreCase);
+							if (endArr > 0)
+							{
+								string entryXml =
+									"      <AddOnAuthorization>\r\n" +
+									"        <IsAuthorized>true</IsAuthorized>\r\n" +
+									"        <Name>" + key + "</Name>\r\n" +
+									"        <Time>" + nowIso + "</Time>\r\n" +
+									"      </AddOnAuthorization>\r\n    ";
+								updated = updated.Insert(endArr, entryXml);
+							}
+						}
+					}
+				}
+			}
+			else
+			{
+				updated = Regex.Replace(
+					updated,
+					@"[ \t]*<AddOnAuthorization>\s*<IsAuthorized>[^<]*</IsAuthorized>\s*<Name>AK10X[^<]*</Name>\s*<Time>[^<]*</Time>\s*</AddOnAuthorization>\r?\n?",
+					"",
+					RegexOptions.IgnoreCase);
+			}
+
 			if (!string.Equals(xml, updated, StringComparison.Ordinal))
 			{
 				File.WriteAllText(configXmlPath, updated, new UTF8Encoding(false));
@@ -550,7 +647,7 @@ namespace AK10XInstaller
 			}
 			catch
 			{
-				AppendLog("Files installed. Press F5 in NinjaScript Editor inside NinjaTrader 8 to compile.");
+				AppendLog("AK10X.Suite.dll installed (includes all 7 modules + New Tab Menu AddOns natively). Restart NinjaTrader 8 or press F5 in NinjaScript Editor.");
 			}
 		}
 
@@ -579,6 +676,7 @@ namespace AK10XInstaller
 					ExtractResourceToFile("AK10X.Suite.dll", suiteDllTarget);
 				}
 				ExtractResourceToFile("AK10XTradingWindow_Wrapper.cs", Path.Combine(addOnsDir, "AK10XTradingWindow.cs"));
+				CleanConfigXmlReferences(Path.Combine(ntDir, "Config.xml"), true);
 				UpdateCsproj(Path.Combine(customDir, "NinjaTrader.Custom.csproj"), true);
 				return;
 			}
