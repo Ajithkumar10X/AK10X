@@ -16,6 +16,10 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media.Imaging;
+using WpfControls = System.Windows.Controls;
+using WpfPrimitives = System.Windows.Controls.Primitives;
+using WpfMedia = System.Windows.Media;
+using WpfShapes = System.Windows.Shapes;
 using System.Xml.Serialization;
 using NinjaTrader.Cbi;
 using NinjaTrader.Core;
@@ -191,6 +195,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 			public float HeaderRightX;
 			public List<string> SourceProfileKeys = new List<string>();
 			public List<SinglePrintZone> SinglePrintZones = new List<SinglePrintZone>();
+			public bool ContinuityChecked;
+			public bool AnalyticsValid;
+			public double AnalyticsStep;
+			public double AnalyticsVaPct;
 		}
 
 		private sealed class DateSpanGroup
@@ -274,6 +282,61 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			public List<SrLineTrack> LineTracks = new List<SrLineTrack>();
 			public List<SrHorizonLevel> HorizonLevels = new List<SrHorizonLevel>();
+		}
+
+		private struct SignalOhlcBar
+		{
+			public DateTime Time;
+			public DateTime HighTime;
+			public DateTime LowTime;
+			public double Open;
+			public double High;
+			public double Low;
+			public double Close;
+			public int ChartBarIndex;
+		}
+
+		private struct SignalRawPivot
+		{
+			public bool IsHigh;
+			public double Price;
+			public double Atr;
+			public DateTime PivotTime;
+			public DateTime ConfirmTime;
+		}
+
+		private sealed class SignalActiveZone
+		{
+			public double Top;
+			public double Bottom;
+			public DateTime LeftTime;
+			public int SourceMask; // 1 = Current TF (3m), 2 = Higher TF (9m), 3 = Merged 3m + 9m
+			public int Reactions;
+			public bool WasInZone;
+			public bool VeryStrong;
+		}
+
+		private sealed class ChartSignalMarker
+		{
+			public int BarIndex;
+			public bool HasSwingHigh;
+			public bool SwingHighHtfConfluence;
+			public bool HasSwingLow;
+			public bool SwingLowHtfConfluence;
+			public bool HasBearishEntry;
+			public string BearishPatternShort;
+			public string BearishPatternFull;
+			public int BearishStrength; // 3 = Very Strong (3m+9m), 2 = Strong, 1 = Zone, 0 = PD Level
+			public bool HasBullishEntry;
+			public string BullishPatternShort;
+			public string BullishPatternFull;
+			public int BullishStrength;
+		}
+
+		private sealed class SignalComputedSnapshot
+		{
+			public int LastClosedBarIdx = -1;
+			public Dictionary<int, ChartSignalMarker> ByBar = new Dictionary<int, ChartSignalMarker>();
 		}
 
 		private struct ProfileSession
@@ -386,6 +449,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private bool runtimeShowHalfpack = true;
 		private bool runtimeShowMpZones = true;
 		private bool runtimeShowSrZones = true;
+		private bool runtimeShowSrAnalysis = false;
+		private bool runtimeShowSignals = false;
 		private bool runtimeLightTheme = false;
 		private AK10XOrderflowMode runtimeOrderflowMode = AK10XOrderflowMode.VolumeFootprint;
 		private AK10XOrderflowDataFeed? runtimeDataFeedOverride;
@@ -400,8 +465,23 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private int srCacheMinuteCount = -1;
 		private int srCacheDailyCount = -1;
 		private long srCacheCloseTickBucket = long.MinValue;
+		private long srCacheLastHighBucket = long.MinValue;
+		private long srCacheLastLowBucket = long.MinValue;
+		private DateTime lastSrRealtimeRecomputeUtc = DateTime.MinValue;
 		private int srCacheConfigHash = 0;
 		private BarsRequest activeFeedDailyReq;
+
+		// Multi-Timeframe Closed-Candle Signal State (3m Current TF + 9m Higher TF, guarded by signalLock)
+		private readonly object signalLock = new object();
+		private SignalComputedSnapshot cachedSignalSnapshot = null;
+		private readonly Dictionary<int, ChartSignalMarker> lockedClosedBarSignals = new Dictionary<int, ChartSignalMarker>();
+		private int lockedSignalsMaxClosedIdx = -1;
+		private long lockedSignalsFirstBarTicks = 0L;
+		private int sigCacheChartBarCount = -1;
+		private int sigCacheLastClosedIdx = -2;
+		private int sigCacheMinuteCount = -1;
+		private int sigCacheDailyCount = -1;
+		private int sigCacheConfigHash = 0;
 
 		// 360-Degree Free Camera State (Smooth Omni-Pan + Vertical/Horizontal Zoom)
 		private bool isFree360View = false;
@@ -414,7 +494,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private float lastRenderedPanelH = 600f;
 		private ChartScale lastRenderedChartScale = null;
 
-		private readonly RectangleF[] toolbarBtnRects = new RectangleF[16];
+		private readonly RectangleF[] toolbarBtnRects = new RectangleF[17];
 		private bool mouseSubscribed = false;
 		private ChartControl hookedOrderflowCC = null;
 		private UIElement hookedOwnerChart = null;
@@ -468,6 +548,222 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private float rrPreviewMouseY = -9999f;
 		private DateTime lastRrMouseDownUtc = DateTime.MinValue;
 		private KeyEventHandler ofPreviewKeyDownHandler = null;
+
+		// ==================== Tradesea Order Execution & Live Chart Order Drag State ====================
+		private enum LiveOrderDragMode
+		{
+			None = 0,
+			DragWorkingOrder = 1,
+			DragNewTpFromPosition = 2,
+			DragNewSlFromPosition = 3,
+			DragDraftEntry = 4,
+			DragDraftTp = 5,
+			DragDraftSl = 6,
+			DragPendingBracketTp = 7,
+			DragPendingBracketSl = 8
+		}
+
+		private enum LiveOrderHitKind
+		{
+			None = 0,
+			ClosePositionBtn = 1,
+			ReversePositionBtn = 2,
+			BreakevenPositionBtn = 3,
+			AddTpDragChip = 4,
+			AddSlDragChip = 5,
+			CancelWorkingOrderBtn = 6,
+			WorkingOrderDrag = 7,
+			DraftEntryDrag = 8,
+			DraftTpDrag = 9,
+			DraftSlDrag = 10,
+			PendingBracketTpDrag = 11,
+			PendingBracketSlDrag = 12,
+			CancelPendingBracketTpBtn = 13,
+			CancelPendingBracketSlBtn = 14
+		}
+
+		private sealed class PendingBracketSpec
+		{
+			public Order EntryOrder;
+			public string EntryTag;
+			public Account Account;
+			public Instrument Instrument;
+			public bool IsLong;
+			public int TotalQty;
+			public int BracketedQty;
+			public TimeInForce Tif;
+			public bool HasSl;
+			public int SlTicks;
+			public bool HasTp;
+			public int TpTicks;
+			public bool TrailEnabled;
+			public int TrailTicks;
+			public DateTime CreatedUtc;
+		}
+
+		private sealed class ActiveTrailingOrderState
+		{
+			public Order StopOrder;
+			public Account Account;
+			public bool IsLong;
+			public int TrailTicks;
+			public double BestExtremePrice;
+			public DateTime LastChangeSentUtc;
+		}
+
+		private sealed class LiveChartHitRegion
+		{
+			public RectangleF Rect;
+			public float LineY;
+			public float LineX0;
+			public float LineX1;
+			public bool AllowLineGrab;
+			public LiveOrderHitKind Kind;
+			public Order TargetOrder;
+			public PendingBracketSpec TargetPendingSpec;
+			public bool IsStopOrder;
+			public double InitialPrice;
+		}
+
+		private sealed class DailyRiskDisciplineRecord
+		{
+			public string AccountAndDayKey;
+			public DateTime UnlockLocalTime;
+			public bool IsLocked;
+			public string LockReason = string.Empty;
+			public HashSet<string> FilledEntryOrderIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		}
+
+		private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DailyRiskDisciplineRecord> SharedDailyRiskRecords
+			= new System.Collections.Concurrent.ConcurrentDictionary<string, DailyRiskDisciplineRecord>(StringComparer.OrdinalIgnoreCase);
+		private static bool sharedRiskFileLoaded = false;
+		private static readonly object riskPersistLock = new object();
+
+		private bool runtimeShowTradePanel = true;
+		private bool isTradeTabScalp = false; // false = Order tab (default like Image 2), true = Scalp tab
+		private bool isOrderSideBuy = true;
+		private int selectedOrderTypeIdx = 0; // 0 = Market, 1 = Limit, 2 = Stop
+		private TimeInForce selectedOrderTif = TimeInForce.Day;
+		private int orderQtyValue = 1;
+		private double orderCustomEntryPrice = 0.0;
+		private bool orderCustomEntrySeeded = false;
+		private bool orderSlEnabled = true;
+		private bool orderTrailEnabled = false;
+		private int orderTrailTicks = 20;
+		private int orderSlTicks = 20;
+		private bool orderSlUnitIsCurrency = false;
+		private bool orderTpEnabled = true;
+		private int orderTpTicks = 60;
+		private bool orderTpUnitIsCurrency = false;
+		private bool orderTpManuallyCustomized = false;
+
+		private Account activeTradeAccount = null;
+		private Account subscribedTradeAccount = null;
+		private readonly object bracketLock = new object();
+		private readonly List<PendingBracketSpec> pendingEntryBrackets = new List<PendingBracketSpec>();
+		private readonly List<ActiveTrailingOrderState> activeTrailingOrders = new List<ActiveTrailingOrderState>();
+		private readonly Dictionary<string, DateTime> recentOrderChangeUtc = new Dictionary<string, DateTime>(StringComparer.Ordinal);
+
+		private readonly List<LiveChartHitRegion> liveChartHitRegions = new List<LiveChartHitRegion>();
+		private LiveOrderDragMode activeLiveOrderDragMode = LiveOrderDragMode.None;
+		private Order activeDraggedWorkingOrder = null;
+		private PendingBracketSpec activeDraggedPendingSpec = null;
+		private bool activeDraggedOrderIsStop = false;
+		private double liveOrderDragStartPrice = 0.0;
+		private double liveOrderDragCurrentPrice = 0.0;
+		private float liveOrderDragStartMouseY = 0f;
+		private bool liveOrderDragMoved = false;
+		private int hoveredLiveHitRegionIdx = -1;
+
+		// Risk Management & Capital Protector Runtime State
+		private DateTime lastEmergencyFlattenUtc = DateTime.MinValue;
+		private DateTime lastMissingSlGuardCheckUtc = DateTime.MinValue;
+		private DateTime posOpenedObservedUtc = DateTime.MinValue;
+		private int cachedTradesDoneToday = 0;
+		private double cachedDailyNetPnl = 0.0;
+		private bool cachedIsTradingLocked = false;
+		private string cachedLockReason = string.Empty;
+		private DateTime cachedUnlockLocalTime = DateTime.MinValue;
+		private WpfControls.Border riskGuardCardBorder = null;
+		private WpfControls.TextBlock txtRiskGuardTitle = null;
+		private WpfControls.Border riskGuardTradesPill = null;
+		private WpfControls.TextBlock txtRiskGuardTrades = null;
+		private WpfControls.TextBlock txtRiskGuardRow1 = null;
+		private WpfControls.TextBlock txtRiskGuardRow2 = null;
+		private readonly List<WpfControls.Button> scalpEntryButtons = new List<WpfControls.Button>();
+		private WpfControls.Button btnQuickRevRef = null;
+		private WpfControls.Button btnScalpRevRef = null;
+
+		// Docked WPF Tradesea Right-Side Panel Controls
+		private NinjaTrader.Gui.Chart.Chart hookedTradeChartWindow = null;
+		private WpfControls.Grid hookedChartMainGrid = null;
+		private WpfControls.ColumnDefinition tradePanelColumnDef = null;
+		private WpfControls.Border tradePanelRoot = null;
+		private WpfControls.TabControl hookedChartTabCtrl = null;
+		private System.Windows.Threading.DispatcherTimer tradeUiTimer = null;
+		private int lastCountdownTickSec = -1;
+		private bool isSyncingTradePanelUi = false;
+		private bool tradePanelAttachQueued = false;
+		private int uiTradeSyncQueued = 0;
+		private Position cachedLastKnownPosition = null;
+		private List<Order> cachedLastKnownWorkingOrders = new List<Order>();
+		private string cachedPositionEntryKey = string.Empty;
+		private DateTime cachedPositionEntryTime = DateTime.MinValue;
+		private List<DayProfile> lastMpRenderSessionsSnapshot = new List<DayProfile>();
+
+		private WpfControls.ComboBox cmbTradeAccount = null;
+		private WpfControls.TextBlock txtBalVal = null;
+		private WpfControls.TextBlock txtRplVal = null;
+		private WpfControls.TextBlock txtUplVal = null;
+		private WpfControls.Border tabBtnScalp = null;
+		private WpfControls.Border tabBtnOrder = null;
+		private WpfControls.TextBlock tabTxtScalp = null;
+		private WpfControls.TextBlock tabTxtOrder = null;
+		private WpfControls.Border tabLineScalp = null;
+		private WpfControls.Border tabLineOrder = null;
+		private WpfControls.StackPanel viewOrderTab = null;
+		private WpfControls.StackPanel viewScalpTab = null;
+		private WpfControls.TextBlock txtSymbolHeader = null;
+		private WpfControls.Button btnTifToggle = null;
+		private WpfControls.Border cardBuySide = null;
+		private WpfControls.Border cardSellSide = null;
+		private WpfControls.TextBlock txtBuyBidVal = null;
+		private WpfControls.TextBlock txtSellAskVal = null;
+		private WpfControls.Border pillTypeMkt = null;
+		private WpfControls.Border pillTypeLmt = null;
+		private WpfControls.Border pillTypeStp = null;
+		private WpfControls.TextBlock txtTypeMkt = null;
+		private WpfControls.TextBlock txtTypeLmt = null;
+		private WpfControls.TextBlock txtTypeStp = null;
+		private WpfControls.TextBlock lblEntryPriceTitle = null;
+		private WpfControls.TextBlock txtMarketPriceBig = null;
+		private WpfControls.Grid grpCustomEntryInput = null;
+		private WpfControls.TextBox txtCustomEntryPrice = null;
+		private WpfControls.TextBox txtOrderQty = null;
+		private WpfControls.CheckBox chkSlEnable = null;
+		private WpfControls.CheckBox chkTrailEnable = null;
+		private WpfControls.TextBox txtTrailTicks = null;
+		private WpfControls.TextBox txtSlPrice = null;
+		private WpfControls.TextBox txtSlOffset = null;
+		private WpfControls.Button btnSlUnit = null;
+		private WpfControls.CheckBox chkTpEnable = null;
+		private WpfControls.TextBlock txtOrderRrSummary = null;
+		private WpfControls.TextBox txtTpPrice = null;
+		private WpfControls.TextBox txtTpOffset = null;
+		private WpfControls.Button btnTpUnit = null;
+		private WpfControls.Border livePosBanner = null;
+		private WpfControls.TextBlock txtLivePosBanner = null;
+		private WpfControls.TextBlock txtLivePosPnl = null;
+		private WpfControls.Button btnOrderConfirm = null;
+		private WpfControls.TextBlock txtTradeStatusToast = null;
+
+		// Scalp Tab Controls
+		private WpfControls.TextBox txtScalpQty = null;
+		private WpfControls.CheckBox chkScalpAutoBracket = null;
+		private WpfControls.TextBlock txtScalpBracketInfo = null;
+		private WpfControls.TextBlock txtScalpBuyBidBtnSub = null;
+		private WpfControls.TextBlock txtScalpSellAskBtnSub = null;
+		private WpfControls.StackPanel pnlScalpWorkingOrders = null;
 
 		private const string DefaultLogoBase64 = "iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAYAAADimHc4AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAABAdSURBVHhe7Z0JcBVFGscTIJyCcsp9yQ2CgCJXRCEQ7jvcAhGBFURr3S1FsFhrBURWjlCKyHIEEVAgooC1coi4HMt9BJAj4b6SAIEIIYeBb79/p6ed914DeS/vzbwA/6pfVWoy09/X37zp6ekzwI9VgWnDvMlEMKuY7cxvzDkmgUmU4G8cw/9wDs7FNbgWaSCtx3qAqjCvMvOZaOY2Q14CaSHNeQxsVGYei1WN+RvzK5PK6ILnC1IY2HyHgQ+PlIKYnswaJo3RBciBQoUKUeXKlalJkybUqVMnGjhgAI0cOZLGjBkjwN8D+FjHjh3FOTi3UMGC2rQ0wAf4Ap/yMA+tCjNjGJTTukAI8ubNS40aNRJBnTt3Lm3fvp0uXrxIaWlplFXhXFyzbds2mvvllzRyxAiRJtLW2TRxhIGPTzAPjfIyyNRpRpdpKl68OIWFhdGiRYvo1MmTMoze10lOGzZ69+5NxYoV0/oiga94gcP3HK0ezCFGl0kKCQkRAbly5YoMkXW6kpBAkZGRFNKmjdY3CV7c3Zkcp0rMCsYlUwW5bB7BRcLevXtlKOzX3j17aPjw4VSgQAEXfyXLGeQpR2goc41xyERQUBCNHj2aYmNjZbb9TzExMTRq1Cjhq7P/zFVmCOO3wotrEePifI8ePejQoUMym/6v6Oho6t69u0s+JJGM372k6zIHGQdnq1SpQlFRUTJbOU8rVqwQVVrnfDEHmNqMX6g9c51xcDI8PJwSExNlVnKurl27RkOHDnXImwRNIKGMrUKZeJdRjuGjCbWLh00LFy4UFQhzXpk7DJo2bNFoxsGhGjVq0P79+6XLD59Qc6tevbpDniVvMJbKJfitWrWiBK5bP+xKiI+nl4KDHfIuGcVYIhQ7Dsa7detGqamp0sWHX8hr165dHWIg8XlxhJeOQ5mPz/q7d+9K1x4d3blzh3r16mUOPkBs2jI+US0miVEG8St4FINvCDehS5cu5hsAbjA1Ga+qEHOUUYZatGjhVgvlwyoUR82bNzffAIBWVcTMa1rKKANVq1a1pQHNX4XKh+aD7WvGK0Lbjko4f/78dODAAWn6sQyh+p0vXz7zDQCDmWwJndm/MypRfJA8ll7z5883Bx/gnVmO8VjoqlMJotvvse6v/v37m28A+IHxSN0YlVCZMmXo+vXr0sxj3Uto/ypdurT5BoAujFvKx8QyKpGVK1dKE4/1IC1fvtwcfHCCcat7821GJRAaGiqTtk9pXN1bv24dfbNsGS1csID+MWECLeAyd8nXS+j8ufPyLP9R27ZtzTcAoI85S0L99TIjLsydOzcdPnxYJmuN8IGTcjuZUpJv0aLISBo/bhw1btTIOUOKatWqUXzcZXm1fwgdULly5TL7eYnJ0reBw68/fOhQmaQ1Wrv6R2rcsDFVrVKF6tSuac4ABQYGih+EGSOT9erWpeiDB2Uq/qEhgwc7+M9gdMh9hUFTavgI+kYxlMMq/fD9KpexOwiwc9B14FwMb8E4IH9RTEysc//ySQYxvqd6MeqCgQMHyqR8r6VLlim7ugDfD9wk8+PuTzdBUy3FUJ17agOjTt69e7dMxvdq3uwlYVMX4Kxgvgn4Ih0/frxM2V7t2rVLxVOyjtHqGeYPRpzYtGlTmYTvFbXyO7YZyAF0LePdxfwkDBn8Kv2elCSt2CeMVzV8YhBjjAR30XuMOhHjMq1S/36DhE1dQN3FeBLwwkaaYb17UXq6va22c+bMUXGV/J1x0U5GnICO9fj4eHm57/XhhH8KuwicLqjuYtwEIz8b16+TluxRXFycc4f+/xgHYcJCOiNOwDBvKxV7IoaKFc0cLKsLqKcYT8F7775Lt2/dlNbsUfv27Y3gA8S6IqMUzqgT8MhYrX/Pmcu/2syg6YLpKchPvXr16GTMCWnJHn0xe7aKr8RhmKMaUohH9/jx4/Iy65R883fq1KGT8kEXTE8wnoIvZn8uLdmjo0ePUqCpWGQWMkK5GNXdWLNmTdEUYIe2b9lGpUqWEn7ogukpSK9du7aUePWqtGS9EFOnMUWYqBLIiLJITRUaNGiQvMR6xV+Oo+LFSgg/dIH0FKRXsWJF2r51C5GNgwjQn2LEmUHMyzMBIfKAYPr06fJ0a/Xr5s0U2q6d8CF3bu8VQQBpoo3+22VLKd3G8UuffvqpirOkNePY+LZhwwZ5urXq2b2bsO/N8t8A6ZYtU5YWzptHKcnJ0qL1Wr9+vYqzRDTOfWYcyMPOWtn4ZtbnEbOED96uBQGkix69RQsXiGZuuxQbE6P8kcxiRJ+lOFCqVCm6edOe+vKeHbsoV2BmLcE5gNkFaVatWiXzBtj4BCQlJVHJkiWN4IPvmYAdxoE6derIU61XWkoqNW/STPihC6KnGF/EjRs1pMgF8229ARhFWLt2bSP4AMsqBBwzDrRs2VKeao9at2ol/NAF0lNwA0BIm9b0w6rv6I/0dGnNHrVwHEWH6n/ABeMAZqHbpagVUcIHb78DkB46RXp170E7tm+ztRoKdejQwXwDsMBIwBXjQN++feVp1irpxg2q/kzmR4ouiNkBaRYsWIiGhYfT/r17pEX7hAnpRryZeEbMdRIH7Bp4tW3LVuWULojZAWlWqFCR/vr2W3T6pP1TZPv166fyymA6759zeu26ASkpKTRj2jSxwIa3iiDj5Vu0aFExoyVy/ny0B0iL9kl3A7DYkTjQp08feZr1On/mDJUoXlz4oQuoOyD4QXmCRLUaL73PZs2iqOXLqUunztT65Vdo0sSJ0qr1woQWI95MHCNeBOIA2qztUho/BTVkY5UuqO6ANIrxL79zp440iJ/q8e+/L4atGPkEh6OjpWVrhUFuJj/OMH8uH9OsWTN5mvVCa2FwixbCD11Q3QFPAIbRly1bxmHIOP5nNE9/MuVjun3rlrRundDXbvjDHGYCthoH0BRt55Sj/27eLKqM3ngPGO8A57SM4+FDhtDF8+ekZWukaZLewgREGQcwsOkGVwnt0v69e5Vz5qC5C4KsOw6MG4CiKcbijieMnEbRaOSRwYoyATOMA3Du2LFj8nTrFXfpEj1ZuIjZQQd0AXUX4wYM7N+fjh89Ki1bI9ErJotAyTQmYKTpAK1du1aebo8i582nyhUrUcECBcToDNSMKleqpH45uqC6A9LA8McRw4dT7Alrn4A1q1erOEuGMwHBpgM0efJkebo9wuiFrxdF0qtcRHTr0oV69+wpvmL7yOpbdt8PSKN06adp8sSPKP6ytSOqJ3L11xxrpiUT8DSj1ujE5GM7lZGRQVcS4mnfnt30y88baQu/mA/u30exXF4Pey1c+Hi/Mv5B4Nq8eYOof58wMfzdSmHdJCPOzC2mFCO0nxH/QN9pus0thkpONbKIGdMoNwcwu0+BUQ6/8ZcRMmXfC3OqK1SoYL4B+xil2Yz6p7+teLL5l03UoH594VsuTUA9wbgJEz6wZhDvvn37VHwl6IlUCmPUP9F57C9au2a1+NXDr+wUPTqMmzDqjZGU7OORc1OnfqLiK8FUACW8B5IZ8c/g4GB5mb2K45ekt9qH7oVxExrUf5Z27dwhLXtfWNrBiC/jUP4b2siIE/A1evr0aXmpferapbPwRxc4bwM75cqWoYT4OGnde8JAB6eZMusZFzl8D0ydOlVebo9mTMscQ+PtYudeGB9oUyajpdS7zTFTpkxRcZWI+r+zSjOqGELnsV3tQmipDMqTR/ihC5avgL2aNWrQ2dOnpCfZF9p/atWqZQQeIMYo8rXCCrHqZAwkskPdu2auwaMLki8x3gefRcyUnmRf69b9pOIp+Ya5p15h1MntbZigjQ+wwEDfDNDKCsh3/359KfGqd5bjaSeHW5p4mbmvsCipumDPHms7socPGybs6oJjBbDdPrQdHTqY/SV5drtO0HP4+LqXBjDqIitny9y4nkglS3h/dHRWMV7EbUPa0G4vVEmdZsWAfswDlZtRg7XA5s2bZZK+1aaNG4U9u4of4wagK/PAvuyt7r5p0yYVPwkGYSG2WVJfRl3csGFDSwY0zZo5U9jTBccKjBuAmZW/ZWOxcdQen3vuORU/CVob3JKaNQkiIiJk8r7TsNdeE7Z0wbECPHkA3ZXZ6S2bMWOGipsE42/dVlNGJYLOEV9/HTd98UVhSxccK4BtfLG+9eabdO6MZ3nFFiyaNaZfZDzSHEYlhOWJfaXbyclUvlw5YUcXHCuA7SKFC4sWUk87a9COZo4Zg5Zmj4Wdj9S4IfDhhx9KU94V1vt56sknhQ1dcKwAtsuVLUszp0+npBvuL882YcIEFSfJWQYxzJYc5pABX/QbX7p4Ufz6kL4uOFYA289UrUpLFn9FqSkp0rOsac2aNQ4xkog5YN7Qx4xKuEiRInTkyBFp2ju6eiWBSpTwbdPzg4BtNH9HrVhOGX9kvVcQK4oZPx4TkxivSjVXA2xPctmLndrXExPp6VLenyPsDrANH5YuXkxpqVl7Ai5duqRbNRfL/nhdxZlTjDKEuq63tilBEVT4iSdEurrgWAFsVyhfPnMqUxYm82F7kwYNGqh4SLAqVjHGJ8JmPVgdXBl84YUXhCPZ1a6dO0V6dn0FA9ivW6cOrfj2G0pPu/984qtXr1Ljxo1VHCTYS6cO41O9xDjsfIon4cKFC9I1zzTni8zFLKzqgNEB+89zUDf89BPduZMhPXPV+fPnqb4cJGACO7RijJUl6sCo5W0A3gnZWdR70MDMafy6wFgF7Ae3bEnbt2yRXrkKI0Y0ZT5igd2kLBUMOmy6jNqRJ/uG3cnIoNqy10gXGCsw2oE6hIbSnl07pWeOwr5ihV1rO4iBbdtZ4ZFTk/wMxo0b51Z35rlzZ6lAgfziWl1wrMC4AX3DwuiI0+QN5GXs2LEOeZRgdlELxlZhRznsGOHgHD7JsSVgVrRhQ+YaCna+gGEbPmAc6inTfpcHDx4U86fNeZNgcgW2dfELFWUw7d7BScxSmTRp0gO3OomYmdl6qAuMlcCHvn3CKJWroFjoD4NpkQdzniTfMU8xfqdxjMMuSwA1hlWrVslwuwq7rOI8XVCsBD404Wo1amTGUEgnsHPe+4xfC0OuXTb2BNjAWTfSIiQkc1NlXVCsxhgOowF95baX91kV9h/4iNFu2o9mbSxDb2z+hgkYOK4LiNUYL2MT+Ob5J4M85Tg9y7i8Gwyw7Pzw118XO1nb+QLWIX1cxSAPOV7tmE2Mww0wsPPrVwf7gzUc/L6s90S4EasZ9aL2p+CzL9f5ScRG/l8xHRmvbsbmT6rP/Is5bfcNYPvpHHQs2YOOc0zZxTJi2C22IZMjy313VICD0JuD8AuT4hwcX8G20ph4+WvHcvJYuBadThi1jFoc9v566INvFqp3M5mNHJSjHJxrTIYueJ7Aad1hkjhtrM2wl/kPs5jBPN13mO5MA6YEk4d5pITRYhiu/TzTlcGv8AMmglnCQfuR2crs5yAeY04xZ5kLzEUT5xj87zifG83sZH7mNFALQ7A/Z/ArH8u8znRmGjH4tRdkbFBAwP8BZB1ntMFNynoAAAAASUVORK5CYII=";
 
@@ -786,6 +1082,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[Display(Name = "Show Major Flip Support & Resistance", Description = "Show role-reversal Flip Support & Flip Resistance lines ONLY for Major S/R (never Minor)", GroupName = "8. S/R Zones (Minor / Major / D-W-M)", Order = 3)]
 		public bool ShowSrFlipLines { get; set; }
 
+		[Display(Name = "Show Analysis (Past Invalid S/R Lines)", Description = "When enabled (via top Analysis icon), show historical invalidated/broken S/R lines for chart analysis; when off, keep the UI clean with only active valid S/R lines", GroupName = "8. S/R Zones (Minor / Major / D-W-M)", Order = 4)]
+		public bool EnableSrPastAnalysis { get; set; }
+
 		[Browsable(false)]
 		public bool ShowSrWeakZones { get; set; }
 
@@ -835,6 +1134,114 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[Range(0.5, 20.0)]
 		[Display(Name = "Default Placement R:R Ratio", Description = "Initial Risk:Reward ratio when placing a new Long or Short Position box on the chart (default = 2.0)", Order = 3, GroupName = "9. Long / Short R:R Position Tool")]
 		public double RrDefaultRatio { get; set; }
+
+		// ==================== 10. Tradesea Order Execution & Live Order Monitoring ====================
+		[Display(Name = "Enable Tradesea Order Panel (Right Sidebar)", Description = "Show the Tradesea-style Order & Scalp execution panel on the right side of the chart window (also toggleable via the top toolbar)", Order = 0, GroupName = "10. Tradesea Order Execution & Live Monitoring")]
+		public bool EnableTradePanel { get; set; }
+
+		[Display(Name = "Enable Live Order Lines & Drag TP/SL on Chart", Description = "Show Live Open Position, Working Entry / TP / SL lines, and drag-to-modify TP & SL handles directly on the chart", Order = 1, GroupName = "10. Tradesea Order Execution & Live Monitoring")]
+		public bool EnableLiveChartOrders { get; set; }
+
+		[Display(Name = "Hide Built-In NT8 Chart Trader When Open", Description = "Automatically collapse NinjaTrader's default Chart Trader panel when the AK10X Tradesea Order Panel is visible", Order = 2, GroupName = "10. Tradesea Order Execution & Live Monitoring")]
+		public bool HideBuiltInChartTrader { get; set; }
+
+		[Range(1, 100000)]
+		[Display(Name = "Default Order Quantity", Description = "Initial contract/lot quantity in the Order & Scalp panel (default = 1)", Order = 3, GroupName = "10. Tradesea Order Execution & Live Monitoring")]
+		public int DefaultOrderQuantity { get; set; }
+
+		[Range(1, 10000)]
+		[Display(Name = "Default Stop Loss (Ticks)", Description = "Initial base Stop Loss distance in ticks when placing orders (default = 20)", Order = 4, GroupName = "10. Tradesea Order Execution & Live Monitoring")]
+		public int DefaultSlTicks { get; set; }
+
+		[Range(1, 10000)]
+		[Display(Name = "Default Take Profit (Ticks)", Description = "Initial base Take Profit distance in ticks (default = 60 -> 1:3 R:R with 20T SL)", Order = 5, GroupName = "10. Tradesea Order Execution & Live Monitoring")]
+		public int DefaultTpTicks { get; set; }
+
+		[Display(Name = "Auto-Enable Initial 1:3 SL & TP", Description = "Automatically enable Stop Loss and 1:3 Take Profit whenever configuring or placing Market, Buy/Sell Limit, or Stop orders (adjustable anytime on chart or panel)", Order = 6, GroupName = "10. Tradesea Order Execution & Live Monitoring")]
+		public bool DefaultEnableBracketSlTp { get; set; }
+
+		[Range(0.5, 20.0)]
+		[Display(Name = "Initial Order R:R Ratio (1:3)", Description = "Default Risk:Reward multiplier applied to base Stop Loss ticks (default = 3.0 -> 1:3 R:R)", Order = 7, GroupName = "10. Tradesea Order Execution & Live Monitoring")]
+		public double InitialOrderRrRatio { get; set; }
+
+		// ==================== 12. Risk Management, Daily Discipline & Capital Protector ====================
+		[Display(Name = "Enable Daily Risk & Discipline Guard", Description = "Enforce Max Trades Per Day, Per-Day Profit Target, and Per-Day StopLoss — once reached, disables placing new orders until Next Day Open", Order = 0, GroupName = "12. Risk Management & Capital Protector")]
+		public bool EnableRiskManagement { get; set; }
+
+		[Range(0, 500)]
+		[Display(Name = "Max Trades Per Day (0 = Unlimited)", Description = "Maximum allowed trade entries per trading day. Once reached, disables placing new orders until Next Day Open (default = 3)", Order = 1, GroupName = "12. Risk Management & Capital Protector")]
+		public int MaxTradesPerDay { get; set; }
+
+		[Range(0.0, 10000000.0)]
+		[Display(Name = "Per-Day Profit Target Amount (0 = Off)", Description = "Daily profit target in account currency. Once reached, locks in daily target and disables placing new orders until Next Day Open (default = 500)", Order = 2, GroupName = "12. Risk Management & Capital Protector")]
+		public double DailyProfitTargetAmount { get; set; }
+
+		[Range(0.0, 10000000.0)]
+		[Display(Name = "Per-Day StopLoss Amount (0 = Off)", Description = "Maximum daily loss allowed in account currency. Once reached, stops loss and disables placing new orders until Next Day Open (default = 300)", Order = 3, GroupName = "12. Risk Management & Capital Protector")]
+		public double DailyMaxLossAmount { get; set; }
+
+		[Display(Name = "Auto-Close Open Trade When Daily Target/SL Hits", Description = "Automatically flatten open position and cancel working orders the instant Daily Profit Target or Daily StopLoss is reached", Order = 4, GroupName = "12. Risk Management & Capital Protector")]
+		public bool AutoFlattenOnDailyLimit { get; set; }
+
+		[Display(Name = "Enable Capital Protector (Spike & News Shield)", Description = "God-mode real-time Capital Protector: caps SL risk, auto-attaches emergency SL if missing, and flattens on tick-level news spikes / big adverse candles if loss reaches Capital Protector Amount", Order = 5, GroupName = "12. Risk Management & Capital Protector")]
+		public bool EnableCapitalProtector { get; set; }
+
+		[Range(1.0, 10000000.0)]
+		[Display(Name = "Capital Protector Max Loss Amount", Description = "Maximum capital risk allowed on an open position during news spikes or big candle formations — triggers immediate tick-level protective flatten & hard SL cap (default = 200)", Order = 6, GroupName = "12. Risk Management & Capital Protector")]
+		public double CapitalProtectorAmount { get; set; }
+
+		[Display(Name = "Lock Day If Capital Protector Triggers", Description = "When enabled, disables new order placement until Next Day Open if Capital Protector emergency flatten is triggered during a spike/news event", Order = 7, GroupName = "12. Risk Management & Capital Protector")]
+		public bool CapitalProtectorLockDayOnTrigger { get; set; }
+
+		// ==================== 11. Multi-TF Closed-Candle Signals (Current TF 3m + Higher TF 9m) ====================
+		[Display(Name = "Enable Chart Signals (Master)", Description = "Show confirmed Swing High/Low triangles and 3m + 9m Supply/Demand Zone Reversal signals on closed candles only (also toggleable via the top Signal icon)", Order = 0, GroupName = "11. Multi-TF Closed-Candle Signals")]
+		public bool EnableChartSignals { get; set; }
+
+		[Display(Name = "Show Confirmed Swing High / Low (▼ / ▲)", Description = "Show confirmed Chart Swing High (pink ▼) and Swing Low (green ▲) triangles once all confirmation candles have closed", Order = 1, GroupName = "11. Multi-TF Closed-Candle Signals")]
+		public bool SignalShowSwingTriangles { get; set; }
+
+		[Display(Name = "Show Zone Reversal Entry Signals (Buy / Sell)", Description = "Show immediate closed-candle Bullish & Bearish reversal setups (Engulfing, Hammer/Shooting Star, Doji Breakout/Breakdown) inside Current TF (3m) + Higher TF (9m) Supply & Demand zones", Order = 2, GroupName = "11. Multi-TF Closed-Candle Signals")]
+		public bool SignalShowZoneReversalEntries { get; set; }
+
+		[Range(2, 12)]
+		[Display(Name = "Higher Timeframe Multiplier (3× = 9m on 3m)", Description = "Higher timeframe multiplier relative to the current chart timeframe (default = 3, so Current TF 3m -> Higher TF 9m)", Order = 3, GroupName = "11. Multi-TF Closed-Candle Signals")]
+		public int SignalHigherTfMultiplier { get; set; }
+
+		[Range(1, 30)]
+		[Display(Name = "Swing Left Bars", Description = "Left bars required for confirmed Swing High / Low triangles (PineScript default = 10)", Order = 4, GroupName = "11. Multi-TF Closed-Candle Signals")]
+		public int SignalSwingLeftBars { get; set; }
+
+		[Range(1, 30)]
+		[Display(Name = "Swing Right Bars", Description = "Right closed bars required to confirm Swing High / Low triangles (PineScript default = 10)", Order = 5, GroupName = "11. Multi-TF Closed-Candle Signals")]
+		public int SignalSwingRightBars { get; set; }
+
+		[Range(2, 40)]
+		[Display(Name = "Current TF (3m) Zone Pivot Bars", Description = "Left & Right bars for Current TF Supply & Demand zone pivots (PineScript default = 20)", Order = 6, GroupName = "11. Multi-TF Closed-Candle Signals")]
+		public int SignalZonePivotBarsLtf { get; set; }
+
+		[Range(2, 40)]
+		[Display(Name = "Higher TF (9m) Zone Pivot Bars", Description = "Left & Right bars for Higher TF Supply & Demand zone pivots (PineScript default = 20)", Order = 7, GroupName = "11. Multi-TF Closed-Candle Signals")]
+		public int SignalZonePivotBarsHtf { get; set; }
+
+		[Range(1, 50)]
+		[Display(Name = "Zone ATR Length", Description = "Wilder ATR period for 3m & 9m Supply/Demand zone thickness (PineScript default = 14)", Order = 8, GroupName = "11. Multi-TF Closed-Candle Signals")]
+		public int SignalAtrLength { get; set; }
+
+		[Range(0.05, 1.50)]
+		[Display(Name = "Zone Thickness (ATR Multiplier)", Description = "Zone thickness as multiple of ATR (PineScript default = 0.30)", Order = 9, GroupName = "11. Multi-TF Closed-Candle Signals")]
+		public double SignalZoneAtrMultiplier { get; set; }
+
+		[Range(2, 5)]
+		[Display(Name = "Reactions For Strong Zone", Description = "Rejections required to upgrade a zone to Strong (PineScript default = 2)", Order = 10, GroupName = "11. Multi-TF Closed-Candle Signals")]
+		public int SignalReactionsForStrong { get; set; }
+
+		[Range(0.01, 0.35)]
+		[Display(Name = "Doji Max Body / Range", Description = "Maximum body-to-range ratio for Doji Breakout / Breakdown setups (PineScript default = 0.20)", Order = 11, GroupName = "11. Multi-TF Closed-Candle Signals")]
+		public double SignalDojiMaxBodyPct { get; set; }
+
+		[Range(0.0, 1.0)]
+		[Display(Name = "Pattern Zone Buffer (ATR Ratio)", Description = "Proximity buffer around Supply/Demand zones & PDH/PDL scaled to ATR so it adapts cleanly across Gold, Nifty, Indices, and Forex (default = 0.25)", Order = 12, GroupName = "11. Multi-TF Closed-Candle Signals")]
+		public double SignalZoneBufferAtrRatio { get; set; }
 		#endregion
 
 		#region Lifecycle & Dual Data Feed Engine (Orderflow + 45-Day 1M Market Profile Backfill)
@@ -943,6 +1350,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ShowMinorSrZones = true;
 				ShowMajorSrZones = true;
 				ShowSrFlipLines = true;
+				EnableSrPastAnalysis = false;
 				ShowSrWeakZones = true;
 				ShowSrDayHighLow = true;
 				ShowSrWeekHighLow = true;
@@ -957,7 +1365,39 @@ namespace NinjaTrader.NinjaScript.Indicators
 				RrRiskPerTradeAmount = 500.0;
 				RrAutoCalculateQty = true;
 				RrFixedQuantity = 1;
-				RrDefaultRatio = 2.0;
+				RrDefaultRatio = 3.0;
+
+				EnableTradePanel = true;
+				EnableLiveChartOrders = true;
+				HideBuiltInChartTrader = true;
+				DefaultOrderQuantity = 1;
+				DefaultSlTicks = 20;
+				DefaultTpTicks = 60;
+				DefaultEnableBracketSlTp = true;
+				InitialOrderRrRatio = 3.0;
+
+				EnableRiskManagement = true;
+				MaxTradesPerDay = 3;
+				DailyProfitTargetAmount = 500.0;
+				DailyMaxLossAmount = 300.0;
+				AutoFlattenOnDailyLimit = true;
+				EnableCapitalProtector = true;
+				CapitalProtectorAmount = 200.0;
+				CapitalProtectorLockDayOnTrigger = true;
+
+				EnableChartSignals = false;
+				SignalShowSwingTriangles = true;
+				SignalShowZoneReversalEntries = true;
+				SignalHigherTfMultiplier = 3;
+				SignalSwingLeftBars = 10;
+				SignalSwingRightBars = 10;
+				SignalZonePivotBarsLtf = 20;
+				SignalZonePivotBarsHtf = 20;
+				SignalAtrLength = 14;
+				SignalZoneAtrMultiplier = 0.30;
+				SignalReactionsForStrong = 2;
+				SignalDojiMaxBodyPct = 0.20;
+				SignalZoneBufferAtrRatio = 0.25;
 			}
 			else if (State == State.DataLoaded)
 			{
@@ -996,6 +1436,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 					srCacheCloseTickBucket = long.MinValue;
 					srCacheConfigHash = 0;
 				}
+				lock (signalLock)
+				{
+					cachedSignalSnapshot = null;
+					lockedClosedBarSignals.Clear();
+					lockedSignalsMaxClosedIdx = -1;
+					lockedSignalsFirstBarTicks = 0L;
+					sigCacheChartBarCount = -1;
+					sigCacheLastClosedIdx = -2;
+					sigCacheMinuteCount = -1;
+					sigCacheDailyCount = -1;
+					sigCacheConfigHash = 0;
+				}
 
 				runtimeDataFeedOverride = null;
 				runtimeOrderflowMode = FootprintMode;
@@ -1009,6 +1461,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				runtimeShowHalfpack = ShowHalfpack;
 				runtimeShowMpZones = EnableMarketProfileZones;
 				runtimeShowSrZones = EnableSrZones;
+				runtimeShowSrAnalysis = EnableSrPastAnalysis;
+				runtimeShowSignals = EnableChartSignals;
 				runtimeYZoomFactor = 1.0;
 				isFree360View = false;
 				freeViewMinPrice = double.NaN;
@@ -1022,10 +1476,28 @@ namespace NinjaTrader.NinjaScript.Indicators
 				hoveredRrBoxId = -1;
 				activeRrDragMode = RrDragMode.None;
 				activeDragRrBox = null;
+				runtimeShowTradePanel = EnableTradePanel;
+				orderQtyValue = Math.Max(1, DefaultOrderQuantity);
+				orderSlEnabled = DefaultEnableBracketSlTp;
+				orderTpEnabled = DefaultEnableBracketSlTp;
+				scalpUseAutoBracket = DefaultEnableBracketSlTp;
+				orderSlTicks = Math.Max(1, DefaultSlTicks);
+				double initRr = InitialOrderRrRatio > 0.1 ? InitialOrderRrRatio : 3.0;
+				orderTpTicks = (DefaultTpTicks > 0 && Math.Abs(DefaultTpTicks - 40) > 0 && Math.Abs(initRr - 3.0) < 1e-6)
+					? Math.Max(1, DefaultTpTicks)
+					: Math.Max(1, (int)Math.Round(orderSlTicks * initRr));
+				orderTpManuallyCustomized = false;
+				orderCustomEntrySeeded = false;
+				activeLiveOrderDragMode = LiveOrderDragMode.None;
+				activeDraggedWorkingOrder = null;
+				activeDraggedPendingSpec = null;
+				hoveredLiveHitRegionIdx = -1;
+				EnsureSharedRiskDisciplineFileLoaded();
 				DisposeLogoBitmap();
 				liveStreamInitialized = true;
 
 				EnsureMouseEventsSubscribed();
+				EnsureTradePanelAttachedAsync();
 				AttachSelectedDataFeedStream();
 				int reqDays = EffectiveProfileMode == MarketProfilePeriodMode.Monthly ? Math.Max(95, DaysToDisplay) : Math.Max(75, DaysToDisplay);
 				RequestSelectedDataFeedBarsAsync(reqDays);
@@ -1044,6 +1516,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				DisposeLogoBitmap();
 				DetachSelectedDataFeedStream();
+				DetachTradePanelAndAccountEvents();
 				UnsubscribeMouseEvents();
 			}
 		}
@@ -1081,6 +1554,40 @@ namespace NinjaTrader.NinjaScript.Indicators
 					int stride = w * 4;
 					byte[] pixels = new byte[stride * h];
 					conv.CopyPixels(pixels, stride, 0);
+
+					// Smooth circular premultiplied-alpha feather matching AK10X Market Profile HUD logo
+					double cx = (w - 1) * 0.5;
+					double cy = (h - 1) * 0.5;
+					double outerR = Math.Min(w, h) * 0.485;
+					double innerR = outerR - 1.5;
+					for (int py = 0; py < h; py++)
+					{
+						double dy = py - cy;
+						for (int px = 0; px < w; px++)
+						{
+							double dx = px - cx;
+							double dist = Math.Sqrt(dx * dx + dy * dy);
+							if (dist > innerR)
+							{
+								int idx = py * stride + px * 4;
+								if (dist >= outerR)
+								{
+									pixels[idx + 0] = 0;
+									pixels[idx + 1] = 0;
+									pixels[idx + 2] = 0;
+									pixels[idx + 3] = 0;
+								}
+								else
+								{
+									double cov = (outerR - dist) / (outerR - innerR);
+									pixels[idx + 0] = (byte)Math.Round(pixels[idx + 0] * cov);
+									pixels[idx + 1] = (byte)Math.Round(pixels[idx + 1] * cov);
+									pixels[idx + 2] = (byte)Math.Round(pixels[idx + 2] * cov);
+									pixels[idx + 3] = (byte)Math.Round(pixels[idx + 3] * cov);
+								}
+							}
+						}
+					}
 
 					using (SharpDX.DataStream ds = new SharpDX.DataStream(pixels.Length, true, true))
 					{
@@ -1186,6 +1693,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 				srDailyHistory.Clear();
 				cachedSrSnapshot = null;
 				srCacheChartBarCount = -1;
+			}
+			lock (signalLock)
+			{
+				cachedSignalSnapshot = null;
+				lockedClosedBarSignals.Clear();
+				lockedSignalsMaxClosedIdx = -1;
+				lockedSignalsFirstBarTicks = 0L;
+				sigCacheChartBarCount = -1;
+				sigCacheLastClosedIdx = -2;
 			}
 			AttachSelectedDataFeedStream();
 			int reqDays = EffectiveProfileMode == MarketProfilePeriodMode.Monthly ? Math.Max(95, DaysToDisplay) : Math.Max(75, DaysToDisplay);
@@ -2060,15 +2576,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
-		private static bool IsOfInteractiveUiControlSource(object originalSource)
+		private bool IsOfInteractiveUiControlSource(object originalSource)
 		{
 			try
 			{
+				if (tradePanelRoot != null && tradePanelRoot.IsMouseOver)
+					return true;
+
 				DependencyObject cur = originalSource as DependencyObject;
 				int guard = 0;
-				while (cur != null && guard++ < 20)
+				while (cur != null && guard++ < 24)
 				{
-					if (cur is System.Windows.Controls.Primitives.Popup ||
+					if ((tradePanelRoot != null && ReferenceEquals(cur, tradePanelRoot)) ||
+						cur is System.Windows.Controls.Primitives.Popup ||
 						cur is System.Windows.Controls.Primitives.MenuBase ||
 						cur is System.Windows.Controls.MenuItem ||
 						cur is System.Windows.Controls.ComboBox ||
@@ -2452,9 +2972,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 			float panelW = ChartPanel != null ? ChartPanel.W : 1200f;
 			bool anyZones = runtimeShowMpZones || runtimeShowSrZones;
 			bool showHdrFtr = anyZones && ShowSessionHeaderFooter;
-			float footerReserve = showHdrFtr ? 24f : 16f;
+			float footerReserve = 24f;
 			float deltaBarReserve = footerReserve + (runtimeShowStatGrid ? 62f : 0f) + 14f;
-			float topHeaderH = (panelW < 514f ? 66f : 40f) + (showHdrFtr ? 27f : 0f) + 18f;
+			float topHeaderH = (panelW < 606f ? 66f : 40f) + (showHdrFtr ? 27f : 0f) + 18f;
 			float usableH = Math.Max(150f, panelH - topHeaderH - deltaBarReserve);
 
 			// Guarantee each Imbalance price level is >= 10.5px tall so 1-tick & 2-tick session numbers render crisply
@@ -2583,7 +3103,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (pxX < panelLeft || pxX > panelRight - 2f || pxY < panelTop + 4f || pxY > panelBot - 4f)
 				return false;
 
-			// 0. Interactive Long / Short R:R Position Placement & Handle Scaling Priority
+			// 0A. Live Position / Working TP / SL / Entry Drag & Quick Action Pills Priority
+			if (pxY >= panelTop + 34f && TryBeginLiveOrderCanvasInteraction(cc, pxX, pxY))
+				return true;
+
+			// 0B. Interactive Long / Short R:R Position Placement & Handle Scaling Priority
 			if (pxY >= panelTop + 34f && TryBeginRrBoxInteraction(cc, pxX, pxY, clickCount))
 				return true;
 
@@ -2664,6 +3188,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			if (cc == null)
 				return false;
+
+			if (activeLiveOrderDragMode != LiveOrderDragMode.None)
+				return UpdateLiveOrderCanvasDrag(cc, curPxX, curPxY);
 
 			if (activeRrDragMode != RrDragMode.None && activeDragRrBox != null)
 				return UpdateRrBoxDragMove(cc, curPxX, curPxY);
@@ -2824,13 +3351,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private void End360Interaction(ChartControl cc)
 		{
-			bool wasDragging = isDraggingFootprintCanvas || isDraggingVerticalScale || activeRrDragMode != RrDragMode.None;
+			if (activeLiveOrderDragMode != LiveOrderDragMode.None)
+				CommitLiveOrderCanvasDrag(cc);
+
+			bool wasDragging = isDraggingFootprintCanvas || isDraggingVerticalScale || activeRrDragMode != RrDragMode.None || activeLiveOrderDragMode != LiveOrderDragMode.None;
 			isPendingOfCanvasDrag = false;
 			isDraggingFootprintCanvas = false;
 			isPendingVerticalScaleDrag = false;
 			isDraggingVerticalScale = false;
 			activeRrDragMode = RrDragMode.None;
 			activeDragRrBox = null;
+			activeLiveOrderDragMode = LiveOrderDragMode.None;
+			activeDraggedWorkingOrder = null;
 			try
 			{
 				if (cc != null)
@@ -2922,14 +3454,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 			float curPxX = e.X;
 			float curPxY = e.Y;
 
-			if (!isDraggingFootprintCanvas && !isPendingOfCanvasDrag && !isDraggingVerticalScale && !isPendingVerticalScaleDrag && activeRrDragMode == RrDragMode.None)
+			if (!isDraggingFootprintCanvas && !isPendingOfCanvasDrag && !isDraggingVerticalScale && !isPendingVerticalScaleDrag && activeRrDragMode == RrDragMode.None && activeLiveOrderDragMode == LiveOrderDragMode.None)
 			{
 				int overIdx = HitTestToolbarButtonAt(curPxX, curPxY);
-				int overRrId = overIdx < 0 ? ResolveHoveredRrBoxId(cc, curPxX, curPxY) : -1;
+				int overLiveIdx = overIdx < 0 ? HitTestLiveOrderRegionIndex(curPxX, curPxY, out _) : -1;
+				int overRrId = (overIdx < 0 && overLiveIdx < 0) ? ResolveHoveredRrBoxId(cc, curPxX, curPxY) : -1;
 				bool needRedraw = false;
 				if (overIdx != hoveredToolbarBtnIndex)
 				{
 					hoveredToolbarBtnIndex = overIdx;
+					needRedraw = true;
+				}
+				if (overLiveIdx != hoveredLiveHitRegionIdx)
+				{
+					hoveredLiveHitRegionIdx = overLiveIdx;
 					needRedraw = true;
 				}
 				if (overRrId != hoveredRrBoxId)
@@ -2989,8 +3527,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			try
 			{
+				if (tradePanelRoot != null && tradePanelRoot.IsMouseOver)
+					return;
 				System.Windows.Point pt = e.GetPosition(cc);
-				if (pt.X < -20 || pt.Y < -20 || pt.X > cc.ActualWidth + 80 || pt.Y > cc.ActualHeight + 40)
+				if (pt.X < -20 || pt.Y < -20 || pt.X > cc.ActualWidth || pt.Y > cc.ActualHeight + 40)
 					return;
 				float pxX = ConvertOfHorizontalPx(cc, pt.X);
 				float pxY = ConvertOfVerticalPx(cc, pt.Y);
@@ -3053,7 +3593,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			if (e.Key == Key.Escape)
 			{
-				if (pendingRrToolMode != 0)
+				if (activeLiveOrderDragMode != LiveOrderDragMode.None)
+				{
+					activeLiveOrderDragMode = LiveOrderDragMode.None;
+					activeDraggedWorkingOrder = null;
+					e.Handled = true;
+					RequestImmediateOrderflowRedraw();
+				}
+				else if (pendingRrToolMode != 0)
 				{
 					pendingRrToolMode = 0;
 					rrPreviewMouseX = -9999f;
@@ -3444,10 +3991,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private void OnChartMouseLeave(object sender, MouseEventArgs e)
 		{
-			if (hoveredToolbarBtnIndex != -1 || hoveredRrBoxId != -1 || rrPreviewMouseX > -1000f)
+			if (hoveredToolbarBtnIndex != -1 || hoveredRrBoxId != -1 || hoveredLiveHitRegionIdx != -1 || rrPreviewMouseX > -1000f)
 			{
 				hoveredToolbarBtnIndex = -1;
 				hoveredRrBoxId = -1;
+				hoveredLiveHitRegionIdx = -1;
 				rrPreviewMouseX = -9999f;
 				rrPreviewMouseY = -9999f;
 				RequestImmediateOrderflowRedraw();
@@ -3503,7 +4051,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (!IsOrderflowChartControlActive(cc) || e == null)
 				return;
 
-			if (!isDraggingFootprintCanvas && !isPendingOfCanvasDrag && !isDraggingVerticalScale && !isPendingVerticalScaleDrag && activeRrDragMode == RrDragMode.None)
+			if (!isDraggingFootprintCanvas && !isPendingOfCanvasDrag && !isDraggingVerticalScale && !isPendingVerticalScaleDrag && activeRrDragMode == RrDragMode.None && activeLiveOrderDragMode == LiveOrderDragMode.None)
 			{
 				try
 				{
@@ -3512,11 +4060,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 					float pxY = ConvertOfVerticalPx(cc, pt.Y);
 
 					int overIdx = ResolveToolbarButtonFromMouseEvent(cc, e);
-					int overRrId = overIdx < 0 ? ResolveHoveredRrBoxId(cc, pxX, pxY) : -1;
+					Cursor liveCursor = null;
+					int overLiveIdx = overIdx < 0 ? HitTestLiveOrderRegionIndex(pxX, pxY, out liveCursor) : -1;
+					int overRrId = (overIdx < 0 && overLiveIdx < 0) ? ResolveHoveredRrBoxId(cc, pxX, pxY) : -1;
 					bool needRedraw = false;
 					if (overIdx != hoveredToolbarBtnIndex)
 					{
 						hoveredToolbarBtnIndex = overIdx;
+						needRedraw = true;
+					}
+					if (overLiveIdx != hoveredLiveHitRegionIdx)
+					{
+						hoveredLiveHitRegionIdx = overLiveIdx;
 						needRedraw = true;
 					}
 					if (overRrId != hoveredRrBoxId)
@@ -3533,12 +4088,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 					if (needRedraw)
 						RequestImmediateOrderflowRedraw();
 
-					bool overScaleLane = overIdx < 0 && IsPointOverRightScaleLane(pxX, pxY);
-					Cursor rrCursor = overIdx < 0 ? ResolveRrHoverCursor(cc, pxX, pxY) : null;
+					bool overScaleLane = overIdx < 0 && overLiveIdx < 0 && IsPointOverRightScaleLane(pxX, pxY);
+					Cursor rrCursor = (overIdx < 0 && overLiveIdx < 0) ? ResolveRrHoverCursor(cc, pxX, pxY) : null;
 
 					if (overIdx >= 0)
 					{
 						if (cc.Cursor != Cursors.Hand) cc.Cursor = Cursors.Hand;
+					}
+					else if (liveCursor != null)
+					{
+						if (cc.Cursor != liveCursor) cc.Cursor = liveCursor;
 					}
 					else if (rrCursor != null)
 					{
@@ -3568,7 +4127,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				System.Windows.Point pt = e.GetPosition(cc);
 				float curPxX = ConvertOfHorizontalPx(cc, pt.X);
 				float curPxY = ConvertOfVerticalPx(cc, pt.Y);
-				bool wasDragging = isDraggingFootprintCanvas || isDraggingVerticalScale || (activeRrDragMode != RrDragMode.None && activeRrDragMode != RrDragMode.PendingMove);
+				bool wasDragging = isDraggingFootprintCanvas || isDraggingVerticalScale || activeLiveOrderDragMode != LiveOrderDragMode.None || (activeRrDragMode != RrDragMode.None && activeRrDragMode != RrDragMode.PendingMove);
 
 				if (Update360DragMove(cc, curPxX, curPxY))
 				{
@@ -3576,7 +4135,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					{
 						try { cc.CaptureMouse(); } catch { }
 					}
-					Cursor desiredCursor = (activeRrDragMode == RrDragMode.ScaleTarget || activeRrDragMode == RrDragMode.ScaleStop || isDraggingVerticalScale)
+					Cursor desiredCursor = (activeLiveOrderDragMode != LiveOrderDragMode.None || activeRrDragMode == RrDragMode.ScaleTarget || activeRrDragMode == RrDragMode.ScaleStop || isDraggingVerticalScale)
 						? Cursors.SizeNS
 						: (activeRrDragMode == RrDragMode.ScaleEnd ? Cursors.SizeWE : Cursors.SizeAll);
 					if (cc.Cursor != desiredCursor)
@@ -3861,10 +4420,37 @@ namespace NinjaTrader.NinjaScript.Indicators
 					RequestImmediateOrderflowRedraw();
 					return true;
 
+				case 11: // Toggle Right-Side Tradesea Order & Scalp Execution Panel
+					lastBtnClickUtc = DateTime.UtcNow;
+					runtimeShowTradePanel = !runtimeShowTradePanel;
+					EnableTradePanel = runtimeShowTradePanel;
+					UpdateTradePanelVisibilityImmediate();
+					RequestImmediateOrderflowRedraw();
+					return true;
+
 				case 10: // Dark / White Theme
 					lastBtnClickUtc = DateTime.UtcNow;
 					runtimeLightTheme = !runtimeLightTheme;
 					UseLightTheme = runtimeLightTheme;
+					RequestImmediateOrderflowRedraw();
+					return true;
+
+				case 9: // Multi-TF Closed-Candle Signals Toggle (Current TF 3m + Higher TF 9m)
+					lastBtnClickUtc = DateTime.UtcNow;
+					runtimeShowSignals = !runtimeShowSignals;
+					EnableChartSignals = runtimeShowSignals;
+					RequestImmediateOrderflowRedraw();
+					return true;
+
+				case 16: // Analysis Mode Toggle (Show/Hide Past Invalidated S/R Lines)
+					lastBtnClickUtc = DateTime.UtcNow;
+					runtimeShowSrAnalysis = !runtimeShowSrAnalysis;
+					EnableSrPastAnalysis = runtimeShowSrAnalysis;
+					if (runtimeShowSrAnalysis && !runtimeShowSrZones)
+					{
+						runtimeShowSrZones = true;
+						EnableSrZones = true;
+					}
 					RequestImmediateOrderflowRedraw();
 					return true;
 
@@ -4116,7 +4702,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 
 				if (isRealtime)
+				{
+					UpdateLiveTrailingStopsOnTick(e.Price);
+					EnforceRiskAndCapitalProtectorOnTick(e.Price);
 					RequestThrottledChartRefresh(false);
+				}
 			}
 			catch { }
 		}
@@ -4873,6 +5463,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				day.High = Math.Max(day.High, sample.High);
 				day.Low = Math.Min(day.Low, sample.Low);
 				day.Close = sample.Close;
+				day.ContinuityChecked = false;
+				day.AnalyticsValid = false;
 
 				PeriodSlice slice;
 				if (!day.PeriodSlices.TryGetValue(periodIndex, out slice))
@@ -6383,9 +6975,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 			float panelW = ChartPanel != null ? ChartPanel.W : 1200f;
 			bool anyZones = runtimeShowMpZones || runtimeShowSrZones;
 			bool showHdrFtr = anyZones && ShowSessionHeaderFooter;
-			float footerReserve = showHdrFtr ? 24f : 16f;
+			float footerReserve = 24f;
 			float deltaBarReserve = footerReserve + (runtimeShowStatGrid ? 62f : 0f) + 14f;
-			float topHeaderH = (panelW < 514f ? 66f : 40f) + (showHdrFtr ? 27f : 0f) + 18f;
+			float topHeaderH = (panelW < 606f ? 66f : 40f) + (showHdrFtr ? 27f : 0f) + 18f;
 			float usableH = Math.Max(150f, panelH - topHeaderH - deltaBarReserve);
 
 			double pricePerPx = span / usableH;
@@ -6437,6 +7029,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			EnsureVisibleChartCandlesHidden();
 			EnsureMouseEventsSubscribed();
+			EnsureTradePanelAttachedAsync();
 
 			try
 			{
@@ -6457,7 +7050,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			EnsureBarsComputed(ChartBars);
 			bool anyZonesActive = runtimeShowMpZones || runtimeShowSrZones;
-			if (anyZonesActive)
+			if (anyZonesActive || runtimeShowSignals)
 				EnsureMarketProfileSeededFromChartBars();
 
 			int firstBar = Math.Max(0, ChartBars.FromIndex);
@@ -6483,16 +7076,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 				lastRenderedMaxPrice = chartScale.MaxValue;
 			}
 
-			bool wrapToolbarTwoRows = (panelW < 514f);
-			float toolbarBottomY = panelY + (wrapToolbarTwoRows ? 64f : 38f);
+			bool wrapToolbarTwoRows = (panelW < 606f);
+			float toolbarBottomY = panelY + (wrapToolbarTwoRows ? 66f : 40f);
 			bool showHdrFtr = anyZonesActive && ShowSessionHeaderFooter;
-			float topSessionBarH = 24f;
+			float topSessionBarH = 28f;
 			float topSessionBarY = toolbarBottomY + 3f;
 			float canvasTopY = showHdrFtr ? (topSessionBarY + topSessionBarH + 2f) : (toolbarBottomY + 2f);
 
-			float dateFooterH = 22f;
+			float dateFooterH = 26f;
 			float dateFooterY = (float)Math.Round(panelY + panelH - dateFooterH - 1f);
-			float bottomAfterFooterY = showHdrFtr ? (dateFooterY - 1f) : (float)Math.Round(panelY + panelH - 16f);
+			float bottomAfterFooterY = dateFooterY - 1f;
 
 			float deltaStripH = 60f;
 			float stripTopY = (float)Math.Round(bottomAfterFooterY - deltaStripH);
@@ -6511,38 +7104,72 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				if (light)
 				{
-					using (var whiteCanvas = new DxBrush(RenderTarget, new Color4(1.0f, 1.0f, 1.0f, 1.0f)))
+					using (var whiteCanvas = new DxBrush(RenderTarget, new Color4(0.975f, 0.982f, 0.992f, 1.0f)))
 					{
 						RenderTarget.FillRectangle(new RectangleF(panelX, panelY, panelW, panelH), whiteCanvas);
 					}
 				}
+				else
+				{
+					// AK10X Market Profile Studio Deep Midnight Navy Gradient Backdrop + Subtle Studio Grid & Right Dock
+					var bgStops = new SharpDX.Direct2D1.GradientStop[]
+					{
+						new SharpDX.Direct2D1.GradientStop { Position = 0.0f, Color = new SharpDX.Color(6, 10, 19, 255) },
+						new SharpDX.Direct2D1.GradientStop { Position = 0.52f, Color = new SharpDX.Color(11, 18, 33, 255) },
+						new SharpDX.Direct2D1.GradientStop { Position = 1.0f, Color = new SharpDX.Color(7, 12, 22, 255) }
+					};
+					using (var stopCol = new SharpDX.Direct2D1.GradientStopCollection(RenderTarget, bgStops))
+					using (var bgGrad = new SharpDX.Direct2D1.LinearGradientBrush(
+						RenderTarget,
+						new SharpDX.Direct2D1.LinearGradientBrushProperties
+						{
+							StartPoint = new Vector2(panelX, panelY),
+							EndPoint = new Vector2(panelX, panelY + panelH)
+						},
+						stopCol))
+					using (var studioGridBrush = new DxBrush(RenderTarget, new SharpDX.Color(148, 163, 184, 16)))
+					using (var rightDockBrush = new DxBrush(RenderTarget, new SharpDX.Color(7, 12, 22, 238)))
+					using (var rightDockLineBrush = new DxBrush(RenderTarget, new SharpDX.Color(56, 189, 248, 68)))
+					{
+						RenderTarget.FillRectangle(new RectangleF(panelX, panelY, panelW, panelH), bgGrad);
+						for (float gy = canvasTopY + 28f; gy < chartBottomY - 12f; gy += 54f)
+						{
+							RenderTarget.DrawLine(new Vector2(panelX + 2f, gy), new Vector2(rightZoneLimitX, gy), studioGridBrush, 1.0f);
+						}
+						if (reserveRightTags && panelRight - rightZoneLimitX > 20f)
+						{
+							RenderTarget.FillRectangle(new RectangleF(rightZoneLimitX, canvasTopY - 2f, panelRight - rightZoneLimitX, Math.Max(10f, chartBottomY - canvasTopY + 3f)), rightDockBrush);
+							RenderTarget.DrawLine(new Vector2(rightZoneLimitX, canvasTopY - 2f), new Vector2(rightZoneLimitX, chartBottomY + 1f), rightDockLineBrush, 1.0f);
+						}
+					}
+				}
 
-				using (var brushBuyerCandle = new DxBrush(RenderTarget, new Color4(0.063f, 0.800f, 0.545f, 1.0f)))    // #10CC8B Vivid Buyer Teal-Green
-				using (var brushSellerCandle = new DxBrush(RenderTarget, new Color4(0.957f, 0.263f, 0.247f, 1.0f)))   // #F4433F Vivid Seller Bright Red
+				using (var brushBuyerCandle = new DxBrush(RenderTarget, new Color4(0.063f, 0.808f, 0.565f, 1.0f)))    // #10CE90 AK10X Studio Emerald
+				using (var brushSellerCandle = new DxBrush(RenderTarget, new Color4(0.957f, 0.247f, 0.369f, 1.0f)))   // #F43F5E AK10X Studio Crimson-Rose
 				using (var brushBoxBg = new DxBrush(RenderTarget, light
 					? new Color4(0.965f, 0.975f, 0.988f, 0.90f)
-					: new Color4(0.065f, 0.088f, 0.128f, 0.86f)))
+					: new Color4(0.047f, 0.078f, 0.141f, 0.88f)))
 				using (var brushSpineLaneBg = new DxBrush(RenderTarget, light
 					? new Color4(0.925f, 0.942f, 0.965f, 0.94f)
-					: new Color4(0.045f, 0.062f, 0.092f, 0.94f)))
+					: new Color4(0.031f, 0.051f, 0.094f, 0.95f)))
 				using (var brushBoxBorder = new DxBrush(RenderTarget, light
 					? new Color4(0.74f, 0.80f, 0.87f, 0.90f)
-					: new Color4(0.18f, 0.25f, 0.35f, 0.88f)))
+					: new Color4(0.220f, 0.741f, 0.973f, 0.32f)))
 				using (var brushRowGrid = new DxBrush(RenderTarget, light
 					? new Color4(0.82f, 0.86f, 0.91f, 0.65f)
-					: new Color4(0.16f, 0.22f, 0.31f, 0.42f)))
+					: new Color4(0.220f, 0.450f, 0.680f, 0.24f)))
 				using (var brushAskImbBlock = new DxBrush(RenderTarget, new Color4(0.045f, 0.635f, 0.435f, 0.92f)))
-				using (var brushBidImbBlock = new DxBrush(RenderTarget, new Color4(0.840f, 0.195f, 0.215f, 0.92f)))
+				using (var brushBidImbBlock = new DxBrush(RenderTarget, new Color4(0.890f, 0.195f, 0.295f, 0.92f)))
 				using (var brushImbWhiteText = new DxBrush(RenderTarget, new Color4(1.0f, 1.0f, 1.0f, 1.0f)))
 				using (var brushNormalText = new DxBrush(RenderTarget, light
 					? new Color4(0.12f, 0.16f, 0.22f, 0.98f)
-					: new Color4(0.90f, 0.94f, 0.98f, 0.98f)))
+					: new Color4(0.91f, 0.95f, 0.99f, 0.98f)))
 				using (var brushZeroText = new DxBrush(RenderTarget, light
 					? new Color4(0.45f, 0.52f, 0.60f, 0.82f)
-					: new Color4(0.50f, 0.57f, 0.66f, 0.80f)))
+					: new Color4(0.52f, 0.60f, 0.70f, 0.80f)))
 				using (var brushPocOutline = new DxBrush(RenderTarget, light
 					? new Color4(0.85f, 0.45f, 0.04f, 0.92f)
-					: new Color4(1.0f, 0.80f, 0.12f, 0.92f)))
+					: new Color4(0.984f, 0.749f, 0.141f, 0.95f)))
 				using (var brushHalfpackLine = new DxBrush(RenderTarget, light
 					? new Color4(0.06f, 0.10f, 0.18f, 0.98f)
 					: new Color4(1.0f, 1.0f, 1.0f, 0.98f)))
@@ -6643,6 +7270,25 @@ namespace NinjaTrader.NinjaScript.Indicators
 								brushBidImbZone, brushAskImbZone, brushSellerCandle, brushBuyerCandle);
 						}
 
+						// Pass 2A (Underlay): Draw live SL/TP/Entry lines & soft R:R shading BEHIND candles so candles are never hidden!
+						if (EnableLiveChartOrders)
+						{
+							RenderLiveOrdersAndDraftPreviewOnCanvas(
+								chartControl,
+								priceToY,
+								panelX,
+								canvasTopY,
+								candleClipW,
+								chartBottomY,
+								light,
+								drawUnderlayPass: true,
+								drawOverlayPillsPass: false);
+						}
+						else
+						{
+							liveChartHitRegions.Clear();
+						}
+
 						if (isCandlestickZoom)
 						{
 							RenderCleanCandlesticks(chartControl, priceToY, visibleBars, barSpacing, panelX, candleClipW, brushBuyerCandle, brushSellerCandle);
@@ -6661,6 +7307,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 								brushHeightBadgeBg, brushHeightBadgeBorder, brushHeightBadgeText);
 						}
 
+						if (runtimeShowSignals)
+						{
+							RenderChartSignalsOnCanvas(
+								chartControl,
+								priceToY,
+								visibleBars,
+								barSpacing,
+								isCandlestickZoom,
+								panelX,
+								canvasTopY,
+								candleClipW,
+								chartBottomY,
+								light);
+						}
+
 						if (rrPositionBoxes.Count > 0 || pendingRrToolMode != 0)
 						{
 							RenderRrPositionBoxesOnCanvas(
@@ -6672,6 +7333,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 								candleClipW,
 								chartBottomY,
 								light);
+						}
+
+						// Pass 2B (Overlay): Draw crisp interactive right-side SL/TP/Position pills on top without covering candles
+						if (EnableLiveChartOrders)
+						{
+							RenderLiveOrdersAndDraftPreviewOnCanvas(
+								chartControl,
+								priceToY,
+								panelX,
+								canvasTopY,
+								candleClipW,
+								chartBottomY,
+								light,
+								drawUnderlayPass: false,
+								drawOverlayPillsPass: true);
 						}
 					}
 					finally
@@ -6705,6 +7381,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 							dateFooterH,
 							light);
 					}
+
+					// =========================================================================================
+					// LAYER 4B: Bold High-Visibility Timeframe Candle Countdown (Bottom-Right Cap)
+					// =========================================================================================
+					float cdCapW = (panelRight - rightZoneLimitX > 30f)
+						? Math.Max(20f, panelRight - rightZoneLimitX - 2f)
+						: Math.Min(154f, Math.Max(92f, panelW - 8f));
+					float cdCapX = (panelRight - rightZoneLimitX > 30f)
+						? (rightZoneLimitX + 1f)
+						: (panelRight - cdCapW - 2f);
+					RenderBottomRightTimeframeCountdownBox(new RectangleF(cdCapX, dateFooterY, cdCapW, dateFooterH), light);
 
 					// =========================================================================================
 					// LAYER 5: Sleek Top-Left AK10X BigSort Toolbar
@@ -6811,35 +7498,80 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			SrComputedSnapshot srSnapshot = runtimeShowSrZones ? EnsureSrZonesComputed(chartBars) : null;
 
-			lock (profileLock)
+			bool enteredProfileLock = System.Threading.Monitor.TryEnter(profileLock, 2);
+			try
 			{
-				List<DayProfile> rawSessions = profiles.Count > 0
-					? profiles.Values.Where(p => p.Rows.Count > 0).ToList()
-					: new List<DayProfile>();
-				List<DayProfile> allSessions = rawSessions.Count > 0
-					? BuildDisplaySessions(rawSessions)
-					: new List<DayProfile>();
+				List<DayProfile> rawSessions;
+				List<DayProfile> allSessions;
+				double step = GetMpPriceStep();
+
+				if (enteredProfileLock)
+				{
+					rawSessions = new List<DayProfile>(profiles.Count);
+					foreach (var kvp in profiles)
+					{
+						if (kvp.Value != null && kvp.Value.Rows.Count > 0)
+							rawSessions.Add(kvp.Value);
+					}
+					allSessions = rawSessions.Count > 0
+						? BuildDisplaySessions(rawSessions)
+						: new List<DayProfile>();
+
+					if (runtimeShowMpZones)
+					{
+						for (int i = 0; i < allSessions.Count; i++)
+						{
+							DayProfile d = allSessions[i];
+							bool isLiveIdx = (i == allSessions.Count - 1);
+							if (!d.ContinuityChecked || isLiveIdx)
+							{
+								EnsureSessionRowContinuity(d, step);
+								d.ContinuityChecked = true;
+							}
+							if (!d.AnalyticsValid || Math.Abs(d.AnalyticsStep - step) > 1e-9 || Math.Abs(d.AnalyticsVaPct - ValueAreaPercent) > 1e-9)
+							{
+								CalculateTpoValueArea(d, ValueAreaPercent, out d.PocBin, out d.VahBin, out d.ValBin);
+								double maxV = 1e-9;
+								double bestVol = -1.0;
+								int bestVolBin = d.PocBin;
+								int bestDist = int.MaxValue;
+								int minB = int.MaxValue;
+								int maxB = int.MinValue;
+								foreach (KeyValuePair<int, PriceRow> rkv in d.Rows)
+								{
+									int rk = rkv.Key;
+									if (rk < minB) minB = rk;
+									if (rk > maxB) maxB = rk;
+									double rv = rkv.Value.Volume;
+									if (rv > maxV) maxV = rv;
+									int dist = Math.Abs(rk - d.PocBin);
+									if (rv > bestVol || (Math.Abs(rv - bestVol) <= 1e-9 && dist < bestDist))
+									{
+										bestVol = rv;
+										bestVolBin = rk;
+										bestDist = dist;
+									}
+								}
+								d.MaxRowVolume = maxV;
+								d.VolumePocBin = bestVolBin;
+								CalculateVolumeValueArea(d, ValueAreaPercent, d.VolumePocBin, out d.VolumeVahBin, out d.VolumeValBin);
+								d.SinglePrintZones = minB <= maxB ? ComputeSinglePrintZones(d, minB, maxB, d.PocBin) : new List<SinglePrintZone>();
+								d.AnalyticsStep = step;
+								d.AnalyticsVaPct = ValueAreaPercent;
+								d.AnalyticsValid = true;
+							}
+						}
+					}
+					lastMpRenderSessionsSnapshot = allSessions;
+				}
+				else
+				{
+					rawSessions = lastMpRenderSessionsSnapshot ?? new List<DayProfile>();
+					allSessions = rawSessions;
+				}
 
 				if (allSessions.Count == 0 && srSnapshot == null)
 					return;
-
-				double step = GetMpPriceStep();
-				if (runtimeShowMpZones)
-				{
-					for (int i = 0; i < allSessions.Count; i++)
-					{
-						DayProfile d = allSessions[i];
-						EnsureSessionRowContinuity(d, step);
-						CalculateTpoValueArea(d, ValueAreaPercent, out d.PocBin, out d.VahBin, out d.ValBin);
-						d.MaxRowVolume = Math.Max(1e-9, d.Rows.Values.Max(r => r.Volume));
-						d.VolumePocBin = d.Rows.OrderByDescending(kv => kv.Value.Volume)
-							.ThenBy(kv => Math.Abs(kv.Key - d.PocBin)).First().Key;
-						CalculateVolumeValueArea(d, ValueAreaPercent, d.VolumePocBin, out d.VolumeVahBin, out d.VolumeValBin);
-						int minB = d.Rows.Keys.Min();
-						int maxB = d.Rows.Keys.Max();
-						d.SinglePrintZones = ComputeSinglePrintZones(d, minB, maxB, d.PocBin);
-					}
-				}
 
 				DateTime refNow = rawSessions.Count > 0 ? GetReferenceNow(rawSessions) : chartBars.GetTime(chartBars.Count - 1);
 				if (allSessions.Count > 0)
@@ -6850,9 +7582,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 				var dashProps = new StrokeStyleProperties
 				{
 					DashStyle = SharpDX.Direct2D1.DashStyle.Custom,
-					DashCap = CapStyle.Flat,
-					StartCap = CapStyle.Flat,
-					EndCap = CapStyle.Flat
+					DashCap = CapStyle.Round,
+					StartCap = CapStyle.Round,
+					EndCap = CapStyle.Round
 				};
 
 				DxBrush[] sessionLineBrushes = new DxBrush[SessionColors.Length];
@@ -6864,40 +7596,40 @@ namespace NinjaTrader.NinjaScript.Indicators
 						SharpDX.Color sc = SessionColors[sIdx];
 						sessionLineBrushes[sIdx] = new DxBrush(RenderTarget, light
 							? new SharpDX.Color((int)(sc.R * 0.72f), (int)(sc.G * 0.68f), (int)(sc.B * 0.72f), 220)
-							: new SharpDX.Color(sc.R, sc.G, sc.B, (byte)215));
+							: new SharpDX.Color(sc.R, sc.G, sc.B, (byte)205));
 						sessionGlowBrushes[sIdx] = new DxBrush(RenderTarget, light
 							? new SharpDX.Color((int)(sc.R * 0.75f), (int)(sc.G * 0.70f), (int)(sc.B * 0.75f), 26)
-							: new SharpDX.Color(sc.R, sc.G, sc.B, (byte)34));
+							: new SharpDX.Color(sc.R, sc.G, sc.B, (byte)32));
 					}
 
 				using (var dashedStroke = new StrokeStyle(Globals.D2DFactory, dashProps, new float[] { 4f, 3f }))
-				using (var sessionBaseDashStroke = new StrokeStyle(Globals.D2DFactory, dashProps, new float[] { 8f, 4f }))
-				using (var orangeBrush = new DxBrush(RenderTarget, new SharpDX.Color(245, 155, 35)))
-				using (var yellowBrush = new DxBrush(RenderTarget, new SharpDX.Color(238, 202, 42)))
-				using (var highExtremeBrush = new DxBrush(RenderTarget, new SharpDX.Color(38, 224, 102)))
-				using (var lowExtremeBrush = new DxBrush(RenderTarget, new SharpDX.Color(248, 76, 82)))
-				using (var highSwingLineBrush = new DxBrush(RenderTarget, new SharpDX.Color(38, 224, 102, 205)))
-				using (var lowSwingLineBrush = new DxBrush(RenderTarget, new SharpDX.Color(248, 76, 82, 205)))
-				using (var highExtremeBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(38, 224, 102, 195)))
-				using (var lowExtremeBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(248, 76, 82, 195)))
-				using (var vaFillBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(14, 116, 168, 36) : new SharpDX.Color(16, 56, 78, 105)))
-				using (var vaBorderBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(18, 118, 168, 210) : new SharpDX.Color(58, 148, 190, 215)))
+				using (var sessionBaseDashStroke = new StrokeStyle(Globals.D2DFactory, dashProps, new float[] { 7f, 4f }))
+				using (var orangeBrush = new DxBrush(RenderTarget, new SharpDX.Color(251, 191, 36)))
+				using (var yellowBrush = new DxBrush(RenderTarget, new SharpDX.Color(253, 224, 71)))
+				using (var highExtremeBrush = new DxBrush(RenderTarget, new SharpDX.Color(52, 211, 153)))
+				using (var lowExtremeBrush = new DxBrush(RenderTarget, new SharpDX.Color(251, 113, 133)))
+				using (var highSwingLineBrush = new DxBrush(RenderTarget, new SharpDX.Color(52, 211, 153, 205)))
+				using (var lowSwingLineBrush = new DxBrush(RenderTarget, new SharpDX.Color(251, 113, 133, 205)))
+				using (var highExtremeBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(52, 211, 153, 215)))
+				using (var lowExtremeBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(251, 113, 133, 215)))
+				using (var vaFillBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(14, 116, 168, 36) : new SharpDX.Color(14, 116, 144, 58)))
+				using (var vaBorderBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(18, 118, 168, 210) : new SharpDX.Color(56, 189, 248, 232)))
 				using (var vaVirginBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(10, 132, 188) : new SharpDX.Color(88, 204, 248)))
-				using (var singleBuyZoneRayBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(16, 175, 88, 56) : new SharpDX.Color(16, 192, 98, 84)))
-				using (var singleSellZoneRayBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(220, 38, 56, 56) : new SharpDX.Color(226, 42, 60, 84)))
+				using (var singleBuyZoneRayBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(16, 175, 88, 56) : new SharpDX.Color(16, 185, 129, 72)))
+				using (var singleSellZoneRayBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(220, 38, 56, 56) : new SharpDX.Color(244, 63, 94, 72)))
 				using (var singleBuyBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(48, 246, 128, 250)))
 				using (var singleSellBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(255, 86, 98, 250)))
-				using (var spBuyPillBgBrush = new DxBrush(RenderTarget, new SharpDX.Color(8, 46, 26, 250)))
-				using (var spSellPillBgBrush = new DxBrush(RenderTarget, new SharpDX.Color(54, 12, 20, 250)))
-				using (var pocLineBrush = new DxBrush(RenderTarget, new SharpDX.Color(236, 156, 28)))
-				using (var vppocLineBrush = new DxBrush(RenderTarget, new SharpDX.Color(235, 200, 45)))
+				using (var spBuyPillBgBrush = new DxBrush(RenderTarget, new SharpDX.Color(6, 48, 32, 248)))
+				using (var spSellPillBgBrush = new DxBrush(RenderTarget, new SharpDX.Color(60, 14, 26, 248)))
+				using (var pocLineBrush = new DxBrush(RenderTarget, new SharpDX.Color(245, 158, 11)))
+				using (var vppocLineBrush = new DxBrush(RenderTarget, new SharpDX.Color(250, 204, 21)))
 				using (var midLineBrush = new DxBrush(RenderTarget, new SharpDX.Color(218, 128, 255)))
-				using (var pillBgBrush = new DxBrush(RenderTarget, new SharpDX.Color(10, 15, 22, 248)))
-				using (var cardBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(38, 54, 70, 215)))
-				using (var rightLaneLineBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(165, 178, 194, 190) : new SharpDX.Color(52, 68, 88, 190)))
-				using (var labelRightFormat = new DxTextFormat(Globals.DirectWriteFactory, "Arial", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 9.0f))
+				using (var pillBgBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(244, 248, 252, 250) : new SharpDX.Color(13, 21, 36, 248)))
+				using (var cardBorderBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(148, 168, 192, 215) : new SharpDX.Color(56, 189, 248, 92)))
+				using (var rightLaneLineBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(165, 178, 194, 190) : new SharpDX.Color(56, 189, 248, 90)))
+				using (var labelRightFormat = new DxTextFormat(Globals.DirectWriteFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 9.3f))
 				{
-					labelRightFormat.TextAlignment = SharpDX.DirectWrite.TextAlignment.Trailing;
+					labelRightFormat.TextAlignment = SharpDX.DirectWrite.TextAlignment.Center;
 					labelRightFormat.ParagraphAlignment = ParagraphAlignment.Center;
 					labelRightFormat.WordWrapping = WordWrapping.NoWrap;
 
@@ -7192,11 +7924,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 								if (boxRightX > boxLeftX + 2f && clBotVa > clTopVa + 1.5f)
 								{
-									RenderTarget.FillRectangle(new RectangleF(boxLeftX, clTopVa, boxRightX - boxLeftX, clBotVa - clTopVa), vaFillBrush);
+									RectangleF vaBoxRect = new RectangleF(boxLeftX, clTopVa, boxRightX - boxLeftX, clBotVa - clTopVa);
+									RenderTarget.FillRoundedRectangle(new RoundedRectangle { Rect = vaBoxRect, RadiusX = 4f, RadiusY = 4f }, vaFillBrush);
+									RenderTarget.FillRectangle(new RectangleF(boxLeftX, clTopVa, 2.4f, vaBoxRect.Height), vaBorderBrush);
 									if (allowVah && yVahLine >= canvasTopY && yVahLine <= canvasBotY)
-										RenderTarget.DrawLine(new Vector2(boxLeftX, yVahLine), new Vector2(boxRightX, yVahLine), vaBorderBrush, 1.0f, dashedStroke);
+										RenderTarget.DrawLine(new Vector2(boxLeftX, yVahLine), new Vector2(boxRightX, yVahLine), vaBorderBrush, 1.35f, dashedStroke);
 									if (allowVal && yValLine >= canvasTopY && yValLine <= canvasBotY)
-										RenderTarget.DrawLine(new Vector2(boxLeftX, yValLine), new Vector2(boxRightX, yValLine), vaBorderBrush, 1.0f, dashedStroke);
+										RenderTarget.DrawLine(new Vector2(boxLeftX, yValLine), new Vector2(boxRightX, yValLine), vaBorderBrush, 1.35f, dashedStroke);
 								}
 							}
 
@@ -7515,6 +8249,334 @@ namespace NinjaTrader.NinjaScript.Indicators
 					}
 				}
 			}
+			finally
+			{
+				if (enteredProfileLock)
+					System.Threading.Monitor.Exit(profileLock);
+			}
+		}
+
+		private void GetLiveTimeframeCountdownInfo(out string tfBadge, out string timerStr, out bool isUrgent, out bool isLiveActive)
+		{
+			tfBadge = "TF";
+			timerStr = "00:00";
+			isUrgent = false;
+			isLiveActive = false;
+
+			Bars bars = (ChartBars != null) ? ChartBars.Bars : null;
+			BarsPeriod bp = (bars != null && bars.BarsPeriod != null) ? bars.BarsPeriod : BarsPeriod;
+			if (bp == null)
+				return;
+
+			BarsPeriodType pType = bp.BarsPeriodType;
+			int pVal = Math.Max(1, bp.Value);
+			if (pType == BarsPeriodType.HeikenAshi || pType == BarsPeriodType.Volumetric)
+			{
+				pType = bp.BaseBarsPeriodType;
+				pVal = Math.Max(1, bp.BaseBarsPeriodValue);
+			}
+
+			switch (pType)
+			{
+				case BarsPeriodType.Minute:
+					tfBadge = (pVal >= 60 && pVal % 60 == 0)
+						? ((pVal / 60).ToString(CultureInfo.InvariantCulture) + "h")
+						: (pVal.ToString(CultureInfo.InvariantCulture) + "m");
+					break;
+				case BarsPeriodType.Second:
+					tfBadge = pVal.ToString(CultureInfo.InvariantCulture) + "s";
+					break;
+				case BarsPeriodType.Day:
+					tfBadge = pVal.ToString(CultureInfo.InvariantCulture) + "D";
+					break;
+				case BarsPeriodType.Week:
+					tfBadge = pVal.ToString(CultureInfo.InvariantCulture) + "W";
+					break;
+				case BarsPeriodType.Month:
+					tfBadge = pVal.ToString(CultureInfo.InvariantCulture) + "M";
+					break;
+				case BarsPeriodType.Tick:
+					tfBadge = pVal.ToString(CultureInfo.InvariantCulture) + "T";
+					break;
+				case BarsPeriodType.Volume:
+					tfBadge = FormatGoChartingVol(pVal) + "V";
+					break;
+				case BarsPeriodType.Range:
+					tfBadge = pVal.ToString(CultureInfo.InvariantCulture) + "R";
+					break;
+				default:
+					tfBadge = pVal.ToString(CultureInfo.InvariantCulture);
+					break;
+			}
+
+			if (bars == null || bars.Count <= 0)
+				return;
+
+			DateTime nowNt;
+			bool isPlaybackConnected = false;
+			try
+			{
+				if (Connection.PlaybackConnection != null && Connection.PlaybackConnection.Status == ConnectionStatus.Connected)
+				{
+					isPlaybackConnected = true;
+					nowNt = Connection.PlaybackConnection.Now;
+				}
+				else
+				{
+					nowNt = Globals.Now;
+				}
+			}
+			catch
+			{
+				nowNt = DateTime.Now;
+			}
+
+			bool streamLive = (State == State.Realtime || isPlaybackConnected);
+			int lastIdx = bars.Count - 1;
+
+			if (pType == BarsPeriodType.Minute || pType == BarsPeriodType.Second)
+			{
+				long periodSec = (pType == BarsPeriodType.Minute) ? (long)pVal * 60L : (long)pVal;
+				DateTime barClose = bars.GetTime(lastIdx);
+				double rawDiffSec = (barClose - nowNt).TotalSeconds;
+				long remSec = 0L;
+
+				if (rawDiffSec >= 0.0 && rawDiffSec <= periodSec + 5.0)
+				{
+					remSec = Math.Min(periodSec, Math.Max(0L, (long)Math.Ceiling(rawDiffSec)));
+					isLiveActive = true;
+				}
+				else if (rawDiffSec < 0.0)
+				{
+					double elapsedPast = -rawDiffSec;
+					if (streamLive && elapsedPast < Math.Max(periodSec * 3.0, 300.0))
+					{
+						long intervals = ((long)Math.Floor(elapsedPast) / periodSec) + 1L;
+						DateTime nextClose = barClose.AddSeconds(intervals * periodSec);
+						remSec = Math.Min(periodSec, Math.Max(0L, (long)Math.Ceiling((nextClose - nowNt).TotalSeconds)));
+						isLiveActive = true;
+					}
+					else
+					{
+						remSec = 0L;
+						isLiveActive = false;
+					}
+				}
+				else if (streamLive)
+				{
+					long todSec = (long)Math.Max(0.0, Math.Floor(nowNt.TimeOfDay.TotalSeconds));
+					remSec = periodSec - (todSec % periodSec);
+					isLiveActive = true;
+				}
+
+				long urgentThresh = Math.Min(10L, Math.Max(3L, periodSec / 3L));
+				isUrgent = isLiveActive && remSec > 0L && remSec <= urgentThresh;
+
+				if (periodSec >= 3600L || remSec >= 3600L)
+				{
+					timerStr = string.Format(
+						CultureInfo.InvariantCulture,
+						"{0:00}:{1:00}:{2:00}",
+						remSec / 3600L,
+						(remSec % 3600L) / 60L,
+						remSec % 60L);
+				}
+				else
+				{
+					timerStr = string.Format(
+						CultureInfo.InvariantCulture,
+						"{0:00}:{1:00}",
+						remSec / 60L,
+						remSec % 60L);
+				}
+				return;
+			}
+
+			if (pType == BarsPeriodType.Day)
+			{
+				DateTime barDate = bars.GetTime(lastIdx).Date;
+				DateTime dayClose = GetTradingDayCloseTime(barDate);
+				if (dayClose <= nowNt)
+					dayClose = nowNt.Date.AddDays(1);
+				long remSec = streamLive ? Math.Max(0L, (long)Math.Ceiling((dayClose - nowNt).TotalSeconds)) : 0L;
+				isLiveActive = streamLive && remSec > 0L;
+				timerStr = string.Format(
+					CultureInfo.InvariantCulture,
+					"{0:00}:{1:00}:{2:00}",
+					remSec / 3600L,
+					(remSec % 3600L) / 60L,
+					remSec % 60L);
+				return;
+			}
+
+			if (pType == BarsPeriodType.Week || pType == BarsPeriodType.Month)
+			{
+				DateTime targetEnd = (pType == BarsPeriodType.Week)
+					? GetTradingDayCloseTime(GetMondayOfWeek(nowNt).AddDays(4))
+					: new DateTime(nowNt.Year, nowNt.Month, DateTime.DaysInMonth(nowNt.Year, nowNt.Month), 23, 59, 59);
+				double hrs = streamLive ? Math.Max(0.0, (targetEnd - nowNt).TotalHours) : 0.0;
+				isLiveActive = streamLive && hrs > 0.0;
+				int d = (int)(hrs / 24.0);
+				int h = (int)Math.Floor(hrs % 24.0);
+				timerStr = string.Format(CultureInfo.InvariantCulture, "{0}d {1:00}h", d, h);
+				return;
+			}
+
+			if (pType == BarsPeriodType.Volume)
+			{
+				long curVol = bars.GetVolume(lastIdx);
+				long remVol = Math.Max(0L, (long)pVal - curVol);
+				isLiveActive = streamLive;
+				isUrgent = isLiveActive && remVol > 0L && remVol <= Math.Max(1L, pVal / 10);
+				timerStr = FormatGoChartingVol(remVol) + " vol";
+				return;
+			}
+
+			if (pType == BarsPeriodType.Tick)
+			{
+				double pct = 0.0;
+				try { pct = bars.PercentComplete; } catch { }
+				int remTicks = Math.Max(0, (int)Math.Round(pVal * (1.0 - Math.Max(0.0, Math.Min(1.0, pct)))));
+				isLiveActive = streamLive;
+				isUrgent = isLiveActive && remTicks > 0 && remTicks <= Math.Max(1, pVal / 10);
+				timerStr = remTicks.ToString(CultureInfo.InvariantCulture) + " tks";
+				return;
+			}
+
+			if (pType == BarsPeriodType.Range)
+			{
+				double tick = TickSize > 0 ? TickSize : 0.05;
+				int curSpan = (int)Math.Round(Math.Max(0.0, bars.GetHigh(lastIdx) - bars.GetLow(lastIdx)) / tick);
+				int remRng = Math.Max(0, pVal - curSpan);
+				isLiveActive = streamLive;
+				isUrgent = isLiveActive && remRng > 0 && remRng <= Math.Max(1, pVal / 6);
+				timerStr = remRng.ToString(CultureInfo.InvariantCulture) + " tks";
+				return;
+			}
+		}
+
+		private void RenderBottomRightTimeframeCountdownBox(RectangleF boxRect, bool light)
+		{
+			if (RenderTarget == null || boxRect.Width < 36f || boxRect.Height < 14f)
+				return;
+
+			GetLiveTimeframeCountdownInfo(out string tfBadge, out string timerStr, out bool isUrgent, out bool isLiveActive);
+
+			SharpDX.Color bgCol;
+			SharpDX.Color borderCol;
+			SharpDX.Color chipFillCol;
+			SharpDX.Color chipBorderCol;
+			SharpDX.Color chipTextCol;
+			SharpDX.Color timerTextCol;
+			SharpDX.Color iconCol;
+
+			if (isUrgent)
+			{
+				bgCol = light ? new SharpDX.Color(255, 243, 212, 254) : new SharpDX.Color(48, 28, 8, 254);
+				borderCol = light ? new SharpDX.Color(217, 119, 6, 245) : new SharpDX.Color(251, 191, 36, 245);
+				chipFillCol = light ? new SharpDX.Color(245, 158, 11, 46) : new SharpDX.Color(251, 191, 36, 48);
+				chipBorderCol = light ? new SharpDX.Color(217, 119, 6, 185) : new SharpDX.Color(251, 191, 36, 185);
+				chipTextCol = light ? new SharpDX.Color(146, 64, 14, 255) : new SharpDX.Color(253, 230, 138, 255);
+				timerTextCol = light ? new SharpDX.Color(154, 52, 18, 255) : new SharpDX.Color(254, 240, 138, 255);
+				iconCol = light ? new SharpDX.Color(217, 119, 6, 255) : new SharpDX.Color(251, 191, 36, 255);
+			}
+			else if (isLiveActive)
+			{
+				bgCol = light ? new SharpDX.Color(230, 242, 252, 254) : new SharpDX.Color(10, 22, 35, 254);
+				borderCol = light ? new SharpDX.Color(13, 148, 136, 225) : new SharpDX.Color(20, 184, 166, 220);
+				chipFillCol = light ? new SharpDX.Color(2, 132, 199, 34) : new SharpDX.Color(16, 204, 139, 44);
+				chipBorderCol = light ? new SharpDX.Color(2, 132, 199, 150) : new SharpDX.Color(16, 204, 139, 165);
+				chipTextCol = light ? new SharpDX.Color(3, 105, 161, 255) : new SharpDX.Color(52, 211, 153, 255);
+				timerTextCol = light ? new SharpDX.Color(9, 17, 30, 255) : new SharpDX.Color(255, 255, 255, 255);
+				iconCol = light ? new SharpDX.Color(13, 148, 136, 255) : new SharpDX.Color(34, 211, 238, 255);
+			}
+			else
+			{
+				bgCol = light ? new SharpDX.Color(235, 241, 248, 252) : new SharpDX.Color(12, 20, 30, 252);
+				borderCol = light ? new SharpDX.Color(156, 172, 192, 225) : new SharpDX.Color(56, 76, 98, 230);
+				chipFillCol = light ? new SharpDX.Color(100, 116, 139, 32) : new SharpDX.Color(56, 189, 248, 36);
+				chipBorderCol = light ? new SharpDX.Color(100, 116, 139, 130) : new SharpDX.Color(56, 189, 248, 135);
+				chipTextCol = light ? new SharpDX.Color(30, 64, 115, 255) : new SharpDX.Color(125, 211, 252, 255);
+				timerTextCol = light ? new SharpDX.Color(30, 41, 59, 255) : new SharpDX.Color(226, 232, 240, 255);
+				iconCol = light ? new SharpDX.Color(71, 85, 105, 245) : new SharpDX.Color(125, 211, 252, 245);
+			}
+
+			var dw = Globals.DirectWriteFactory;
+			using (var bgBrush = new DxBrush(RenderTarget, bgCol))
+			using (var borderBrush = new DxBrush(RenderTarget, borderCol))
+			using (var chipFillBrush = new DxBrush(RenderTarget, chipFillCol))
+			using (var chipBorderBrush = new DxBrush(RenderTarget, chipBorderCol))
+			using (var chipTextBrush = new DxBrush(RenderTarget, chipTextCol))
+			using (var timerTextBrush = new DxBrush(RenderTarget, timerTextCol))
+			using (var iconBrush = new DxBrush(RenderTarget, iconCol))
+			using (var tfChipFmt = new DxTextFormat(dw, "Segoe UI", SharpDX.DirectWrite.FontWeight.ExtraBold, SharpDX.DirectWrite.FontStyle.Normal, 10.6f))
+			using (var timerFmt = new DxTextFormat(dw, "Segoe UI", SharpDX.DirectWrite.FontWeight.ExtraBold, SharpDX.DirectWrite.FontStyle.Normal, 12.2f))
+			{
+				tfChipFmt.TextAlignment = SharpDX.DirectWrite.TextAlignment.Center;
+				tfChipFmt.ParagraphAlignment = ParagraphAlignment.Center;
+				tfChipFmt.WordWrapping = WordWrapping.NoWrap;
+
+				timerFmt.TextAlignment = SharpDX.DirectWrite.TextAlignment.Leading;
+				timerFmt.ParagraphAlignment = ParagraphAlignment.Center;
+				timerFmt.WordWrapping = WordWrapping.NoWrap;
+
+				var boxRr = new RoundedRectangle { Rect = boxRect, RadiusX = 4.5f, RadiusY = 4.5f };
+				RenderTarget.FillRoundedRectangle(boxRr, bgBrush);
+				RenderTarget.DrawRoundedRectangle(boxRr, borderBrush, isUrgent ? 1.4f : 1.15f);
+
+				float chipTextW;
+				float timerTextW;
+				using (var tlChip = new SharpDX.DirectWrite.TextLayout(dw, tfBadge, tfChipFmt, 140f, boxRect.Height))
+				using (var tlTimer = new SharpDX.DirectWrite.TextLayout(dw, timerStr, timerFmt, 200f, boxRect.Height))
+				{
+					chipTextW = (float)Math.Ceiling(tlChip.Metrics.WidthIncludingTrailingWhitespace);
+					timerTextW = (float)Math.Ceiling(tlTimer.Metrics.WidthIncludingTrailingWhitespace);
+				}
+
+				float chipPadX = 5.5f;
+				float chipW = Math.Max(24f, chipTextW + chipPadX * 2f);
+				float chipH = Math.Min(boxRect.Height - 5f, 16f);
+				bool showIcon = (boxRect.Width >= chipW + timerTextW + 30f);
+				float iconSpan = showIcon ? 12f : 0f;
+				float gap1 = showIcon ? 5.5f : 0f;
+				float gap2 = 6.5f;
+
+				float totalContentW = iconSpan + gap1 + chipW + gap2 + timerTextW;
+				float curX = (float)Math.Round(boxRect.X + Math.Max(4f, (boxRect.Width - totalContentW) * 0.5f));
+				float midY = boxRect.Y + boxRect.Height * 0.5f;
+
+				RenderTarget.PushAxisAlignedClip(boxRect, AntialiasMode.PerPrimitive);
+				try
+				{
+					if (showIcon)
+					{
+						float icx = curX + 5.5f;
+						float icy = midY + 0.4f;
+						float ir = 5.1f;
+						RenderTarget.DrawEllipse(new Ellipse(new Vector2(icx, icy), ir, ir), iconBrush, 1.55f);
+						// Stopwatch top crown tick
+						RenderTarget.DrawLine(new Vector2(icx - 1.8f, icy - ir - 1.5f), new Vector2(icx + 1.8f, icy - ir - 1.5f), iconBrush, 1.45f);
+						// Hands
+						RenderTarget.DrawLine(new Vector2(icx, icy), new Vector2(icx, icy - 3.0f), iconBrush, 1.45f);
+						RenderTarget.DrawLine(new Vector2(icx, icy), new Vector2(icx + 2.4f, icy + 1.4f), iconBrush, 1.45f);
+						curX += iconSpan + gap1;
+					}
+
+					var chipRect = new RectangleF(curX, (float)Math.Round(midY - chipH * 0.5f), chipW, chipH);
+					var chipRr = new RoundedRectangle { Rect = chipRect, RadiusX = 3.2f, RadiusY = 3.2f };
+					RenderTarget.FillRoundedRectangle(chipRr, chipFillBrush);
+					RenderTarget.DrawRoundedRectangle(chipRr, chipBorderBrush, 0.95f);
+					RenderTarget.DrawText(tfBadge, tfChipFmt, chipRect, chipTextBrush);
+
+					curX += chipW + gap2;
+					var timerRect = new RectangleF(curX, boxRect.Y - 0.5f, Math.Max(24f, timerTextW + 6f), boxRect.Height + 0.5f);
+					RenderTarget.DrawText(timerStr, timerFmt, timerRect, timerTextBrush);
+				}
+				finally
+				{
+					RenderTarget.PopAxisAlignedClip();
+				}
+			}
 		}
 
 		private void RenderSessionHeaderAndDateFooter(
@@ -7578,15 +8640,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 					}
 
 					using (var sessionDashStroke = new StrokeStyle(Globals.D2DFactory, dashProps, new float[] { 6f, 3f }))
-					using (var dateBannerBgBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(235, 241, 248, 252) : new SharpDX.Color(12, 20, 30, 252)))
-					using (var cardBorderBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(168, 182, 200, 225) : new SharpDX.Color(42, 58, 76, 220)))
-					using (var daySepBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(96, 120, 148, 235) : new SharpDX.Color(74, 96, 120, 240)))
-					using (var whiteBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(20, 30, 44) : new SharpDX.Color(238, 242, 246)))
+					using (var dateBannerBgBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(235, 241, 248, 252) : new SharpDX.Color(8, 14, 25, 252)))
+					using (var pillBgBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(246, 250, 254, 252) : new SharpDX.Color(13, 21, 36, 248)))
+					using (var hdrCardFillBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(230, 240, 252, 254) : new SharpDX.Color(12, 24, 44, 252)))
+					using (var hdrAccentBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(12, 124, 168, 225) : new SharpDX.Color(56, 189, 248, 225)))
+					using (var cardBorderBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(168, 182, 200, 225) : new SharpDX.Color(56, 189, 248, 88)))
+					using (var daySepBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(96, 120, 148, 235) : new SharpDX.Color(56, 189, 248, 130)))
+					using (var whiteBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(20, 30, 44) : new SharpDX.Color(248, 250, 252)))
 					using (var mutedBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(75, 92, 114) : new SharpDX.Color(156, 174, 194)))
-					using (var cyanBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(12, 124, 168) : new SharpDX.Color(72, 198, 222)))
-					using (var headerFormat = new DxTextFormat(Globals.DirectWriteFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 10.2f))
-					using (var dateAxisFormat = new DxTextFormat(Globals.DirectWriteFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 10.4f))
-					using (var btnCenterFormat = new DxTextFormat(Globals.DirectWriteFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 9.1f))
+					using (var cyanBrush = new DxBrush(RenderTarget, light ? new SharpDX.Color(12, 124, 168) : new SharpDX.Color(56, 189, 248)))
+					using (var headerFormat = new DxTextFormat(Globals.DirectWriteFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 10.4f))
+					using (var dateAxisFormat = new DxTextFormat(Globals.DirectWriteFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 10.8f))
+					using (var btnCenterFormat = new DxTextFormat(Globals.DirectWriteFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.ExtraBold, SharpDX.DirectWrite.FontStyle.Normal, 10.2f))
 					{
 						headerFormat.TextAlignment = SharpDX.DirectWrite.TextAlignment.Leading;
 						headerFormat.ParagraphAlignment = ParagraphAlignment.Center;
@@ -7604,7 +8669,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 						float mainStripW = Math.Max(40f, rightLimitX - stripLeft);
 
 						// =========================================================================
-						// 1. FIXED TOP SESSION HEADER BAR (Asia / London / New York + TPO Counts)
+						// 1. FIXED TOP SESSION HEADER BAR (Market Profile Studio Pill Style)
 						// =========================================================================
 						RectangleF topStripRect = new RectangleF(stripLeft, topSessionBarY, mainStripW, topSessionBarH);
 						RenderTarget.FillRectangle(topStripRect, dateBannerBgBrush);
@@ -7612,13 +8677,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 						if (ShowRightSideValues && panelRight - rightLimitX > 30f)
 						{
-							RectangleF rightCapRect = new RectangleF(rightLimitX + 1f, topSessionBarY, Math.Max(20f, panelRight - rightLimitX - 2f), topSessionBarH);
-							RenderTarget.FillRectangle(rightCapRect, dateBannerBgBrush);
-							RenderTarget.DrawRectangle(rightCapRect, cardBorderBrush, 1.0f);
+							float rcX = rightLimitX + 2f;
+							float rcW = Math.Max(20f, panelRight - rightLimitX - 4f);
+							RectangleF rightCapRect = new RectangleF(rcX, topSessionBarY, rcW, topSessionBarH);
+							var rightCapRr = new RoundedRectangle { Rect = rightCapRect, RadiusX = 5.0f, RadiusY = 5.0f };
+							RenderTarget.FillRoundedRectangle(rightCapRr, hdrCardFillBrush);
+							RenderTarget.DrawRoundedRectangle(rightCapRr, hdrAccentBrush, 1.15f);
+							RenderTarget.FillRectangle(new RectangleF(rcX + 10f, topSessionBarY + topSessionBarH - 2.4f, Math.Max(20f, rcW - 20f), 1.6f), hdrAccentBrush);
 							string capLabel = (runtimeShowMpZones && runtimeShowSrZones)
 								? "MP & S/R VALUES"
 								: (runtimeShowSrZones ? "S/R ZONE VALUES" : "MP ZONE VALUES");
-							DrawMpText(capLabel, rightCapRect.X + 4f, rightCapRect.Y, rightCapRect.Width - 8f, rightCapRect.Height, btnCenterFormat, cyanBrush);
+							DrawMpText(capLabel, rcX + 4f, topSessionBarY, rcW - 8f, topSessionBarH, btnCenterFormat, cyanBrush);
 						}
 
 						DateTime prevHdrDate = DateTime.MinValue;
@@ -7647,7 +8716,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 									new Vector2(clLeft + 1f, topSessionBarY + topSessionBarH - 1.5f),
 									new Vector2(clRight - 1f, topSessionBarY + topSessionBarH - 1.5f),
 									sessionLineBrushes[sessionColorIdx],
-									2.0f);
+									1.6f);
 							}
 
 							float divX = (float)Math.Round(day.HeaderLeftX) + 0.5f;
@@ -7656,27 +8725,27 @@ namespace NinjaTrader.NinjaScript.Indicators
 								RenderTarget.DrawLine(
 									new Vector2(divX, topSessionBarY),
 									new Vector2(divX, topSessionBarY + topSessionBarH + (ShowSessionDividers ? 2f : 0f)),
-									sessionLineBrushes[sessionColorIdx],
-									1.75f);
+									isNewDate ? daySepBrush : sessionLineBrushes[sessionColorIdx],
+									isNewDate ? 1.8f : 1.4f);
 
-								// Extend Session Base Line seamlessly through the 3-Row Bottom Table down to Date Footer (matching London dashed style for all sessions)
+								// Extend Session Base Line seamlessly through the 3-Row Bottom Table down to Date Footer
 								if (ShowSessionDividers && dateFooterY > stripTopY + 2f)
 								{
-									RenderTarget.DrawLine(new Vector2(divX, stripTopY - 3f), new Vector2(divX, dateFooterY), sessionLineBrushes[sessionColorIdx], 1.75f, sessionDashStroke);
+									RenderTarget.DrawLine(new Vector2(divX, stripTopY - 3f), new Vector2(divX, dateFooterY), sessionLineBrushes[sessionColorIdx], 1.5f, sessionDashStroke);
 								}
 							}
 
-							if (cellW < 22f)
+							if (cellW < 28f)
 								continue;
 
-							float availTextW = Math.Max(16f, cellW - 12f);
+							float availTextW = Math.Max(16f, cellW - 16f);
 							string dateShort = day.SessionDate.ToString("dd MMM", CultureInfo.InvariantCulture);
 							string shortName = day.SessionName == "New York" ? "NY" : (day.SessionName == "London" ? "Lon" : day.SessionName);
 
 							GetSessionHeaderOrderflowSpec(day, out int sessTpl, out double sessImbPct);
 							string imbStr = sessImbPct.ToString("0.#", CultureInfo.InvariantCulture) + "%";
-							string srStatsFull = string.Format(CultureInfo.InvariantCulture, "Imb: {0} | Tick/Lvl: {1}", imbStr, sessTpl);
-							string srStatsShort = string.Format(CultureInfo.InvariantCulture, "{0} | {1}T", imbStr, sessTpl);
+							string srStatsFull = string.Format(CultureInfo.InvariantCulture, "Imb: {0} · Tick/Lvl: {1}", imbStr, sessTpl);
+							string srStatsShort = string.Format(CultureInfo.InvariantCulture, "{0} · {1}T", imbStr, sessTpl);
 
 							string sessionHeader;
 							if (!runtimeShowMpZones)
@@ -7685,24 +8754,24 @@ namespace NinjaTrader.NinjaScript.Indicators
 								if (EffectiveProfileMode != MarketProfilePeriodMode.Daily)
 								{
 									sessionHeader = availTextW >= 180f
-										? (day.SessionName + " - " + srStatsFull)
+										? (day.SessionName + " · " + srStatsFull)
 										: day.SessionName;
 								}
-								else if (availTextW >= 210f)
+								else if (availTextW >= 215f)
 								{
 									sessionHeader = isRunningSession
-										? string.Format(CultureInfo.InvariantCulture, "{0} ({1}) LIVE - {2}", day.SessionName, dateShort, srStatsFull)
-										: string.Format(CultureInfo.InvariantCulture, "{0} ({1}) - {2}", day.SessionName, dateShort, srStatsFull);
+										? string.Format(CultureInfo.InvariantCulture, "{0} · {1}  ● LIVE  {2}", day.SessionName, dateShort, srStatsFull)
+										: string.Format(CultureInfo.InvariantCulture, "{0} · {1}  {2}", day.SessionName, dateShort, srStatsFull);
 								}
 								else if (availTextW >= 135f)
 								{
 									sessionHeader = isRunningSession
-										? string.Format(CultureInfo.InvariantCulture, "{0} ({1}) LIVE - {2}", shortName, dateShort, srStatsShort)
-										: string.Format(CultureInfo.InvariantCulture, "{0} ({1}) - {2}", day.SessionName, dateShort, srStatsShort);
+										? string.Format(CultureInfo.InvariantCulture, "{0} · {1} ● LIVE · {2}", shortName, dateShort, srStatsShort)
+										: string.Format(CultureInfo.InvariantCulture, "{0} · {1}  {2}", day.SessionName, dateShort, srStatsShort);
 								}
 								else if (availTextW >= 86f)
 								{
-									sessionHeader = string.Format(CultureInfo.InvariantCulture, "{0} ({1}) {2}", shortName, day.SessionDate.ToString("dd", CultureInfo.InvariantCulture), srStatsShort);
+									sessionHeader = string.Format(CultureInfo.InvariantCulture, "{0} · {1}  {2}", shortName, day.SessionDate.ToString("dd", CultureInfo.InvariantCulture), srStatsShort);
 								}
 								else if (availTextW >= 46f)
 								{
@@ -7718,28 +8787,28 @@ namespace NinjaTrader.NinjaScript.Indicators
 								int expectedTpos = Math.Max(1, day.ExpectedPeriodCount);
 								int printedTpos = Math.Min(expectedTpos, Math.Max(day.PeriodSlices.Count, day.LastPeriod + 1));
 								string tpoStatus = isRunningSession
-									? string.Format(CultureInfo.InvariantCulture, "LIVE {0}/{1} TPO", printedTpos, expectedTpos)
+									? string.Format(CultureInfo.InvariantCulture, "● LIVE {0}/{1} TPO", printedTpos, expectedTpos)
 									: string.Format(CultureInfo.InvariantCulture, "{0}/{1} TPO", printedTpos, expectedTpos);
 
 								if (EffectiveProfileMode != MarketProfilePeriodMode.Daily)
 								{
 									sessionHeader = availTextW >= 150f
-										? (day.SessionName + " - " + tpoStatus)
+										? (day.SessionName + " · " + tpoStatus)
 										: day.SessionName;
 								}
-								else if (runtimeShowSrZones && availTextW >= 265f)
+								else if (runtimeShowSrZones && availTextW >= 275f)
 								{
-									sessionHeader = string.Format(CultureInfo.InvariantCulture, "{0} ({1}) - {2} | {3}", day.SessionName, dateShort, srStatsFull, tpoStatus);
+									sessionHeader = string.Format(CultureInfo.InvariantCulture, "{0} · {1}  {2} · {3}", day.SessionName, dateShort, srStatsFull, tpoStatus);
 								}
 								else if (availTextW >= 165f)
 								{
-									sessionHeader = string.Format(CultureInfo.InvariantCulture, "{0} ({1}) - {2}", day.SessionName, dateShort, tpoStatus);
+									sessionHeader = string.Format(CultureInfo.InvariantCulture, "{0} · {1}  {2}", day.SessionName, dateShort, tpoStatus);
 								}
 								else if (availTextW >= 96f)
 								{
 									sessionHeader = isRunningSession
-										? string.Format(CultureInfo.InvariantCulture, "{0} ({1}) LIVE", shortName, dateShort)
-										: string.Format(CultureInfo.InvariantCulture, "{0} ({1})", day.SessionName, dateShort);
+										? string.Format(CultureInfo.InvariantCulture, "{0} · {1} ● LIVE", shortName, dateShort)
+										: string.Format(CultureInfo.InvariantCulture, "{0} · {1}", day.SessionName, dateShort);
 								}
 								else if (availTextW >= 50f)
 								{
@@ -7751,23 +8820,24 @@ namespace NinjaTrader.NinjaScript.Indicators
 								}
 							}
 
-							DrawMpText(sessionHeader, clLeft + 7f, topSessionBarY, availTextW, topSessionBarH - 1f, headerFormat, sessionBrushes[sessionColorIdx]);
+							float pillW = Math.Min(cellW - 8f, Math.Max(46f, sessionHeader.Length * 6.3f + 20f));
+							float pillH = topSessionBarH - 7f;
+							float pillX = clLeft + 4f;
+							float pillY = topSessionBarY + 3.5f;
+							RectangleF hdrPillRect = new RectangleF(pillX, pillY, pillW, pillH);
+							var hdrPillRr = new RoundedRectangle { Rect = hdrPillRect, RadiusX = 4.5f, RadiusY = 4.5f };
+							RenderTarget.FillRoundedRectangle(hdrPillRr, pillBgBrush);
+							RenderTarget.DrawRoundedRectangle(hdrPillRr, cardBorderBrush, 0.9f);
+							RenderTarget.FillRectangle(new RectangleF(pillX + 1.6f, pillY + 2.6f, 3.0f, Math.Max(2f, pillH - 5.2f)), sessionBrushes[sessionColorIdx]);
+							DrawMpText(sessionHeader, pillX + 8f, pillY, Math.Max(12f, pillW - 11f), pillH, headerFormat, sessionBrushes[sessionColorIdx]);
 						}
 
 						// =========================================================================
-						// 2. BOTTOM TRADING DATE FOOTER BAR (Clean Date + Sessions — No TPO Details)
+						// 2. BOTTOM TRADING DATE FOOTER BAR (Market Profile Studio Banner Style)
 						// =========================================================================
 						RectangleF footerFullRect = new RectangleF(stripLeft, dateFooterY, mainStripW, dateFooterH);
 						RenderTarget.FillRectangle(footerFullRect, dateBannerBgBrush);
 						RenderTarget.DrawRectangle(footerFullRect, cardBorderBrush, 1.0f);
-
-						if (panelRight - rightLimitX > 30f)
-						{
-							RectangleF footerRightCap = new RectangleF(rightLimitX + 1f, dateFooterY, Math.Max(20f, panelRight - rightLimitX - 2f), dateFooterH);
-							RenderTarget.FillRectangle(footerRightCap, dateBannerBgBrush);
-							RenderTarget.DrawRectangle(footerRightCap, cardBorderBrush, 1.0f);
-							DrawMpText("Session Date (IST)", footerRightCap.X + 4f, footerRightCap.Y, footerRightCap.Width - 8f, footerRightCap.Height, btnCenterFormat, mutedBrush);
-						}
 
 						MarketProfilePeriodMode curMode = EffectiveProfileMode;
 						for (int g = 0; g < dateGroups.Count; g++)
@@ -7795,6 +8865,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 							RenderTarget.FillRectangle(dateBannerRect, dateBannerBgBrush);
 							RenderTarget.DrawRectangle(dateBannerRect, cardBorderBrush, 0.9f);
 
+							float safeTextLeft = Math.Max(clBannerLeft + 6f, panelLeft + 140f);
+							float availDateW = (clBannerRight - 6f) - safeTextLeft;
+							if (availDateW < 38f)
+								continue;
+
 							if (curMode == MarketProfilePeriodMode.Daily)
 							{
 								List<string> sessionNames = new List<string>();
@@ -7804,33 +8879,34 @@ namespace NinjaTrader.NinjaScript.Indicators
 								}
 
 								string fullSummary = sessionNames.Count > 0
-									? string.Format(CultureInfo.InvariantCulture, "   [ {0} Sessions: {1} ]",
+									? string.Format(CultureInfo.InvariantCulture, "   [ {0} Sessions · {1} ]",
 										activeSessions.Length, string.Join(" | ", sessionNames))
-									: "   [ 3 Sessions: Asia | London | New York ]";
+									: "   [ 3 Sessions · Asia | London | New York ]";
 								string shortSummary = string.Format(CultureInfo.InvariantCulture, "  [ {0} Sessions ]",
 									Math.Max(1, activeSessions.Length));
 
-								float availDateW = bannerW - 8f;
 								string dateBannerText;
 								if (availDateW >= 380f)
 									dateBannerText = "Date: " + group.Date.ToString("dd MMM yyyy (ddd)", CultureInfo.InvariantCulture) + fullSummary;
 								else if (availDateW >= 210f)
 									dateBannerText = "Date: " + group.Date.ToString("dd MMM yyyy (ddd)", CultureInfo.InvariantCulture) + shortSummary;
-								else if (availDateW >= 110f)
-									dateBannerText = "Date: " + group.Date.ToString("dd MMM yyyy (ddd)", CultureInfo.InvariantCulture);
-								else
+								else if (availDateW >= 122f)
+									dateBannerText = group.Date.ToString("dd MMM yyyy (ddd)", CultureInfo.InvariantCulture);
+								else if (availDateW >= 78f)
 									dateBannerText = group.Date.ToString("dd MMM (ddd)", CultureInfo.InvariantCulture);
+								else
+									dateBannerText = group.Date.ToString("dd MMM", CultureInfo.InvariantCulture);
 
-								DrawMpText(dateBannerText, clBannerLeft + 4f, dateFooterY + 1f, Math.Max(20f, availDateW), dateFooterH - 2f, dateAxisFormat, whiteBrush);
+								DrawMpText(dateBannerText, safeTextLeft, dateFooterY + 1f, availDateW, dateFooterH - 2f, dateAxisFormat, whiteBrush);
 							}
 							else if (curMode == MarketProfilePeriodMode.Monthly)
 							{
 								string mShort = group.Date.ToString("MMM yyyy", CultureInfo.InvariantCulture);
 								string mLong = group.Date.ToString("MMMM yyyy", CultureInfo.InvariantCulture);
-								string bannerSummary = bannerW >= 240f
+								string bannerSummary = availDateW >= 240f
 									? string.Format(CultureInfo.InvariantCulture, "Month: {0}  [ Monthly ]", mLong)
 									: mShort;
-								DrawMpText(bannerSummary, clBannerLeft + 4f, dateFooterY + 1f, bannerW - 8f, dateFooterH - 2f, dateAxisFormat, whiteBrush);
+								DrawMpText(bannerSummary, safeTextLeft, dateFooterY + 1f, availDateW, dateFooterH - 2f, dateAxisFormat, whiteBrush);
 							}
 							else
 							{
@@ -7838,10 +8914,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 								string wkTitle = firstInGrp != null && !string.IsNullOrEmpty(firstInGrp.SessionName)
 									? firstInGrp.SessionName
 									: ("Wk " + group.Date.ToString("dd MMM", CultureInfo.InvariantCulture));
-								string bannerSummary = bannerW >= 220f
+								string bannerSummary = availDateW >= 220f
 									? string.Format(CultureInfo.InvariantCulture, "{0}  [ Weekly ]", wkTitle)
 									: wkTitle;
-								DrawMpText(bannerSummary, clBannerLeft + 4f, dateFooterY + 1f, bannerW - 8f, dateFooterH - 2f, dateAxisFormat, whiteBrush);
+								DrawMpText(bannerSummary, safeTextLeft, dateFooterY + 1f, availDateW, dateFooterH - 2f, dateAxisFormat, whiteBrush);
 							}
 						}
 					}
@@ -7880,11 +8956,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			double tick = TickSize > 0 ? TickSize : 0.05;
 			int chartCount = chartBars.Count;
-			double refClose = chartBars.GetClose(chartCount - 1);
-			long closeBucket = (long)Math.Round(refClose / Math.Max(1e-6, tick));
+			double refHigh = chartBars.GetHigh(chartCount - 1);
+			double refLow = chartBars.GetLow(chartCount - 1);
+			long highBucket = (long)Math.Round(refHigh / Math.Max(1e-6, tick));
+			long lowBucket = (long)Math.Round(refLow / Math.Max(1e-6, tick));
 
-			int minSampleCount;
-			lock (profileLock) { minSampleCount = rawMinuteSamples.Count; }
+			int minSampleCount = rawMinuteSamples.Count;
 
 			int dailyHistCount;
 			int cfgHash =
@@ -7899,17 +8976,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 				(SrAtrLength << 18) ^
 				((int)Math.Round(SrZoneAtrMultiplier * 100.0) << 23);
 
+			DateTime nowUtc = DateTime.UtcNow;
 			lock (srLock)
 			{
 				dailyHistCount = srDailyHistory.Count;
 				if (cachedSrSnapshot != null &&
-					srCacheChartBarCount == chartCount &&
-					srCacheMinuteCount == minSampleCount &&
-					srCacheDailyCount == dailyHistCount &&
-					srCacheCloseTickBucket == closeBucket &&
-					srCacheConfigHash == cfgHash)
+					srCacheConfigHash == cfgHash &&
+					srCacheDailyCount == dailyHistCount)
 				{
-					return cachedSrSnapshot;
+					bool sameChartBar = (srCacheChartBarCount == chartCount);
+					bool noRangeExpansion = (highBucket <= srCacheLastHighBucket && lowBucket >= srCacheLastLowBucket);
+					bool throttledIntraBar = sameChartBar && (nowUtc - lastSrRealtimeRecomputeUtc).TotalMilliseconds < 1200.0;
+					if ((sameChartBar && noRangeExpansion) || throttledIntraBar)
+					{
+						return cachedSrSnapshot;
+					}
 				}
 			}
 
@@ -8038,7 +9119,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 				srCacheChartBarCount = chartCount;
 				srCacheMinuteCount = minSampleCount;
 				srCacheDailyCount = dailyHistCount;
-				srCacheCloseTickBucket = closeBucket;
+				srCacheLastHighBucket = highBucket;
+				srCacheLastLowBucket = lowBucket;
+				lastSrRealtimeRecomputeUtc = DateTime.UtcNow;
 				srCacheConfigHash = cfgHash;
 			}
 
@@ -8850,9 +9933,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 						continue;
 					}
 
-					// Phase 1: Historical Original S/R Segment (OriginTime -> Break/FlipTime where Phase 1 validation finished)
+					// Phase 1: Historical Invalidated Original S/R Segment — ONLY shown when Analysis mode is Active!
 					float rawXFlip = ResolveSrUnclampedTimeX(cc, chartBars, panelLeft, tr.FlipTime);
-					if (rawXFlip >= panelLeft + 2f && rawXOrigin <= rightLimitX - 2f)
+					if (runtimeShowSrAnalysis && rawXFlip >= panelLeft + 2f && rawXOrigin <= rightLimitX - 2f)
 					{
 						float x0 = Math.Max(panelLeft + 2f, rawXOrigin);
 						float x1 = Math.Min(rightLimitX, rawXFlip);
@@ -8952,9 +10035,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 							}
 						}
 					}
-					else
+					else if (runtimeShowSrAnalysis)
 					{
-						// Historical Completed Major Flip Line (FlipTime -> ValidationEndTime where flip validation finished)
+						// Historical Completed Major Flip Line (FlipTime -> ValidationEndTime where flip validation finished) — Analysis Mode Only!
 						float rawXEnd = ResolveSrUnclampedTimeX(cc, chartBars, panelLeft, tr.ValidationEndTime);
 						if (rawXEnd >= panelLeft + 2f && rawXFlip <= rightLimitX - 2f)
 						{
@@ -9133,7 +10216,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 					if (t.DrawY < minY - 2f || t.DrawY + t.Height > maxY + 2f)
 						continue;
 
+					string dispTagText = t.Text ?? string.Empty;
+					if (dispTagText.Length > 28)
+					{
+						dispTagText = dispTagText
+							.Replace("Asia+London+NY", "Merged")
+							.Replace("Asia + London + NY", "Merged")
+							.Replace("ValueAreaHigh", "VAH")
+							.Replace("ValueAreaLow", "VAL");
+					}
+
 					RectangleF bgRect = new RectangleF(boxLeft, t.DrawY, boxWidth, t.Height);
+					var tagRr = new RoundedRectangle { Rect = bgRect, RadiusX = 4.0f, RadiusY = 4.0f };
 
 					// Draw crisp connector tick from exact price line Y on the divider to the shifted tag box
 					float anchorLineY = Math.Max(minY, Math.Min(maxY, t.IdealY + t.Height * 0.5f));
@@ -9143,41 +10237,46 @@ namespace NinjaTrader.NinjaScript.Indicators
 						if (t.BorderColor.HasValue)
 						{
 							customBrush.Color = t.BorderColor.Value;
-							RenderTarget.DrawLine(new Vector2(laneDividerX + 0.5f, anchorLineY), new Vector2(boxLeft, tagMidY), customBrush, 1.05f);
+							RenderTarget.DrawLine(new Vector2(laneDividerX + 0.5f, anchorLineY), new Vector2(boxLeft, tagMidY), customBrush, 1.0f);
 						}
 						else if (t.BorderBrush != null || t.Brush != null)
 						{
-							RenderTarget.DrawLine(new Vector2(laneDividerX + 0.5f, anchorLineY), new Vector2(boxLeft, tagMidY), t.BorderBrush ?? t.Brush, 1.05f);
+							RenderTarget.DrawLine(new Vector2(laneDividerX + 0.5f, anchorLineY), new Vector2(boxLeft, tagMidY), t.BorderBrush ?? t.Brush, 1.0f);
 						}
 					}
+
 					if (t.FillColor.HasValue)
 					{
 						customBrush.Color = t.FillColor.Value;
-						RenderTarget.FillRectangle(bgRect, customBrush);
+						RenderTarget.FillRoundedRectangle(tagRr, customBrush);
 					}
 					else
 					{
-						RenderTarget.FillRectangle(bgRect, t.FillBrush ?? bgBrush);
+						RenderTarget.FillRoundedRectangle(tagRr, t.FillBrush ?? bgBrush);
 					}
 
 					if (t.BorderColor.HasValue)
 					{
 						customBrush.Color = t.BorderColor.Value;
-						RenderTarget.DrawRectangle(bgRect, customBrush, 1.0f);
+						RenderTarget.DrawRoundedRectangle(tagRr, customBrush, 1.0f);
 					}
 					else
 					{
-						RenderTarget.DrawRectangle(bgRect, t.BorderBrush ?? borderBrush, t.BorderBrush != null ? 1.0f : 0.75f);
+						RenderTarget.DrawRoundedRectangle(tagRr, t.BorderBrush ?? borderBrush, t.BorderBrush != null ? 1.0f : 0.85f);
 					}
 
+					// AK10X Market Profile signature left vertical color accent bar inside each right-edge level pill
+					RectangleF accentBarRect = new RectangleF(boxLeft + 1.6f, t.DrawY + 2.4f, 2.8f, Math.Max(2f, t.Height - 4.8f));
 					if (t.TextColor.HasValue)
 					{
 						customBrush.Color = t.TextColor.Value;
-						DrawMpText(t.Text, boxLeft + 3f, t.DrawY, boxWidth - 6f, t.Height, rightFormat, customBrush);
+						RenderTarget.FillRectangle(accentBarRect, customBrush);
+						DrawMpText(dispTagText, boxLeft + 6f, t.DrawY, boxWidth - 9f, t.Height, rightFormat, customBrush);
 					}
 					else if (t.Brush != null)
 					{
-						DrawMpText(t.Text, boxLeft + 3f, t.DrawY, boxWidth - 6f, t.Height, rightFormat, t.Brush);
+						RenderTarget.FillRectangle(accentBarRect, t.Brush);
+						DrawMpText(dispTagText, boxLeft + 6f, t.DrawY, boxWidth - 9f, t.Height, rightFormat, t.Brush);
 					}
 				}
 			}
@@ -9210,6 +10309,1214 @@ namespace NinjaTrader.NinjaScript.Indicators
 				return;
 			RenderTarget.DrawText(text, format, new RectangleF(x, y, width, height), brush, DrawTextOptions.NoSnap | DrawTextOptions.Clip);
 		}
+
+		#region Multi-Timeframe Closed-Candle Signal Engine (PineScript Raj 3m + 9m Zones & Swings — Strictly Closed Candles Only)
+		private int GetLastClosedChartBarIndex(Bars chartBars)
+		{
+			if (chartBars == null || chartBars.Count <= 0)
+				return -1;
+
+			int lastIdx = chartBars.Count - 1;
+			bool isPlayback = false;
+			DateTime nowNt;
+			try
+			{
+				if (Connection.PlaybackConnection != null && Connection.PlaybackConnection.Status == ConnectionStatus.Connected)
+				{
+					isPlayback = true;
+					nowNt = Connection.PlaybackConnection.Now;
+				}
+				else
+				{
+					nowNt = Globals.Now;
+				}
+			}
+			catch
+			{
+				nowNt = DateTime.Now;
+			}
+
+			if (State == State.Realtime || isPlayback)
+			{
+				BarsPeriod bp = chartBars.BarsPeriod ?? BarsPeriod;
+				BarsPeriodType pType = bp != null ? bp.BarsPeriodType : BarsPeriodType.Minute;
+				if (pType == BarsPeriodType.HeikenAshi || pType == BarsPeriodType.Volumetric)
+					pType = bp.BaseBarsPeriodType;
+
+				if (pType == BarsPeriodType.Minute || pType == BarsPeriodType.Second)
+				{
+					DateTime barCloseTime = chartBars.GetTime(lastIdx);
+					if (nowNt < barCloseTime)
+						return lastIdx - 1;
+					return lastIdx;
+				}
+
+				return lastIdx - 1;
+			}
+
+			DateTime histCloseTime = chartBars.GetTime(lastIdx);
+			if (histCloseTime > nowNt.AddSeconds(1))
+				return lastIdx - 1;
+			return lastIdx;
+		}
+
+		private static int GetSignalZonePriority(SignalActiveZone z, int neededReactions)
+		{
+			if ((z.SourceMask & 2) != 0)
+				return 3; // Contains Higher TF (9m)
+			if ((z.SourceMask & 1) != 0)
+				return 2; // Contains Current TF (3m)
+			if (z.VeryStrong || z.Reactions >= neededReactions)
+				return 1;
+			return 0;
+		}
+
+		private static int PruneSignalZoneIndex(List<SignalActiveZone> zones, int neededReactions, bool supplySide)
+		{
+			int weakestIndex = 0;
+			int weakestPrio = GetSignalZonePriority(zones[0], neededReactions);
+			double pruneEdge = supplySide ? -zones[0].Bottom : zones[0].Bottom;
+
+			for (int j = 1; j < zones.Count; j++)
+			{
+				int prio = GetSignalZonePriority(zones[j], neededReactions);
+				double candEdge = supplySide ? -zones[j].Bottom : zones[j].Bottom;
+				if (prio < weakestPrio || (prio == weakestPrio && candEdge < pruneEdge))
+				{
+					weakestIndex = j;
+					weakestPrio = prio;
+					pruneEdge = candEdge;
+				}
+			}
+			return weakestIndex;
+		}
+
+		private static void UpsertAndMergeSignalZone(
+			List<SignalActiveZone> zones,
+			double newTop,
+			double newBottom,
+			DateTime newLeftTime,
+			int newSourceMask,
+			int maxZonesPerSide,
+			int neededReactions,
+			bool supplySide)
+		{
+			double zTop = newTop;
+			double zBot = newBottom;
+			DateTime zLeft = newLeftTime;
+			int zMask = newSourceMask;
+			bool expanded = true;
+
+			while (expanded && zones.Count > 0)
+			{
+				double expTop = zTop;
+				double expBot = zBot;
+				for (int i = 0; i < zones.Count; i++)
+				{
+					SignalActiveZone ex = zones[i];
+					if (zBot <= ex.Top && zTop >= ex.Bottom)
+					{
+						zMask |= ex.SourceMask;
+						if (ex.Top > expTop) expTop = ex.Top;
+						if (ex.Bottom < expBot) expBot = ex.Bottom;
+						if (ex.LeftTime < zLeft) zLeft = ex.LeftTime;
+					}
+				}
+				expanded = (expTop != zTop || expBot != zBot);
+				zTop = expTop;
+				zBot = expBot;
+			}
+
+			int keepIdx = -1;
+			int k = 0;
+			while (k < zones.Count)
+			{
+				SignalActiveZone ex = zones[k];
+				bool intersects = (zBot <= ex.Top && zTop >= ex.Bottom);
+				if (intersects && keepIdx == -1)
+				{
+					keepIdx = k;
+					ex.Top = zTop;
+					ex.Bottom = zBot;
+					ex.LeftTime = zLeft;
+					ex.SourceMask = zMask;
+					ex.VeryStrong = true;
+					ex.WasInZone = false;
+					k++;
+				}
+				else if (intersects)
+				{
+					zones.RemoveAt(k);
+				}
+				else
+				{
+					k++;
+				}
+			}
+
+			if (keepIdx == -1)
+			{
+				zones.Add(new SignalActiveZone
+				{
+					Top = zTop,
+					Bottom = zBot,
+					LeftTime = zLeft,
+					SourceMask = zMask,
+					Reactions = 0,
+					WasInZone = false,
+					VeryStrong = false
+				});
+			}
+
+			while (zones.Count > maxZonesPerSide)
+			{
+				int dropIdx = PruneSignalZoneIndex(zones, neededReactions, supplySide);
+				zones.RemoveAt(dropIdx);
+			}
+		}
+
+		private static double[] ComputeWilderRmaAtr(List<SignalOhlcBar> bars, int atrLen)
+		{
+			int n = bars.Count;
+			double[] atr = new double[n];
+			if (n == 0)
+				return atr;
+
+			int len = Math.Max(1, atrLen);
+			double sumTr = 0.0;
+			int initCount = Math.Min(n, len);
+			for (int i = 0; i < n; i++)
+			{
+				double tr = (i == 0)
+					? Math.Max(0.0, bars[0].High - bars[0].Low)
+					: Math.Max(
+						bars[i].High - bars[i].Low,
+						Math.Max(Math.Abs(bars[i].High - bars[i - 1].Close), Math.Abs(bars[i].Low - bars[i - 1].Close)));
+
+				if (i < initCount)
+				{
+					sumTr += tr;
+					atr[i] = sumTr / (i + 1);
+				}
+				else
+				{
+					atr[i] = ((atr[i - 1] * (len - 1)) + tr) / len;
+				}
+			}
+			return atr;
+		}
+
+		private static List<SignalRawPivot> DetectClosedSignalPivots(List<SignalOhlcBar> bars, double[] atr, int leftBars, int rightBars, double eps)
+		{
+			List<SignalRawPivot> list = new List<SignalRawPivot>();
+			int n = bars.Count;
+			if (n < leftBars + rightBars + 1)
+				return list;
+
+			// Every bar in `bars` is already strictly closed, so maxPivotIdx = n - 1 - rightBars!
+			int maxPivotIdx = n - 1 - rightBars;
+			for (int i = leftBars; i <= maxPivotIdx; i++)
+			{
+				double ph = bars[i].High;
+				bool okHigh = true;
+				for (int l = i - leftBars; l < i; l++)
+				{
+					if (bars[l].High > ph + eps) { okHigh = false; break; }
+				}
+				if (okHigh)
+				{
+					for (int r = i + 1; r <= i + rightBars; r++)
+					{
+						if (bars[r].High >= ph - eps) { okHigh = false; break; }
+					}
+				}
+				if (okHigh && atr[i] > 0.0)
+				{
+					list.Add(new SignalRawPivot
+					{
+						IsHigh = true,
+						Price = ph,
+						Atr = atr[i],
+						PivotTime = bars[i].HighTime > DateTime.MinValue ? bars[i].HighTime : bars[i].Time,
+						ConfirmTime = bars[i + rightBars].Time
+					});
+				}
+
+				double pl = bars[i].Low;
+				bool okLow = true;
+				for (int l = i - leftBars; l < i; l++)
+				{
+					if (bars[l].Low < pl - eps) { okLow = false; break; }
+				}
+				if (okLow)
+				{
+					for (int r = i + 1; r <= i + rightBars; r++)
+					{
+						if (bars[r].Low <= pl + eps) { okLow = false; break; }
+					}
+				}
+				if (okLow && atr[i] > 0.0)
+				{
+					list.Add(new SignalRawPivot
+					{
+						IsHigh = false,
+						Price = pl,
+						Atr = atr[i],
+						PivotTime = bars[i].LowTime > DateTime.MinValue ? bars[i].LowTime : bars[i].Time,
+						ConfirmTime = bars[i + rightBars].Time
+					});
+				}
+			}
+			return list;
+		}
+
+		private void BuildClosedSignalLtfAndHtfBars(
+			Bars chartBars,
+			int lastClosedBarIdx,
+			List<MinuteSample> minuteCopy,
+			int htfMult,
+			out List<SignalOhlcBar> ltfBars,
+			out List<SignalOhlcBar> htfBars)
+		{
+			ltfBars = new List<SignalOhlcBar>();
+			htfBars = new List<SignalOhlcBar>();
+			if (chartBars == null || lastClosedBarIdx < 0)
+				return;
+
+			BarsPeriod bp = chartBars.BarsPeriod ?? BarsPeriod;
+			BarsPeriodType pType = bp != null ? bp.BarsPeriodType : BarsPeriodType.Minute;
+			int pVal = (bp != null && bp.Value > 0) ? bp.Value : 3;
+			if (pType == BarsPeriodType.HeikenAshi || pType == BarsPeriodType.Volumetric)
+			{
+				pType = bp.BaseBarsPeriodType;
+				pVal = Math.Max(1, bp.BaseBarsPeriodValue);
+			}
+
+			int mult = Math.Max(2, htfMult);
+			DateTime epoch = new DateTime(2020, 1, 1, 0, 0, 0);
+
+			if (pType == BarsPeriodType.Minute)
+			{
+				int ltfMin = Math.Max(1, pVal);
+				int htfMin = ltfMin * mult; // e.g., 3 min * 3 = 9 min Higher Timeframe
+				DateTime firstChartTime = chartBars.GetTime(0);
+				DateTime lastClosedChartTime = chartBars.GetTime(lastClosedBarIdx);
+
+				// 1. Prepend 1-minute backfill aggregated into closed LTF (e.g. 3m) buckets prior to firstChartTime
+				if (minuteCopy != null && minuteCopy.Count > 0 && minuteCopy[0].Time < firstChartTime.AddMinutes(-ltfMin))
+				{
+					long curBucket = long.MinValue;
+					SignalOhlcBar cur = default(SignalOhlcBar);
+					bool hasCur = false;
+
+					for (int i = 0; i < minuteCopy.Count; i++)
+					{
+						MinuteSample ms = minuteCopy[i];
+						if (ms.Time >= firstChartTime)
+							break;
+						long b = (long)Math.Floor((ms.Time.AddSeconds(-1) - epoch).TotalMinutes / ltfMin);
+						DateTime bucketClose = epoch.AddMinutes((b + 1) * ltfMin);
+						if (bucketClose >= firstChartTime)
+							break;
+
+						if (b != curBucket)
+						{
+							if (hasCur) ltfBars.Add(cur);
+							curBucket = b;
+							cur = new SignalOhlcBar
+							{
+								Time = bucketClose,
+								HighTime = ms.Time,
+								LowTime = ms.Time,
+								Open = ms.Open,
+								High = ms.High,
+								Low = ms.Low,
+								Close = ms.Close,
+								ChartBarIndex = -1
+							};
+							hasCur = true;
+						}
+						else
+						{
+							if (ms.High > cur.High) { cur.High = ms.High; cur.HighTime = ms.Time; }
+							if (ms.Low < cur.Low) { cur.Low = ms.Low; cur.LowTime = ms.Time; }
+							cur.Close = ms.Close;
+						}
+					}
+					if (hasCur) ltfBars.Add(cur);
+				}
+
+				// 2. Append strictly CLOSED chart bars (0 .. lastClosedBarIdx)
+				for (int i = 0; i <= lastClosedBarIdx; i++)
+				{
+					DateTime bt = chartBars.GetTime(i);
+					ltfBars.Add(new SignalOhlcBar
+					{
+						Time = bt,
+						HighTime = bt,
+						LowTime = bt,
+						Open = chartBars.GetOpen(i),
+						High = chartBars.GetHigh(i),
+						Low = chartBars.GetLow(i),
+						Close = chartBars.GetClose(i),
+						ChartBarIndex = i
+					});
+				}
+
+				// 3. Aggregate LTF closed bars into strictly CLOSED Higher-TF (e.g. 9m) buckets
+				long curHtfB = long.MinValue;
+				SignalOhlcBar curHtf = default(SignalOhlcBar);
+				bool hasHtf = false;
+
+				for (int i = 0; i < ltfBars.Count; i++)
+				{
+					SignalOhlcBar lb = ltfBars[i];
+					long hb = (long)Math.Floor((lb.Time.AddSeconds(-1) - epoch).TotalMinutes / htfMin);
+					DateTime htfCloseTime = epoch.AddMinutes((hb + 1) * htfMin);
+
+					if (hb != curHtfB)
+					{
+						if (hasHtf) htfBars.Add(curHtf);
+						curHtfB = hb;
+						curHtf = new SignalOhlcBar
+						{
+							Time = htfCloseTime,
+							HighTime = lb.HighTime,
+							LowTime = lb.LowTime,
+							Open = lb.Open,
+							High = lb.High,
+							Low = lb.Low,
+							Close = lb.Close,
+							ChartBarIndex = -1
+						};
+						hasHtf = true;
+					}
+					else
+					{
+						if (lb.High > curHtf.High) { curHtf.High = lb.High; curHtf.HighTime = lb.HighTime; }
+						if (lb.Low < curHtf.Low) { curHtf.Low = lb.Low; curHtf.LowTime = lb.LowTime; }
+						curHtf.Close = lb.Close;
+					}
+				}
+				// Only include the final 9m HTF candle if its full 9m interval has CLOSED (htfCloseTime <= lastClosedChartTime)!
+				if (hasHtf && curHtf.Time <= lastClosedChartTime)
+					htfBars.Add(curHtf);
+				return;
+			}
+
+			// Fallback for Second / Tick / Volume / Range / Day charts: group `mult` closed chart bars per HTF bar
+			for (int i = 0; i <= lastClosedBarIdx; i++)
+			{
+				DateTime bt = chartBars.GetTime(i);
+				ltfBars.Add(new SignalOhlcBar
+				{
+					Time = bt,
+					HighTime = bt,
+					LowTime = bt,
+					Open = chartBars.GetOpen(i),
+					High = chartBars.GetHigh(i),
+					Low = chartBars.GetLow(i),
+					Close = chartBars.GetClose(i),
+					ChartBarIndex = i
+				});
+			}
+
+			for (int i = 0; i + mult - 1 < ltfBars.Count; i += mult)
+			{
+				SignalOhlcBar agg = ltfBars[i];
+				for (int k = i + 1; k < i + mult; k++)
+				{
+					if (ltfBars[k].High > agg.High) { agg.High = ltfBars[k].High; agg.HighTime = ltfBars[k].HighTime; }
+					if (ltfBars[k].Low < agg.Low) { agg.Low = ltfBars[k].Low; agg.LowTime = ltfBars[k].LowTime; }
+					agg.Close = ltfBars[k].Close;
+					agg.Time = ltfBars[k].Time;
+				}
+				htfBars.Add(agg);
+			}
+		}
+
+		private ChartSignalMarker GetOrAddChartSignalMarker(Dictionary<int, ChartSignalMarker> map, int barIdx)
+		{
+			if (!map.TryGetValue(barIdx, out ChartSignalMarker m))
+			{
+				m = new ChartSignalMarker { BarIndex = barIdx };
+				map[barIdx] = m;
+			}
+			return m;
+		}
+
+		private SignalComputedSnapshot EnsureChartSignalsComputed(Bars chartBars)
+		{
+			if (chartBars == null || chartBars.Count < 4)
+				return null;
+
+			int lastClosedIdx = GetLastClosedChartBarIndex(chartBars);
+			if (lastClosedIdx < 2)
+				return null;
+
+			int chartCount = chartBars.Count;
+			long firstBarTicks = chartBars.GetTime(0).Ticks;
+			int minSampleCount;
+			bool backfillReady;
+			lock (profileLock)
+			{
+				minSampleCount = rawMinuteSamples.Count;
+				backfillReady = mp1MBackfillLoaded;
+			}
+
+			int dailyHistCount;
+			lock (srLock) { dailyHistCount = srDailyHistory.Count; }
+
+			int cfgHash =
+				(SignalShowSwingTriangles ? 1 : 0) |
+				(SignalShowZoneReversalEntries ? 2 : 0) |
+				(Math.Max(2, SignalHigherTfMultiplier) << 2) ^
+				(Math.Max(1, SignalSwingLeftBars) << 6) ^
+				(Math.Max(1, SignalSwingRightBars) << 11) ^
+				(Math.Max(2, SignalZonePivotBarsLtf) << 16) ^
+				(Math.Max(2, SignalZonePivotBarsHtf) << 21) ^
+				(Math.Max(1, SignalAtrLength) << 25) ^
+				((int)Math.Round(SignalZoneAtrMultiplier * 100.0) * 397) ^
+				((int)Math.Round(SignalDojiMaxBodyPct * 100.0) * 7919) ^
+				((int)Math.Round(SignalZoneBufferAtrRatio * 100.0) * 1543) ^
+				(Math.Max(2, SignalReactionsForStrong) * 31);
+
+			lock (signalLock)
+			{
+				if (sigCacheConfigHash != cfgHash ||
+					lockedSignalsFirstBarTicks != firstBarTicks ||
+					lastClosedIdx < lockedSignalsMaxClosedIdx)
+				{
+					lockedClosedBarSignals.Clear();
+					lockedSignalsMaxClosedIdx = -1;
+					lockedSignalsFirstBarTicks = firstBarTicks;
+				}
+
+				// Once 1M backfill is seeded, any closed bar is immutable — cache depends ONLY on lastClosedIdx & cfgHash!
+				if (cachedSignalSnapshot != null &&
+					sigCacheLastClosedIdx == lastClosedIdx &&
+					sigCacheConfigHash == cfgHash &&
+					(lockedSignalsMaxClosedIdx >= 0 || (sigCacheMinuteCount == minSampleCount && sigCacheDailyCount == dailyHistCount)))
+				{
+					return cachedSignalSnapshot;
+				}
+			}
+
+			List<MinuteSample> minuteCopy = null;
+			lock (profileLock)
+			{
+				if (rawMinuteSamples.Count > 0)
+					minuteCopy = new List<MinuteSample>(rawMinuteSamples);
+			}
+
+			// Build Previous Trading Day High/Low (PDH / PDL) lookup per trading date (strictly closed bars only)
+			SortedDictionary<DateTime, DailyHorizonSample> dailyByDate = new SortedDictionary<DateTime, DailyHorizonSample>();
+			lock (srLock)
+			{
+				foreach (var kv in srDailyHistory)
+				{
+					dailyByDate[kv.Key] = new DailyHorizonSample
+					{
+						Date = kv.Value.Date,
+						High = kv.Value.High,
+						Low = kv.Value.Low,
+						Close = kv.Value.Close
+					};
+				}
+			}
+			if (minuteCopy != null)
+			{
+				DateTime cutoffChartClose = chartBars.GetTime(lastClosedIdx);
+				for (int i = 0; i < minuteCopy.Count; i++)
+				{
+					MinuteSample ms = minuteCopy[i];
+					if (ms.Time > cutoffChartClose || ms.High <= 0 || ms.Low <= 0 || ms.High < ms.Low)
+						continue;
+					DateTime dDate = ResolveSrTradingDate(ms.Time);
+					if (!dailyByDate.TryGetValue(dDate, out DailyHorizonSample ds))
+					{
+						ds = new DailyHorizonSample { Date = dDate };
+						dailyByDate[dDate] = ds;
+					}
+					if (ms.High > ds.High) ds.High = ms.High;
+					if (ms.Low < ds.Low) ds.Low = ms.Low;
+					ds.Close = ms.Close;
+				}
+			}
+			for (int i = 0; i <= lastClosedIdx; i++)
+			{
+				DateTime bt = chartBars.GetTime(i);
+				double bh = chartBars.GetHigh(i);
+				double bl = chartBars.GetLow(i);
+				if (bh <= 0 || bl <= 0 || bh < bl) continue;
+				DateTime dDate = ResolveSrTradingDate(bt);
+				if (!dailyByDate.TryGetValue(dDate, out DailyHorizonSample ds))
+				{
+					ds = new DailyHorizonSample { Date = dDate };
+					dailyByDate[dDate] = ds;
+				}
+				if (bh > ds.High) ds.High = bh;
+				if (bl < ds.Low) ds.Low = bl;
+				ds.Close = chartBars.GetClose(i);
+			}
+
+			Dictionary<DateTime, KeyValuePair<double, double>> prevDayHiLoByDate = new Dictionary<DateTime, KeyValuePair<double, double>>();
+			DailyHorizonSample prevCompletedDay = null;
+			foreach (var kv in dailyByDate)
+			{
+				if (prevCompletedDay != null && prevCompletedDay.High > double.MinValue && prevCompletedDay.Low < double.MaxValue)
+					prevDayHiLoByDate[kv.Key] = new KeyValuePair<double, double>(prevCompletedDay.High, prevCompletedDay.Low);
+				prevCompletedDay = kv.Value;
+			}
+
+			double tick = TickSize > 0 ? TickSize : 0.05;
+			double eps = Math.Max(1e-9, tick * 0.05);
+
+			BuildClosedSignalLtfAndHtfBars(
+				chartBars,
+				lastClosedIdx,
+				minuteCopy,
+				Math.Max(2, SignalHigherTfMultiplier),
+				out List<SignalOhlcBar> ltfBars,
+				out List<SignalOhlcBar> htfBars);
+
+			SignalComputedSnapshot snap = new SignalComputedSnapshot { LastClosedBarIdx = lastClosedIdx };
+			if (ltfBars.Count < 3)
+				return snap;
+
+			double[] ltfAtr = ComputeWilderRmaAtr(ltfBars, Math.Max(1, SignalAtrLength));
+			double[] htfAtr = ComputeWilderRmaAtr(htfBars, Math.Max(1, SignalAtrLength));
+
+			// Strictly CAUSAL fast & structural pivots (confirmed in 2-3 closed bars — ZERO backfill, ZERO negative offset!)
+			int fastLeftLtf = Math.Max(3, Math.Min(7, SignalZonePivotBarsLtf / 3));
+			int majLeftLtf = Math.Max(8, SignalZonePivotBarsLtf);
+			int fastLeftHtf = Math.Max(3, Math.Min(6, SignalZonePivotBarsHtf / 4));
+			int majLeftHtf = Math.Max(7, SignalZonePivotBarsHtf / 2);
+
+			List<SignalRawPivot> ltfFastPivots = DetectClosedSignalPivots(ltfBars, ltfAtr, fastLeftLtf, 2, eps);
+			List<SignalRawPivot> ltfMajorPivots = DetectClosedSignalPivots(ltfBars, ltfAtr, majLeftLtf, 3, eps);
+			List<SignalRawPivot> htfFastPivots = DetectClosedSignalPivots(htfBars, htfAtr, fastLeftHtf, 2, eps);
+			List<SignalRawPivot> htfMajorPivots = DetectClosedSignalPivots(htfBars, htfAtr, majLeftHtf, 2, eps);
+
+			List<SignalRawPivot> allLtfPivots = new List<SignalRawPivot>(ltfFastPivots.Count + ltfMajorPivots.Count);
+			allLtfPivots.AddRange(ltfFastPivots);
+			allLtfPivots.AddRange(ltfMajorPivots);
+			allLtfPivots.Sort((a, b) => a.ConfirmTime.CompareTo(b.ConfirmTime));
+
+			List<SignalRawPivot> allHtfPivots = new List<SignalRawPivot>(htfFastPivots.Count + htfMajorPivots.Count);
+			allHtfPivots.AddRange(htfFastPivots);
+			allHtfPivots.AddRange(htfMajorPivots);
+			allHtfPivots.Sort((a, b) => a.ConfirmTime.CompareTo(b.ConfirmTime));
+
+			const int maxZonesPerSide = 12;
+			double zoneAtrMult = Math.Max(0.05, SignalZoneAtrMultiplier);
+			int reactionsReq = Math.Max(2, SignalReactionsForStrong);
+			double dojiMaxRatio = Math.Max(0.01, Math.Min(0.35, SignalDojiMaxBodyPct));
+			double bufAtrRatio = Math.Max(0.05, SignalZoneBufferAtrRatio);
+			int swLookback = Math.Max(6, SignalSwingLeftBars);
+			int swingCooldownBars = Math.Max(4, swLookback / 2);
+
+			List<SignalActiveZone> supplyZones = new List<SignalActiveZone>();
+			List<SignalActiveZone> demandZones = new List<SignalActiveZone>();
+
+			int nextLtfPiv = 0;
+			int nextHtfPiv = 0;
+			int htfCursor = -1;
+
+			bool demandPatternVisitActive = false;
+			bool demandEntryMarkedThisVisit = false;
+			bool supplyPatternVisitActive = false;
+			bool supplyEntryMarkedThisVisit = false;
+
+			bool prevIsDoji = false;
+			bool prevCandleInDemand = false;
+			int prevDemandStrength = 0;
+			bool prevCandleInSupply = false;
+			int prevSupplyStrength = 0;
+
+			int lastSwingHighLtfIdx = -9999;
+			double lastSwingHighPeak = double.MinValue;
+			int lastSwingLowLtfIdx = -9999;
+			double lastSwingLowTrough = double.MaxValue;
+			int lastBuyEntryLtfIdx = -9999;
+			double lastBuyEntryLow = double.MaxValue;
+			int lastSellEntryLtfIdx = -9999;
+			double lastSellEntryHigh = double.MinValue;
+
+			// Active setup direction & candle range guard so opposite signals NEVER fire inside an active BUY/SELL setup candle
+			int activeSetupDir = 0; // +1 = active BUY setup, -1 = active SELL setup
+			int activeSetupLtfIdx = -9999;
+			double activeSetupHigh = 0.0;
+			double activeSetupLow = 0.0;
+			double activeSetupClose = 0.0;
+
+			Dictionary<int, ChartSignalMarker> computedMap = new Dictionary<int, ChartSignalMarker>();
+
+			// Strictly forward-only causal loop: bar `i` ONLY sees data with timestamp <= `ltfBars[i].Time`
+			// and ONLY writes signals onto `ltfBars[i].ChartBarIndex` itself (ZERO past-bar modification!).
+			for (int i = 0; i < ltfBars.Count; i++)
+			{
+				SignalOhlcBar bar = ltfBars[i];
+				DateTime curTime = bar.Time;
+				DateTime oneYearCutoff = curTime.AddDays(-365);
+
+				// Advance closed 9m HTF bar pointer strictly up to curTime (never reading an unclosed 9m bar!)
+				while (htfCursor + 1 < htfBars.Count && htfBars[htfCursor + 1].Time <= curTime)
+					htfCursor++;
+
+				// Ingest Current-TF (3m) pivots whose confirmation bar has already closed at or before curTime
+				while (nextLtfPiv < allLtfPivots.Count && allLtfPivots[nextLtfPiv].ConfirmTime <= curTime)
+				{
+					SignalRawPivot piv = allLtfPivots[nextLtfPiv++];
+					if (piv.PivotTime >= oneYearCutoff)
+					{
+						if (piv.IsHigh && piv.Price >= bar.Close)
+						{
+							double zTop = piv.Price;
+							double zBot = piv.Price - piv.Atr * zoneAtrMult;
+							UpsertAndMergeSignalZone(supplyZones, zTop, zBot, piv.PivotTime, 1, maxZonesPerSide, reactionsReq, true);
+						}
+						else if (!piv.IsHigh && piv.Price <= bar.Close)
+						{
+							double zBot = piv.Price;
+							double zTop = piv.Price + piv.Atr * zoneAtrMult;
+							UpsertAndMergeSignalZone(demandZones, zTop, zBot, piv.PivotTime, 1, maxZonesPerSide, reactionsReq, false);
+						}
+					}
+				}
+
+				// Ingest Higher-TF (9m) pivots whose confirmation bar has already closed at or before curTime
+				while (nextHtfPiv < allHtfPivots.Count && allHtfPivots[nextHtfPiv].ConfirmTime <= curTime)
+				{
+					SignalRawPivot piv = allHtfPivots[nextHtfPiv++];
+					if (piv.PivotTime >= oneYearCutoff)
+					{
+						if (piv.IsHigh)
+						{
+							double zTop = piv.Price;
+							double zBot = piv.Price - piv.Atr * zoneAtrMult;
+							UpsertAndMergeSignalZone(supplyZones, zTop, zBot, piv.PivotTime, 2, maxZonesPerSide, reactionsReq, true);
+						}
+						else
+						{
+							double zBot = piv.Price;
+							double zTop = piv.Price + piv.Atr * zoneAtrMult;
+							UpsertAndMergeSignalZone(demandZones, zTop, zBot, piv.PivotTime, 2, maxZonesPerSide, reactionsReq, false);
+						}
+					}
+				}
+
+				supplyZones.RemoveAll(z => z.LeftTime < oneYearCutoff);
+				demandZones.RemoveAll(z => z.LeftTime < oneYearCutoff);
+
+				// Evaluate Supply Zone Flip -> Demand & rejection upgrades
+				for (int s = supplyZones.Count - 1; s >= 0; s--)
+				{
+					SignalActiveZone sz = supplyZones[s];
+					bool invalidated = bar.Close > sz.Top;
+					bool overlaps = bar.High >= sz.Bottom && bar.Low <= sz.Top;
+					bool rejection = overlaps && bar.Close < (sz.Top + sz.Bottom) * 0.5;
+
+					if (invalidated)
+					{
+						supplyZones.RemoveAt(s);
+						sz.Reactions = 0;
+						sz.WasInZone = overlaps;
+						sz.VeryStrong = false;
+						demandZones.Add(sz);
+						while (demandZones.Count > maxZonesPerSide)
+							demandZones.RemoveAt(PruneSignalZoneIndex(demandZones, reactionsReq, false));
+					}
+					else
+					{
+						if (rejection && !sz.WasInZone)
+							sz.Reactions++;
+						sz.WasInZone = overlaps;
+					}
+				}
+
+				// Evaluate Demand Zone Flip -> Supply & rejection upgrades
+				for (int d = demandZones.Count - 1; d >= 0; d--)
+				{
+					SignalActiveZone dz = demandZones[d];
+					bool invalidated = bar.Close < dz.Bottom;
+					bool overlaps = bar.High >= dz.Bottom && bar.Low <= dz.Top;
+					bool rejection = overlaps && bar.Close > (dz.Top + dz.Bottom) * 0.5;
+
+					if (invalidated)
+					{
+						demandZones.RemoveAt(d);
+						dz.Reactions = 0;
+						dz.WasInZone = overlaps;
+						dz.VeryStrong = false;
+						supplyZones.Add(dz);
+						while (supplyZones.Count > maxZonesPerSide)
+							supplyZones.RemoveAt(PruneSignalZoneIndex(supplyZones, reactionsReq, true));
+					}
+					else
+					{
+						if (rejection && !dz.WasInZone)
+							dz.Reactions++;
+						dz.WasInZone = overlaps;
+					}
+				}
+
+				double curAtr = ltfAtr[i] > 0 ? ltfAtr[i] : (tick * 10.0);
+				double patternZoneBuffer = curAtr * bufAtrRatio;
+
+				double candleRange = bar.High - bar.Low;
+				double candleBody = Math.Abs(bar.Close - bar.Open);
+				double lowerWick = Math.Min(bar.Open, bar.Close) - bar.Low;
+				double upperWick = bar.High - Math.Max(bar.Open, bar.Close);
+				bool isDoji = candleRange > 0.0 && candleBody <= candleRange * dojiMaxRatio;
+				bool meaningfulBar = candleRange >= curAtr * 0.25;
+
+				bool hasPrev = (i > 0);
+				SignalOhlcBar prevBar = hasPrev ? ltfBars[i - 1] : bar;
+
+				bool bullishEngulfing = hasPrev && meaningfulBar && bar.Close > bar.Open && prevBar.Close < prevBar.Open &&
+					(bar.Close >= prevBar.Open || bar.Close > prevBar.High) && candleBody >= candleRange * 0.38;
+				bool bullishHammer = meaningfulBar && bar.Close > bar.Open &&
+					lowerWick >= Math.Max(candleBody * 1.4, candleRange * 0.35) && bar.Close >= bar.Low + candleRange * 0.60;
+
+				bool bearishEngulfing = hasPrev && meaningfulBar && bar.Close < bar.Open && prevBar.Close > prevBar.Open &&
+					(bar.Close <= prevBar.Open || bar.Close < prevBar.Low) && candleBody >= candleRange * 0.38;
+				bool bearishRejection = meaningfulBar && bar.Close < bar.Open &&
+					upperWick >= Math.Max(candleBody * 1.4, candleRange * 0.35) && bar.Close <= bar.Low + candleRange * 0.40;
+
+				// Causal Rolling Swing High / Low Window (zero future bars!)
+				int winStart = Math.Max(0, i - swLookback);
+				double winHigh = bar.High;
+				double winLow = bar.Low;
+				for (int w = winStart; w < i; w++)
+				{
+					if (ltfBars[w].High > winHigh) winHigh = ltfBars[w].High;
+					if (ltfBars[w].Low < winLow) winLow = ltfBars[w].Low;
+				}
+				double winSpan = winHigh - winLow;
+				bool meaningfulSwing = winSpan >= curAtr * 1.15;
+				bool atRecentPeak = (bar.High >= winHigh - eps) ||
+					(i >= 1 && ltfBars[i - 1].High >= winHigh - eps) ||
+					(i >= 2 && ltfBars[i - 2].High >= winHigh - eps);
+				bool atRecentTrough = (bar.Low <= winLow + eps) ||
+					(i >= 1 && ltfBars[i - 1].Low <= winLow + eps) ||
+					(i >= 2 && ltfBars[i - 2].Low <= winLow + eps);
+
+				bool htfBullishCtx = true;
+				bool htfBearishCtx = true;
+				if (htfCursor >= 0)
+				{
+					SignalOhlcBar hb = htfBars[htfCursor];
+					double hRng = Math.Max(eps, hb.High - hb.Low);
+					double hLoWick = Math.Min(hb.Open, hb.Close) - hb.Low;
+					double hUpWick = hb.High - Math.Max(hb.Open, hb.Close);
+					htfBullishCtx = (hb.Close >= hb.Open) || (hLoWick >= hRng * 0.32) || (bar.Close > hb.Close);
+					htfBearishCtx = (hb.Close <= hb.Open) || (hUpWick >= hRng * 0.32) || (bar.Close < hb.Close);
+				}
+
+				DateTime trDate = ResolveSrTradingDate(curTime);
+				bool hasPd = prevDayHiLoByDate.TryGetValue(trDate, out KeyValuePair<double, double> pdHiLo);
+				double pdh = hasPd ? pdHiLo.Key : double.NaN;
+				double pdl = hasPd ? pdHiLo.Value : double.NaN;
+
+				bool nearPdh = !double.IsNaN(pdh) && (bar.High >= pdh - patternZoneBuffer && bar.Low <= pdh + patternZoneBuffer || (hasPrev && prevBar.High >= pdh - patternZoneBuffer && prevBar.Low <= pdh + patternZoneBuffer));
+				bool nearPdl = !double.IsNaN(pdl) && (bar.High >= pdl - patternZoneBuffer && bar.Low <= pdl + patternZoneBuffer || (hasPrev && prevBar.High >= pdl - patternZoneBuffer && prevBar.Low <= pdl + patternZoneBuffer));
+				bool priorDaySupport = (nearPdh && bar.Close >= pdh) || (nearPdl && bar.Close >= pdl);
+				bool priorDayResistance = (nearPdh && bar.Close < pdh) || (nearPdl && bar.Close < pdl);
+
+				bool candleInDemand = priorDaySupport;
+				int demandStrengthScore = priorDaySupport ? 2 : 0;
+				for (int d = 0; d < demandZones.Count; d++)
+				{
+					SignalActiveZone dz = demandZones[d];
+					bool curTouches = bar.High >= dz.Bottom - patternZoneBuffer && bar.Low <= dz.Top + patternZoneBuffer;
+					bool prevTouches = hasPrev && prevBar.High >= dz.Bottom - patternZoneBuffer && prevBar.Low <= dz.Top + patternZoneBuffer;
+					if (curTouches || prevTouches)
+					{
+						candleInDemand = true;
+						int zs = (dz.VeryStrong || dz.SourceMask == 3) ? 3 : (dz.Reactions >= reactionsReq || (dz.SourceMask & 2) != 0 ? 2 : 1);
+						if (zs > demandStrengthScore) demandStrengthScore = zs;
+					}
+				}
+
+				bool candleInSupply = priorDayResistance;
+				int supplyStrengthScore = priorDayResistance ? 2 : 0;
+				for (int s = 0; s < supplyZones.Count; s++)
+				{
+					SignalActiveZone sz = supplyZones[s];
+					bool curTouches = bar.High >= sz.Bottom - patternZoneBuffer && bar.Low <= sz.Top + patternZoneBuffer;
+					bool prevTouches = hasPrev && prevBar.High >= sz.Bottom - patternZoneBuffer && prevBar.Low <= sz.Top + patternZoneBuffer;
+					if (curTouches || prevTouches)
+					{
+						candleInSupply = true;
+						int zs = (sz.VeryStrong || sz.SourceMask == 3) ? 3 : (sz.Reactions >= reactionsReq || (sz.SourceMask & 2) != 0 ? 2 : 1);
+						if (zs > supplyStrengthScore) supplyStrengthScore = zs;
+					}
+				}
+
+				// Swing-half location & active-setup candle conflict guard:
+				// - Never allow a SELL / ▼ signal inside or overlapping an active BUY signal candle's range, or at a swing trough before price extends.
+				// - Never allow a BUY / ▲ signal inside or overlapping an active SELL signal candle's range, or at a swing peak before price extends.
+				bool inUpperSwingHalf = (winSpan < curAtr * 0.75) || (!atRecentTrough && bar.High >= winLow + winSpan * 0.48);
+				bool inLowerSwingHalf = (winSpan < curAtr * 0.75) || (!atRecentPeak && bar.Low <= winHigh - winSpan * 0.48);
+
+				bool insideActiveBuyCandle = (activeSetupDir == 1) &&
+					(bar.High <= activeSetupHigh + curAtr * 0.50 && bar.Low >= activeSetupLow - curAtr * 0.35);
+				bool buySetupResolvedForSell = (activeSetupDir != 1) ||
+					(!insideActiveBuyCandle && (
+						(bar.High >= activeSetupClose + curAtr * 1.50 && bar.High > activeSetupHigh + curAtr * 0.50) ||
+						(i - activeSetupLtfIdx >= 4 && bar.Close < activeSetupLow - curAtr * 0.35)));
+
+				bool insideActiveSellCandle = (activeSetupDir == -1) &&
+					(bar.Low >= activeSetupLow - curAtr * 0.50 && bar.High <= activeSetupHigh + curAtr * 0.35);
+				bool sellSetupResolvedForBuy = (activeSetupDir != -1) ||
+					(!insideActiveSellCandle && (
+						(bar.Low <= activeSetupClose - curAtr * 1.50 && bar.Low < activeSetupLow - curAtr * 0.50) ||
+						(i - activeSetupLtfIdx >= 4 && bar.Close > activeSetupHigh + curAtr * 0.35)));
+
+				bool allowBullOnBar = inLowerSwingHalf && sellSetupResolvedForBuy;
+				bool allowBearOnBar = inUpperSwingHalf && buySetupResolvedForSell;
+				bool firedBullOnBar = false;
+				bool firedBearOnBar = false;
+
+				// 1. Causal 3m + 9m Zone / Exhaustion Reversal BUY & SELL Signals (fires IMMEDIATELY on bar `i` close!)
+				if (SignalShowZoneReversalEntries)
+				{
+					bool freshLowExhaustion = meaningfulSwing && atRecentTrough && winSpan >= curAtr * 1.65 && htfBullishCtx;
+					bool demandContext = candleInDemand || freshLowExhaustion;
+					bool dojiBreakout = hasPrev && prevIsDoji && (candleInDemand || prevCandleInDemand) && bar.Close > prevBar.High && bar.Close > bar.Open;
+					bool bullishEntryCandle = (demandContext && (bullishEngulfing || bullishHammer)) || dojiBreakout;
+
+					if (!demandContext)
+					{
+						demandPatternVisitActive = false;
+						demandEntryMarkedThisVisit = false;
+					}
+					else if (!demandPatternVisitActive)
+					{
+						demandPatternVisitActive = true;
+						demandEntryMarkedThisVisit = false;
+					}
+
+					if (allowBullOnBar && bullishEntryCandle &&
+						(!demandEntryMarkedThisVisit || bar.Low < lastBuyEntryLow - curAtr * 0.30) &&
+						(i - lastBuyEntryLtfIdx >= 4 || bar.Low < lastBuyEntryLow - curAtr * 0.30))
+					{
+						demandEntryMarkedThisVisit = true;
+						lastBuyEntryLtfIdx = i;
+						lastBuyEntryLow = Math.Min(bar.Low, prevBar.Low);
+						activeSetupDir = 1;
+						activeSetupLtfIdx = i;
+						activeSetupLow = Math.Min(bar.Low, prevBar.Low);
+						activeSetupHigh = Math.Max(bar.High, prevBar.High);
+						activeSetupClose = bar.Close;
+						firedBullOnBar = true;
+						if (bar.ChartBarIndex >= 0)
+						{
+							int effStr = demandStrengthScore > 0 ? demandStrengthScore : (dojiBreakout ? Math.Max(1, prevDemandStrength) : 2);
+							ChartSignalMarker m = GetOrAddChartSignalMarker(computedMap, bar.ChartBarIndex);
+							m.HasBullishEntry = true;
+							m.BullishStrength = effStr;
+							m.BullishPatternShort = bullishEngulfing ? "ENGULF" : (bullishHammer ? "HAMMER" : "DOJI");
+							m.BullishPatternFull = bullishEngulfing ? "BUY · ENGULF" : (bullishHammer ? "BUY · HAMMER" : "BUY · DOJI");
+						}
+					}
+
+					bool freshHighExhaustion = meaningfulSwing && atRecentPeak && winSpan >= curAtr * 1.65 && htfBearishCtx;
+					bool supplyContext = candleInSupply || freshHighExhaustion;
+					bool dojiBreakdown = hasPrev && prevIsDoji && (candleInSupply || prevCandleInSupply) && bar.Close < prevBar.Low && bar.Close < bar.Open;
+					bool bearishEntryCandle = (supplyContext && (bearishEngulfing || bearishRejection)) || dojiBreakdown;
+
+					if (!supplyContext)
+					{
+						supplyPatternVisitActive = false;
+						supplyEntryMarkedThisVisit = false;
+					}
+					else if (!supplyPatternVisitActive)
+					{
+						supplyPatternVisitActive = true;
+						supplyEntryMarkedThisVisit = false;
+					}
+
+					if (!firedBullOnBar && allowBearOnBar && bearishEntryCandle &&
+						(!supplyEntryMarkedThisVisit || bar.High > lastSellEntryHigh + curAtr * 0.30) &&
+						(i - lastSellEntryLtfIdx >= 4 || bar.High > lastSellEntryHigh + curAtr * 0.30))
+					{
+						supplyEntryMarkedThisVisit = true;
+						lastSellEntryLtfIdx = i;
+						lastSellEntryHigh = Math.Max(bar.High, prevBar.High);
+						activeSetupDir = -1;
+						activeSetupLtfIdx = i;
+						activeSetupLow = Math.Min(bar.Low, prevBar.Low);
+						activeSetupHigh = Math.Max(bar.High, prevBar.High);
+						activeSetupClose = bar.Close;
+						firedBearOnBar = true;
+						if (bar.ChartBarIndex >= 0)
+						{
+							int effStr = supplyStrengthScore > 0 ? supplyStrengthScore : (dojiBreakdown ? Math.Max(1, prevSupplyStrength) : 2);
+							ChartSignalMarker m = GetOrAddChartSignalMarker(computedMap, bar.ChartBarIndex);
+							m.HasBearishEntry = true;
+							m.BearishStrength = effStr;
+							m.BearishPatternShort = bearishEngulfing ? "ENGULF" : (bearishRejection ? "STAR" : "DOJI");
+							m.BearishPatternFull = bearishEngulfing ? "SELL · ENGULF" : (bearishRejection ? "SELL · STAR" : "SELL · DOJI");
+						}
+					}
+				}
+
+				// 2. Causal Swing Turn ▼ / ▲ Triangles (fires IMMEDIATELY on bar `i` close — ZERO back-plotting, never conflicting with active opposite setup!)
+				if (SignalShowSwingTriangles)
+				{
+					bool bearTurnConfirm = bar.Close < bar.Open && meaningfulBar &&
+						(bearishEngulfing || bearishRejection || (hasPrev && bar.Close < prevBar.Low && candleBody >= candleRange * 0.45));
+					if (!firedBullOnBar && allowBearOnBar && meaningfulSwing && atRecentPeak && bearTurnConfirm &&
+						(i - lastSwingHighLtfIdx >= swingCooldownBars || winHigh > lastSwingHighPeak + curAtr * 0.35))
+					{
+						lastSwingHighLtfIdx = i;
+						lastSwingHighPeak = winHigh;
+						firedBearOnBar = true;
+						if (bar.ChartBarIndex >= 0)
+						{
+							ChartSignalMarker m = GetOrAddChartSignalMarker(computedMap, bar.ChartBarIndex);
+							m.HasSwingHigh = true;
+							m.SwingHighHtfConfluence = htfBearishCtx && candleInSupply;
+						}
+					}
+
+					bool bullTurnConfirm = bar.Close > bar.Open && meaningfulBar &&
+						(bullishEngulfing || bullishHammer || (hasPrev && bar.Close > prevBar.High && candleBody >= candleRange * 0.45));
+					if (!firedBearOnBar && allowBullOnBar && meaningfulSwing && atRecentTrough && bullTurnConfirm &&
+						(i - lastSwingLowLtfIdx >= swingCooldownBars || winLow < lastSwingLowTrough - curAtr * 0.35))
+					{
+						lastSwingLowLtfIdx = i;
+						lastSwingLowTrough = winLow;
+						if (bar.ChartBarIndex >= 0)
+						{
+							ChartSignalMarker m = GetOrAddChartSignalMarker(computedMap, bar.ChartBarIndex);
+							m.HasSwingLow = true;
+							m.SwingLowHtfConfluence = htfBullishCtx && candleInDemand;
+						}
+					}
+				}
+
+				prevIsDoji = isDoji;
+				prevCandleInDemand = candleInDemand;
+				prevDemandStrength = demandStrengthScore;
+				prevCandleInSupply = candleInSupply;
+				prevSupplyStrength = supplyStrengthScore;
+			}
+
+			// Permanently lock every closed chart bar's signal decision once backfill is ready so NO closed bar can ever repaint!
+			lock (signalLock)
+			{
+				if (lockedSignalsMaxClosedIdx >= 0)
+				{
+					// Preserve 100% of previously closed bars untouched; only append newly closed bars (lockedSignalsMaxClosedIdx + 1 .. lastClosedIdx)!
+					foreach (var kv in lockedClosedBarSignals)
+						snap.ByBar[kv.Key] = kv.Value;
+
+					for (int bIdx = lockedSignalsMaxClosedIdx + 1; bIdx <= lastClosedIdx; bIdx++)
+					{
+						if (computedMap.TryGetValue(bIdx, out ChartSignalMarker newSig))
+						{
+							lockedClosedBarSignals[bIdx] = newSig;
+							snap.ByBar[bIdx] = newSig;
+						}
+					}
+					lockedSignalsMaxClosedIdx = lastClosedIdx;
+				}
+				else
+				{
+					foreach (var kv in computedMap)
+						snap.ByBar[kv.Key] = kv.Value;
+
+					if (backfillReady || State == State.Realtime)
+					{
+						lockedClosedBarSignals.Clear();
+						foreach (var kv in computedMap)
+							lockedClosedBarSignals[kv.Key] = kv.Value;
+						lockedSignalsMaxClosedIdx = lastClosedIdx;
+					}
+				}
+
+				cachedSignalSnapshot = snap;
+				sigCacheChartBarCount = chartCount;
+				sigCacheLastClosedIdx = lastClosedIdx;
+				sigCacheMinuteCount = minSampleCount;
+				sigCacheDailyCount = dailyHistCount;
+				sigCacheConfigHash = cfgHash;
+			}
+			return snap;
+		}
+
+		private void DrawFilledSignalTriangle(float tipX, float tipY, float halfBaseW, float triH, bool pointDown, DxBrush fillBrush, DxBrush outlineBrush, float outlineWidth = 1.05f)
+		{
+			if (RenderTarget == null || fillBrush == null)
+				return;
+
+			float baseY = pointDown ? (tipY - triH) : (tipY + triH);
+			using (var geo = new PathGeometry(Globals.D2DFactory))
+			{
+				using (GeometrySink sink = geo.Open())
+				{
+					sink.BeginFigure(new Vector2(tipX, tipY), FigureBegin.Filled);
+					sink.AddLine(new Vector2(tipX - halfBaseW, baseY));
+					sink.AddLine(new Vector2(tipX + halfBaseW, baseY));
+					sink.EndFigure(FigureEnd.Closed);
+					sink.Close();
+				}
+				RenderTarget.FillGeometry(geo, fillBrush);
+				if (outlineBrush != null && outlineWidth > 0f)
+					RenderTarget.DrawGeometry(geo, outlineBrush, outlineWidth);
+			}
+		}
+
+		private void RenderChartSignalsOnCanvas(
+			ChartControl chartControl,
+			Func<double, float> priceToY,
+			List<FootprintBarData> visibleBars,
+			float barSpacing,
+			bool isCandlestickZoom,
+			float panelX,
+			float canvasTopY,
+			float candleClipW,
+			float chartBottomY,
+			bool light)
+		{
+			if (chartControl == null || ChartBars == null || ChartBars.Bars == null || visibleBars == null || visibleBars.Count == 0)
+				return;
+
+			SignalComputedSnapshot snap = EnsureChartSignalsComputed(ChartBars.Bars);
+			if (snap == null || snap.ByBar.Count == 0)
+				return;
+
+			float clipRight = panelX + candleClipW;
+			float triHalfW = isCandlestickZoom ? Math.Max(4.2f, Math.Min(5.8f, barSpacing * 0.36f)) : 6.4f;
+			float triH = isCandlestickZoom ? Math.Max(6.0f, Math.Min(8.0f, triHalfW * 1.38f)) : 8.6f;
+
+			var dw = Globals.DirectWriteFactory;
+			using (var swingHighFill = new DxBrush(RenderTarget, new SharpDX.Color(230, 35, 140, 255))) // Exact PineScript color.rgb(230, 35, 140)
+			using (var swingLowFill = new DxBrush(RenderTarget, light ? new SharpDX.Color(12, 152, 74, 255) : new SharpDX.Color(16, 204, 112, 255)))
+			using (var triOutline = new DxBrush(RenderTarget, light ? new SharpDX.Color(255, 255, 255, 235) : new SharpDX.Color(10, 15, 24, 235)))
+			using (var htfHaloHigh = new DxBrush(RenderTarget, new SharpDX.Color(244, 114, 182, 220)))
+			using (var htfHaloLow = new DxBrush(RenderTarget, new SharpDX.Color(52, 211, 153, 220)))
+			using (var bullStrongFill = new DxBrush(RenderTarget, new SharpDX.Color(6, 95, 70, 246)))
+			using (var bullNormFill = new DxBrush(RenderTarget, new SharpDX.Color(5, 150, 105, 242)))
+			using (var bullBorder = new DxBrush(RenderTarget, new SharpDX.Color(52, 211, 153, 245)))
+			using (var bearStrongFill = new DxBrush(RenderTarget, new SharpDX.Color(127, 29, 29, 246)))
+			using (var bearNormFill = new DxBrush(RenderTarget, new SharpDX.Color(220, 38, 38, 242)))
+			using (var bearBorder = new DxBrush(RenderTarget, new SharpDX.Color(251, 113, 133, 245)))
+			using (var pillTxtWhite = new DxBrush(RenderTarget, new SharpDX.Color(255, 255, 255, 255)))
+			using (var tfSig = new DxTextFormat(dw, "Segoe UI", SharpDX.DirectWrite.FontWeight.ExtraBold, SharpDX.DirectWrite.FontStyle.Normal, isCandlestickZoom ? 9.2f : 9.8f))
+			{
+				tfSig.TextAlignment = SharpDX.DirectWrite.TextAlignment.Center;
+				tfSig.ParagraphAlignment = ParagraphAlignment.Center;
+				tfSig.WordWrapping = WordWrapping.NoWrap;
+
+				float lastTopPillRightX = -9999f;
+				float lastBotPillRightX = -9999f;
+
+				for (int i = 0; i < visibleBars.Count; i++)
+				{
+					FootprintBarData fp = visibleBars[i];
+					// Strictly enforce: NEVER draw any signal on a running (unclosed) candle!
+					if (fp.BarIndex > snap.LastClosedBarIdx)
+						continue;
+
+					if (!snap.ByBar.TryGetValue(fp.BarIndex, out ChartSignalMarker sig))
+						continue;
+
+					float cx = (float)chartControl.GetXByBarIndex(ChartBars, fp.BarIndex);
+					if (cx < panelX - 20f || cx > clipRight + 20f)
+						continue;
+
+					double highEdge = fp.High;
+					double lowEdge = fp.Low;
+					if (!isCandlestickZoom && fp.Levels != null && fp.Levels.Count > 0)
+					{
+						double hs = fp.EffectivePriceStep * 0.5;
+						lowEdge = Math.Min(lowEdge, fp.Levels[0].Price - hs);
+						highEdge = Math.Max(highEdge, fp.Levels[fp.Levels.Count - 1].Price + hs);
+					}
+
+					float yHigh = priceToY(highEdge);
+					float yLow = priceToY(lowEdge);
+					float topClearance = (!isCandlestickZoom && ShowBarDelta && barSpacing >= 46f) ? 21.5f : 5.0f;
+					float botClearance = (!isCandlestickZoom && ShowBarDelta && barSpacing >= 46f) ? 21.5f : 5.0f;
+
+					float curTopTipY = yHigh - topClearance;
+					float curBotTipY = yLow + botClearance;
+
+					// 1A. Confirmed Swing High ▼ (Magenta-Pink — skipped if this bar already renders a SELL Entry arrow+pill)
+					if (sig.HasSwingHigh && !sig.HasBearishEntry)
+					{
+						float clampedTipY = Math.Max(canvasTopY + triH + 2f, Math.Min(chartBottomY - 4f, curTopTipY));
+						DrawFilledSignalTriangle(cx, clampedTipY, triHalfW, triH, true, swingHighFill, sig.SwingHighHtfConfluence ? htfHaloHigh : triOutline, sig.SwingHighHtfConfluence ? 1.45f : 1.0f);
+						curTopTipY = clampedTipY - triH - 4f;
+					}
+
+					// 1B. Confirmed Swing Low ▲ (Signal Green — skipped if this bar already renders a BUY Entry arrow+pill)
+					if (sig.HasSwingLow && !sig.HasBullishEntry)
+					{
+						float clampedTipY = Math.Min(chartBottomY - triH - 2f, Math.Max(canvasTopY + 4f, curBotTipY));
+						DrawFilledSignalTriangle(cx, clampedTipY, triHalfW, triH, false, swingLowFill, sig.SwingLowHtfConfluence ? htfHaloLow : triOutline, sig.SwingLowHtfConfluence ? 1.45f : 1.0f);
+						curBotTipY = clampedTipY + triH + 4f;
+					}
+
+					// 2A. Bearish 3m/9m Supply Zone Reversal Entry Signal (Immediate on Closed Candle!)
+					if (sig.HasBearishEntry)
+					{
+						float arrowTipY = Math.Max(canvasTopY + 22f, Math.Min(chartBottomY - 6f, curTopTipY));
+						DxBrush fillBr = sig.BearishStrength >= 2 ? bearStrongFill : bearNormFill;
+						DrawFilledSignalTriangle(cx, arrowTipY, 4.6f, 5.8f, true, bearBorder, triOutline, 0.9f);
+
+						string lbl = barSpacing >= 54f
+							? (sig.BearishStrength >= 3 ? ("★ " + sig.BearishPatternFull) : sig.BearishPatternFull)
+							: (barSpacing >= 24f ? ("▼ " + sig.BearishPatternShort) : "SELL");
+						float pw = Math.Max(34f, lbl.Length * 5.8f + 12f);
+						float ph = 15.5f;
+						float px = Math.Max(panelX + 3f, Math.Min(clipRight - pw - 3f, cx - pw * 0.5f));
+						float py = Math.Max(canvasTopY + 2f, arrowTipY - 6.8f - ph);
+
+						if (px > lastTopPillRightX + 3f)
+						{
+							var pillRect = new RectangleF(px, py, pw, ph);
+							var pillRr = new RoundedRectangle { Rect = pillRect, RadiusX = 3.2f, RadiusY = 3.2f };
+							RenderTarget.FillRoundedRectangle(pillRr, fillBr);
+							RenderTarget.DrawRoundedRectangle(pillRr, bearBorder, 1.05f);
+							RenderTarget.DrawText(lbl, tfSig, pillRect, pillTxtWhite);
+							lastTopPillRightX = px + pw;
+						}
+					}
+
+					// 2B. Bullish 3m/9m Demand Zone Reversal Entry Signal (Immediate on Closed Candle!)
+					if (sig.HasBullishEntry)
+					{
+						float arrowTipY = Math.Min(chartBottomY - 22f, Math.Max(canvasTopY + 6f, curBotTipY));
+						DxBrush fillBr = sig.BullishStrength >= 2 ? bullStrongFill : bullNormFill;
+						DrawFilledSignalTriangle(cx, arrowTipY, 4.6f, 5.8f, false, bullBorder, triOutline, 0.9f);
+
+						string lbl = barSpacing >= 54f
+							? (sig.BullishStrength >= 3 ? ("★ " + sig.BullishPatternFull) : sig.BullishPatternFull)
+							: (barSpacing >= 24f ? ("▲ " + sig.BullishPatternShort) : "BUY");
+						float pw = Math.Max(32f, lbl.Length * 5.8f + 12f);
+						float ph = 15.5f;
+						float px = Math.Max(panelX + 3f, Math.Min(clipRight - pw - 3f, cx - pw * 0.5f));
+						float py = Math.Min(chartBottomY - ph - 2f, arrowTipY + 6.8f);
+
+						if (px > lastBotPillRightX + 3f)
+						{
+							var pillRect = new RectangleF(px, py, pw, ph);
+							var pillRr = new RoundedRectangle { Rect = pillRect, RadiusX = 3.2f, RadiusY = 3.2f };
+							RenderTarget.FillRoundedRectangle(pillRr, fillBr);
+							RenderTarget.DrawRoundedRectangle(pillRr, bullBorder, 1.05f);
+							RenderTarget.DrawText(lbl, tfSig, pillRect, pillTxtWhite);
+							lastBotPillRightX = px + pw;
+						}
+					}
+				}
+			}
+		}
+		#endregion
 
 		private void RenderCleanCandlesticks(
 			ChartControl chartControl,
@@ -9691,15 +11998,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 			var dw = Globals.DirectWriteFactory;
 			float fontSz = Math.Max(8.4f, Math.Min(10.2f, Math.Min(rowH * 0.56f, barSpacing * 0.13f)));
 			using (var tfCell = new DxTextFormat(dw, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, fontSz))
-			using (var tfTitle = new DxTextFormat(dw, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 9.6f))
-			using (var stripBg = new DxBrush(RenderTarget, light ? new Color4(0.95f, 0.965f, 0.98f, 0.98f) : new Color4(0.055f, 0.075f, 0.108f, 0.97f)))
-			using (var gridLineBrush = new DxBrush(RenderTarget, light ? new Color4(0.75f, 0.80f, 0.86f, 0.95f) : new Color4(0.20f, 0.27f, 0.38f, 0.88f)))
-			using (var sepBrush = new DxBrush(RenderTarget, light ? new Color4(0.84f, 0.88f, 0.92f, 0.90f) : new Color4(0.11f, 0.15f, 0.22f, 0.90f)))
-			using (var titleBgBrush = new DxBrush(RenderTarget, light ? new Color4(0.88f, 0.92f, 0.96f, 0.99f) : new Color4(0.075f, 0.105f, 0.155f, 0.99f)))
-			using (var titleBorderBrush = new DxBrush(RenderTarget, light ? new Color4(0.45f, 0.54f, 0.66f, 0.95f) : new Color4(0.55f, 0.65f, 0.78f, 0.90f)))
-			using (var titleTextBrush = new DxBrush(RenderTarget, light ? new Color4(0.08f, 0.13f, 0.20f, 1.0f) : new Color4(0.96f, 0.98f, 1.0f, 1.0f)))
-			using (var greenSignalBg = new DxBrush(RenderTarget, new Color4(0.055f, 0.600f, 0.395f, 0.96f)))
-			using (var redSignalBg = new DxBrush(RenderTarget, new Color4(0.835f, 0.200f, 0.220f, 0.96f)))
+			using (var tfTitle = new DxTextFormat(dw, "Segoe UI", SharpDX.DirectWrite.FontWeight.ExtraBold, SharpDX.DirectWrite.FontStyle.Normal, 9.8f))
+			using (var stripBg = new DxBrush(RenderTarget, light ? new Color4(0.95f, 0.965f, 0.98f, 0.98f) : new Color4(0.031f, 0.055f, 0.098f, 0.98f)))
+			using (var gridLineBrush = new DxBrush(RenderTarget, light ? new Color4(0.75f, 0.80f, 0.86f, 0.95f) : new Color4(0.220f, 0.741f, 0.973f, 0.30f)))
+			using (var sepBrush = new DxBrush(RenderTarget, light ? new Color4(0.84f, 0.88f, 0.92f, 0.90f) : new Color4(0.085f, 0.135f, 0.220f, 0.90f)))
+			using (var titleBgBrush = new DxBrush(RenderTarget, light ? new Color4(0.88f, 0.92f, 0.96f, 0.99f) : new Color4(0.047f, 0.094f, 0.173f, 0.99f)))
+			using (var titleBorderBrush = new DxBrush(RenderTarget, light ? new Color4(0.45f, 0.54f, 0.66f, 0.95f) : new Color4(0.220f, 0.741f, 0.973f, 0.55f)))
+			using (var titleAccentBrush = new DxBrush(RenderTarget, light ? new Color4(0.05f, 0.48f, 0.66f, 1.0f) : new Color4(0.220f, 0.741f, 0.973f, 0.92f)))
+			using (var titleTextBrush = new DxBrush(RenderTarget, light ? new Color4(0.08f, 0.13f, 0.20f, 1.0f) : new Color4(0.90f, 0.96f, 1.0f, 1.0f)))
+			using (var greenSignalBg = new DxBrush(RenderTarget, new Color4(0.063f, 0.660f, 0.455f, 0.96f)))
+			using (var redSignalBg = new DxBrush(RenderTarget, new Color4(0.885f, 0.210f, 0.295f, 0.96f)))
 			using (var txtWhite = new DxBrush(RenderTarget, new Color4(1.0f, 1.0f, 1.0f, 1.0f)))
 			using (var txtDark = new DxBrush(RenderTarget, new Color4(0.08f, 0.12f, 0.16f, 1.0f)))
 			using (var cellBrush = new DxBrush(RenderTarget, new Color4(0.1f, 0.6f, 0.3f, 1.0f)))
@@ -9796,11 +12104,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 				RenderTarget.DrawLine(new Vector2(panelX, yDel), new Vector2(panelX + panelW, yDel), gridLineBrush, 1.0f);
 				RenderTarget.DrawLine(new Vector2(panelX, stripTopY + stripH), new Vector2(panelX + panelW, stripTopY + stripH), gridLineBrush, 1.0f);
 
-				var titleBlockRect = new RectangleF(titleColLeft, stripTopY, titleColW, stripH);
-				RenderTarget.FillRectangle(titleBlockRect, titleBgBrush);
-				RenderTarget.DrawRectangle(titleBlockRect, titleBorderBrush, 1.1f);
-				RenderTarget.DrawLine(new Vector2(titleColLeft, yStr), new Vector2(titleColLeft + titleColW, yStr), titleBorderBrush, 1.0f);
-				RenderTarget.DrawLine(new Vector2(titleColLeft, yDel), new Vector2(titleColLeft + titleColW, yDel), titleBorderBrush, 1.0f);
+				var titleBlockRect = new RectangleF(titleColLeft + 1f, stripTopY, Math.Max(20f, titleColW - 2f), stripH);
+				var titleBlockRr = new RoundedRectangle { Rect = titleBlockRect, RadiusX = 4.5f, RadiusY = 4.5f };
+				RenderTarget.FillRoundedRectangle(titleBlockRr, titleBgBrush);
+				RenderTarget.DrawRoundedRectangle(titleBlockRr, titleBorderBrush, 1.15f);
+				RenderTarget.FillRectangle(new RectangleF(titleBlockRect.X + 1.5f, yMom + 3f, 2.5f, Math.Max(4f, rowH - 6f)), titleAccentBrush);
+				RenderTarget.FillRectangle(new RectangleF(titleBlockRect.X + 1.5f, yStr + 3f, 2.5f, Math.Max(4f, rowH - 6f)), titleAccentBrush);
+				RenderTarget.FillRectangle(new RectangleF(titleBlockRect.X + 1.5f, yDel + 3f, 2.5f, Math.Max(4f, lastRowH - 6f)), titleAccentBrush);
+				RenderTarget.DrawLine(new Vector2(titleBlockRect.X + 4f, yStr), new Vector2(titleBlockRect.Right - 4f, yStr), titleBorderBrush, 0.9f);
+				RenderTarget.DrawLine(new Vector2(titleBlockRect.X + 4f, yDel), new Vector2(titleBlockRect.Right - 4f, yDel), titleBorderBrush, 0.9f);
 
 				RenderTarget.DrawText("Momentum", tfTitle, new RectangleF(titleColLeft, yMom, titleColW, rowH), titleTextBrush);
 				RenderTarget.DrawText("Strength", tfTitle, new RectangleF(titleColLeft, yStr, titleColW, rowH), titleTextBrush);
@@ -10007,17 +12319,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 			var hdrDw = Globals.DirectWriteFactory;
 			using (var tfStep = new DxTextFormat(hdrDw, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 9.6f))
 			using (var tfTip = new DxTextFormat(hdrDw, "Segoe UI", SharpDX.DirectWrite.FontWeight.SemiBold, SharpDX.DirectWrite.FontStyle.Normal, 9.4f))
-			using (var barBg = new DxBrush(RenderTarget, runtimeLightTheme ? new Color4(0.95f, 0.96f, 0.98f, 0.97f) : new Color4(0.06f, 0.085f, 0.13f, 0.97f)))
-			using (var barBorder = new DxBrush(RenderTarget, runtimeLightTheme ? new Color4(0.75f, 0.80f, 0.86f, 0.95f) : new Color4(0.26f, 0.35f, 0.48f, 0.92f)))
-			using (var sepLineBrush = new DxBrush(RenderTarget, runtimeLightTheme ? new Color4(0.78f, 0.83f, 0.89f, 0.90f) : new Color4(0.22f, 0.30f, 0.42f, 0.85f)))
-			using (var brandBrush = new DxBrush(RenderTarget, new Color4(0.031f, 0.680f, 0.576f, 1.0f)))
-			using (var btnBg = new DxBrush(RenderTarget, runtimeLightTheme ? new Color4(1.0f, 1.0f, 1.0f, 0.98f) : new Color4(0.12f, 0.17f, 0.25f, 0.98f)))
-			using (var btnHoverBg = new DxBrush(RenderTarget, runtimeLightTheme ? new Color4(0.88f, 0.93f, 0.98f, 1.0f) : new Color4(0.20f, 0.30f, 0.45f, 1.0f)))
-			using (var btnActiveBg = new DxBrush(RenderTarget, new Color4(0.031f, 0.600f, 0.506f, 1.0f)))
-			using (var btnBorder = new DxBrush(RenderTarget, runtimeLightTheme ? new Color4(0.75f, 0.80f, 0.86f, 0.95f) : new Color4(0.28f, 0.38f, 0.52f, 0.85f)))
-			using (var btnHoverBorder = new DxBrush(RenderTarget, new Color4(0.031f, 0.600f, 0.506f, 1.0f)))
-			using (var fgActive = new DxBrush(RenderTarget, new Color4(1.0f, 1.0f, 1.0f, 1.0f)))
-			using (var fgInactive = new DxBrush(RenderTarget, runtimeLightTheme ? new Color4(0.15f, 0.20f, 0.28f, 1.0f) : new Color4(0.95f, 0.97f, 1.0f, 1.0f)))
+			using (var barBg = new DxBrush(RenderTarget, runtimeLightTheme ? new Color4(0.95f, 0.96f, 0.98f, 0.97f) : new Color4(0.039f, 0.063f, 0.110f, 0.97f)))
+			using (var barTopSheen = new DxBrush(RenderTarget, runtimeLightTheme ? new Color4(1f, 1f, 1f, 0.45f) : new Color4(0.220f, 0.741f, 0.973f, 0.09f)))
+			using (var barBorder = new DxBrush(RenderTarget, runtimeLightTheme ? new Color4(0.75f, 0.80f, 0.86f, 0.95f) : new Color4(0.220f, 0.741f, 0.973f, 0.42f)))
+			using (var logoRingGlow = new DxBrush(RenderTarget, new Color4(0.055f, 0.647f, 0.914f, 0.24f)))
+			using (var logoRingBorder = new DxBrush(RenderTarget, new Color4(0.220f, 0.741f, 0.973f, 0.88f)))
+			using (var sepLineBrush = new DxBrush(RenderTarget, runtimeLightTheme ? new Color4(0.78f, 0.83f, 0.89f, 0.90f) : new Color4(0.220f, 0.741f, 0.973f, 0.25f)))
+			using (var brandBrush = new DxBrush(RenderTarget, new Color4(0.220f, 0.741f, 0.973f, 1.0f)))
+			using (var btnBg = new DxBrush(RenderTarget, runtimeLightTheme ? new Color4(1.0f, 1.0f, 1.0f, 0.98f) : new Color4(0.075f, 0.118f, 0.188f, 0.98f)))
+			using (var btnHoverBg = new DxBrush(RenderTarget, runtimeLightTheme ? new Color4(0.88f, 0.93f, 0.98f, 1.0f) : new Color4(0.078f, 0.215f, 0.345f, 1.0f)))
+			using (var btnActiveBg = new DxBrush(RenderTarget, new Color4(0.047f, 0.290f, 0.431f, 0.98f)))
+			using (var btnBorder = new DxBrush(RenderTarget, runtimeLightTheme ? new Color4(0.75f, 0.80f, 0.86f, 0.95f) : new Color4(0.220f, 0.741f, 0.973f, 0.30f)))
+			using (var btnHoverBorder = new DxBrush(RenderTarget, new Color4(0.220f, 0.741f, 0.973f, 0.96f)))
+			using (var fgActive = new DxBrush(RenderTarget, new Color4(0.490f, 0.827f, 0.988f, 1.0f)))
+			using (var fgInactive = new DxBrush(RenderTarget, runtimeLightTheme ? new Color4(0.15f, 0.20f, 0.28f, 1.0f) : new Color4(0.86f, 0.92f, 0.98f, 1.0f)))
 			{
 				tfStep.TextAlignment = SharpDX.DirectWrite.TextAlignment.Center;
 				tfStep.ParagraphAlignment = ParagraphAlignment.Center;
@@ -10029,24 +12344,32 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				float boxX = panelX + 8f;
 				float boxY = panelY + 6f;
-				float bh = 23f;
-				float padY = 4.5f;
+				float bh = 24f;
+				float padY = 5.0f;
 
-				bool wrapTwoRows = (ChartPanel != null && ChartPanel.W < 514f);
-				float boxH = wrapTwoRows ? 58f : 32f;
-				float maxAvailW = ChartPanel != null ? Math.Max(260f, ChartPanel.W - 20f) : 492f;
-				float boxW = wrapTwoRows ? Math.Min(maxAvailW, 272f) : Math.Min(maxAvailW, 492f);
+				bool wrapTwoRows = (ChartPanel != null && ChartPanel.W < 606f);
+				float boxH = wrapTwoRows ? 60f : 34f;
+				float maxAvailW = ChartPanel != null ? Math.Max(260f, ChartPanel.W - 20f) : 590f;
+				float boxW = wrapTwoRows ? Math.Min(maxAvailW, 368f) : Math.Min(maxAvailW, 590f);
 
-				var barRr = new RoundedRectangle { Rect = new RectangleF(boxX, boxY, boxW, boxH), RadiusX = 5.5f, RadiusY = 5.5f };
+				var barRr = new RoundedRectangle { Rect = new RectangleF(boxX, boxY, boxW, boxH), RadiusX = 7.0f, RadiusY = 7.0f };
 				RenderTarget.FillRoundedRectangle(barRr, barBg);
-				RenderTarget.DrawRoundedRectangle(barRr, barBorder, 1.0f);
+				RenderTarget.FillRoundedRectangle(new RoundedRectangle
+				{
+					Rect = new RectangleF(boxX + 1.5f, boxY + 1.5f, boxW - 3f, Math.Min(14f, boxH * 0.42f)),
+					RadiusX = 5.5f,
+					RadiusY = 5.5f
+				}, barTopSheen);
+				RenderTarget.DrawRoundedRectangle(barRr, barBorder, 1.15f);
 
 				float cx = boxX + 6f;
 				float cy = boxY + padY;
 
-				// AK10X Circular Brand Logo (Image 3)
+				// AK10X Circular Brand Logo with Market Profile Glowing Cyan Ring
 				float logoSz = 26f;
-				float logoY = boxY + (32f - logoSz) * 0.5f;
+				float logoY = boxY + (34f - logoSz) * 0.5f;
+				Vector2 logoCenter = new Vector2(cx + logoSz * 0.5f, logoY + logoSz * 0.5f);
+				RenderTarget.FillEllipse(new Ellipse(logoCenter, logoSz * 0.54f, logoSz * 0.54f), logoRingGlow);
 				SharpDX.Direct2D1.Bitmap logoBmp = GetOrCreateLogoBitmap(RenderTarget, runtimeLightTheme);
 				if (logoBmp != null)
 				{
@@ -10054,9 +12377,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 				else
 				{
-					RenderTarget.FillEllipse(new Ellipse(new Vector2(cx + logoSz * 0.5f, logoY + logoSz * 0.5f), logoSz * 0.5f, logoSz * 0.5f), btnActiveBg);
+					RenderTarget.FillEllipse(new Ellipse(logoCenter, logoSz * 0.5f, logoSz * 0.5f), btnActiveBg);
 				}
-				cx += logoSz + 4f;
+				RenderTarget.DrawEllipse(new Ellipse(logoCenter, logoSz * 0.50f, logoSz * 0.50f), logoRingBorder, 1.15f);
+				cx += logoSz + 5f;
 				RenderTarget.DrawLine(new Vector2(cx, cy + 2f), new Vector2(cx, cy + bh - 2f), sepLineBrush, 1.0f);
 				cx += 5f;
 
@@ -10121,14 +12445,23 @@ namespace NinjaTrader.NinjaScript.Indicators
 				RenderTarget.DrawLine(new Vector2(cx, cy + 2f), new Vector2(cx, cy + bh - 2f), sepLineBrush, 1.0f);
 				cx += 5f;
 
-				// 5. MP Zones | S/R Zones | Theme Icons
+				// 5. MP Zones | S/R Zones | Order & Scalp Panel | Theme Icons
 				toolbarBtnRects[15] = DrawToolbarIconBtn(cx, cy, 27f, bh, 15, string.Empty, runtimeShowMpZones, hoveredToolbarBtnIndex == 15, tfStep, btnBg, btnHoverBg, btnActiveBg, btnBorder, btnHoverBorder, runtimeShowMpZones ? fgActive : fgInactive);
 				cx += 30f;
 
 				toolbarBtnRects[8] = DrawToolbarIconBtn(cx, cy, 27f, bh, 8, string.Empty, runtimeShowSrZones, hoveredToolbarBtnIndex == 8, tfStep, btnBg, btnHoverBg, btnActiveBg, btnBorder, btnHoverBorder, runtimeShowSrZones ? fgActive : fgInactive);
 				cx += 30f;
 
+				toolbarBtnRects[11] = DrawToolbarIconBtn(cx, cy, 27f, bh, 11, string.Empty, runtimeShowTradePanel, hoveredToolbarBtnIndex == 11, tfStep, btnBg, btnHoverBg, btnActiveBg, btnBorder, btnHoverBorder, runtimeShowTradePanel ? fgActive : fgInactive);
+				cx += 30f;
+
 				toolbarBtnRects[10] = DrawToolbarIconBtn(cx, cy, 25f, bh, 10, string.Empty, runtimeLightTheme, hoveredToolbarBtnIndex == 10, tfStep, btnBg, btnHoverBg, btnActiveBg, btnBorder, btnHoverBorder, runtimeLightTheme ? fgActive : fgInactive);
+				cx += 28f;
+
+				toolbarBtnRects[9] = DrawToolbarIconBtn(cx, cy, 27f, bh, 9, string.Empty, runtimeShowSignals, hoveredToolbarBtnIndex == 9, tfStep, btnBg, btnHoverBg, btnActiveBg, btnBorder, btnHoverBorder, runtimeShowSignals ? fgActive : fgInactive);
+				cx += 30f;
+
+				toolbarBtnRects[16] = DrawToolbarIconBtn(cx, cy, 27f, bh, 16, string.Empty, runtimeShowSrAnalysis, hoveredToolbarBtnIndex == 16, tfStep, btnBg, btnHoverBg, btnActiveBg, btnBorder, btnHoverBorder, runtimeShowSrAnalysis ? fgActive : fgInactive);
 
 				// Crisp Hover Tooltip Badge below Hovered Icon Button
 				if (hoveredToolbarBtnIndex >= 0 && hoveredToolbarBtnIndex < toolbarBtnRects.Length)
@@ -10166,11 +12499,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 				case 6: return stepModeTooltip;
 				case 7: return "Increase Price Step (+)";
 				case 8: return "S/R Zones";
+				case 9:
+				{
+					int curMin = Math.Max(1, GetChartPeriodMinutes());
+					int htfMin = curMin * Math.Max(2, SignalHigherTfMultiplier);
+					string tfPair = IsIntradayMinuteChart() ? (" (" + curMin + "m + " + htfMin + "m)") : string.Empty;
+					return (runtimeShowSignals ? "Hide Signals" : "Show Signals") + tfPair;
+				}
+				case 11: return runtimeShowTradePanel ? "Hide Order & Scalp Panel" : "Show Order & Scalp Panel";
 				case 10: return runtimeLightTheme ? "Dark Theme" : "White Theme";
 				case 12: return "Zoom Out";
 				case 13: return "Zoom In";
 				case 14: return "Auto-Fit / Live Edge";
 				case 15: return "Market Profile Zones";
+				case 16: return runtimeShowSrAnalysis ? "Hide Analysis (Active S/R Only)" : "Analysis (Show Past Invalid S/R Lines)";
 				default: return string.Empty;
 			}
 		}
@@ -10181,10 +12523,22 @@ namespace NinjaTrader.NinjaScript.Indicators
 			DxBrush border, DxBrush hoverBorder, DxBrush fg)
 		{
 			var r = new RectangleF(x, y, w, h);
-			var rr = new RoundedRectangle { Rect = r, RadiusX = 3.5f, RadiusY = 3.5f };
+			var rr = new RoundedRectangle { Rect = r, RadiusX = 4.5f, RadiusY = 4.5f };
 			DxBrush curFill = hovered ? hoverBg : (active ? activeBg : bg);
 			RenderTarget.FillRoundedRectangle(rr, curFill);
-			RenderTarget.DrawRoundedRectangle(rr, hovered ? hoverBorder : border, hovered ? 1.25f : 0.9f);
+			if (active || hovered)
+			{
+				using (var btnSheen = new DxBrush(RenderTarget, new Color4(1f, 1f, 1f, active ? 0.08f : 0.05f)))
+				{
+					RenderTarget.FillRoundedRectangle(new RoundedRectangle
+					{
+						Rect = new RectangleF(x + 1f, y + 1f, Math.Max(2f, w - 2f), Math.Max(2f, h * 0.44f)),
+						RadiusX = 3.5f,
+						RadiusY = 3.5f
+					}, btnSheen);
+				}
+			}
+			RenderTarget.DrawRoundedRectangle(rr, (hovered || active) ? hoverBorder : border, (hovered || active) ? 1.2f : 0.9f);
 
 			float icx = x + w * 0.5f;
 			float icy = y + h * 0.5f;
@@ -10284,6 +12638,49 @@ namespace NinjaTrader.NinjaScript.Indicators
 					RenderTarget.DrawLine(new Vector2(icx - 5.6f, icy + 4.2f), new Vector2(icx - 1.4f, icy - 4.2f), fg, 1.25f);
 					RenderTarget.DrawLine(new Vector2(icx - 1.4f, icy - 4.2f), new Vector2(icx + 2.0f, icy + 2.2f), fg, 1.25f);
 					RenderTarget.DrawLine(new Vector2(icx + 2.0f, icy + 2.2f), new Vector2(icx + 5.6f, icy - 4.2f), fg, 1.25f);
+					break;
+				}
+				case 9: // Chart Signals Toggle Icon (Buy ▲ + Sell ▼ Signal Triangles & Pulse Wave)
+				{
+					using (var sigBuyBr = new DxBrush(RenderTarget, active ? new Color4(1f, 1f, 1f, 1f) : new Color4(0.08f, 0.84f, 0.52f, 1f)))
+					using (var sigSellBr = new DxBrush(RenderTarget, active ? new Color4(1f, 0.88f, 0.96f, 1f) : new Color4(0.92f, 0.20f, 0.58f, 1f)))
+					{
+						// Connecting signal pulse zig-zag
+						RenderTarget.DrawLine(new Vector2(icx - 6.6f, icy + 1.8f), new Vector2(icx - 2.2f, icy - 3.0f), fg, 1.25f);
+						RenderTarget.DrawLine(new Vector2(icx - 2.2f, icy - 3.0f), new Vector2(icx + 2.2f, icy + 3.0f), fg, 1.25f);
+						RenderTarget.DrawLine(new Vector2(icx + 2.2f, icy + 3.0f), new Vector2(icx + 6.6f, icy - 1.8f), fg, 1.25f);
+
+						// Bottom-left Buy ▲ triangle
+						DrawFilledSignalTriangle(icx - 4.5f, icy + 1.8f, 3.0f, 4.2f, false, sigBuyBr, null, 0f);
+						// Top-right Sell ▼ triangle
+						DrawFilledSignalTriangle(icx + 4.5f, icy - 1.8f, 3.0f, 4.2f, true, sigSellBr, null, 0f);
+					}
+					break;
+				}
+				case 16: // Analysis Mode Icon (Past Broken S/R Lines + Analytics Inspection Lens)
+				{
+					// Top active S/R line + middle broken past S/R segment with end tick '|'
+					RenderTarget.DrawLine(new Vector2(icx - 6.8f, icy - 4.8f), new Vector2(icx + 6.4f, icy - 4.8f), fg, 1.45f);
+					RenderTarget.DrawLine(new Vector2(icx - 6.8f, icy + 0.6f), new Vector2(icx - 0.8f, icy + 0.6f), fg, 1.45f);
+					RenderTarget.DrawLine(new Vector2(icx - 0.8f, icy - 1.6f), new Vector2(icx - 0.8f, icy + 2.8f), fg, 1.35f);
+					RenderTarget.DrawLine(new Vector2(icx - 6.8f, icy + 5.0f), new Vector2(icx - 2.2f, icy + 5.0f), fg, 1.35f);
+
+					// Crisp analytics magnifying lens on bottom-right
+					float lcx = icx + 2.6f;
+					float lcy = icy + 1.6f;
+					RenderTarget.DrawEllipse(new Ellipse(new Vector2(lcx, lcy), 3.4f, 3.4f), fg, 1.5f);
+					RenderTarget.DrawLine(new Vector2(lcx + 2.4f, lcy + 2.4f), new Vector2(icx + 6.8f, icy + 5.8f), fg, 1.75f);
+					break;
+				}
+				case 11: // Order & Scalp Execution Panel Icon (Tradesea Dual Buy/Sell Arrows + Ticket Sidebar)
+				{
+					var frameRect = new RectangleF(icx - 6.2f, icy - 5.4f, 12.4f, 10.8f);
+					RenderTarget.DrawRectangle(frameRect, fg, 1.35f);
+					RenderTarget.DrawLine(new Vector2(icx + 1.8f, icy - 5.4f), new Vector2(icx + 1.8f, icy + 5.4f), fg, 1.25f);
+					// Up/Down Buy & Sell arrows on left pane
+					RenderTarget.DrawLine(new Vector2(icx - 2.6f, icy + 2.8f), new Vector2(icx - 2.6f, icy - 2.8f), fg, 1.45f);
+					RenderTarget.DrawLine(new Vector2(icx - 4.4f, icy - 1.0f), new Vector2(icx - 2.6f, icy - 2.8f), fg, 1.35f);
+					RenderTarget.DrawLine(new Vector2(icx - 0.8f, icy - 1.0f), new Vector2(icx - 2.6f, icy - 2.8f), fg, 1.35f);
 					break;
 				}
 				case 10: // Theme Toggle (Crescent Moon in Dark Mode / Radiant Sun in Light Mode)
@@ -10812,6 +13209,5072 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (abs >= 1000)
 				return (val / 1000.0).ToString("0.##K", CultureInfo.InvariantCulture);
 			return val.ToString(CultureInfo.InvariantCulture);
+		}
+		#endregion
+
+		#region Tradesea Order & Scalp Execution Panel + Live Chart Order Drag Engine
+		private WpfPrimitives.Popup tradeAccountPopup = null;
+		private WpfControls.StackPanel tradeAccountPopupList = null;
+		private WpfControls.TextBlock txtSelectedAccountLabel = null;
+		private DateTime tradeToastExpireUtc = DateTime.MinValue;
+		private bool scalpUseAutoBracket = true;
+
+		private static WpfMedia.SolidColorBrush MakeFrozenBrush(byte r, byte g, byte b, byte a = 255)
+		{
+			var br = new WpfMedia.SolidColorBrush(WpfMedia.Color.FromArgb(a, r, g, b));
+			br.Freeze();
+			return br;
+		}
+
+		private string GetAccountCurrencyPrefix(Account acc)
+		{
+			try
+			{
+				if (acc != null)
+				{
+					string denom = acc.Denomination.ToString();
+					if (denom.IndexOf("Inr", StringComparison.OrdinalIgnoreCase) >= 0 ||
+						denom.IndexOf("Rupee", StringComparison.OrdinalIgnoreCase) >= 0)
+						return "₹";
+					if (denom.IndexOf("Eur", StringComparison.OrdinalIgnoreCase) >= 0)
+						return "€";
+					if (denom.IndexOf("Gbp", StringComparison.OrdinalIgnoreCase) >= 0)
+						return "£";
+				}
+			}
+			catch { }
+			return "$";
+		}
+
+		private bool InstrumentMatchesChart(Instrument candidate)
+		{
+			Instrument chartInst = Instrument;
+			if (candidate == null || chartInst == null)
+				return false;
+			if (ReferenceEquals(candidate, chartInst))
+				return true;
+			if (string.Equals(candidate.FullName, chartInst.FullName, StringComparison.OrdinalIgnoreCase))
+				return true;
+			try
+			{
+				if (candidate.MasterInstrument != null && chartInst.MasterInstrument != null &&
+					string.Equals(candidate.MasterInstrument.Name, chartInst.MasterInstrument.Name, StringComparison.OrdinalIgnoreCase) &&
+					candidate.Expiry == chartInst.Expiry)
+				{
+					return true;
+				}
+			}
+			catch { }
+			return false;
+		}
+
+		private static bool IsOrderWorkingState(OrderState st)
+		{
+			return st == OrderState.Working ||
+				st == OrderState.Accepted ||
+				st == OrderState.Submitted ||
+				st == OrderState.PartFilled ||
+				st == OrderState.ChangePending ||
+				st == OrderState.ChangeSubmitted ||
+				st == OrderState.TriggerPending;
+		}
+
+		private void ResolveLiveBidAskLast(out double bid, out double ask, out double last)
+		{
+			double tick = TickSize > 0 ? TickSize : 0.05;
+			double fallbackClose = 0.0;
+			try
+			{
+				if (ChartBars != null && ChartBars.Bars != null && ChartBars.Bars.Count > 0)
+					fallbackClose = ChartBars.Bars.GetClose(ChartBars.Bars.Count - 1);
+			}
+			catch { }
+
+			last = lastTradePrice > 0 ? lastTradePrice : fallbackClose;
+			bid = lastBidPrice;
+			ask = lastAskPrice;
+
+			try
+			{
+				Instrument inst = Instrument;
+				if (inst != null && inst.MarketData != null)
+				{
+					if (bid <= 0 && inst.MarketData.Bid != null && inst.MarketData.Bid.Price > 0)
+						bid = inst.MarketData.Bid.Price;
+					if (ask <= 0 && inst.MarketData.Ask != null && inst.MarketData.Ask.Price > 0)
+						ask = inst.MarketData.Ask.Price;
+					if (last <= 0 && inst.MarketData.Last != null && inst.MarketData.Last.Price > 0)
+						last = inst.MarketData.Last.Price;
+				}
+			}
+			catch { }
+
+			if (last <= 0)
+				last = fallbackClose > 0 ? fallbackClose : 100.0;
+			if (bid <= 0)
+				bid = RoundToInstrumentTick(last);
+			if (ask <= 0 || ask < bid)
+				ask = RoundToInstrumentTick(bid + tick);
+		}
+
+		private double GetCurrentOrderReferenceEntryPrice()
+		{
+			ResolveLiveBidAskLast(out double bid, out double ask, out double last);
+			if (selectedOrderTypeIdx == 0)
+				return isOrderSideBuy ? (ask > 0 ? ask : last) : (bid > 0 ? bid : last);
+
+			if (!orderCustomEntrySeeded || orderCustomEntryPrice <= 0)
+			{
+				SeedDefaultCustomEntryPrice();
+			}
+			return RoundToInstrumentTick(orderCustomEntryPrice > 0 ? orderCustomEntryPrice : last);
+		}
+
+		private void SeedDefaultCustomEntryPrice()
+		{
+			double tick = TickSize > 0 ? TickSize : 0.05;
+			ResolveLiveBidAskLast(out double bid, out double ask, out double last);
+			if (selectedOrderTypeIdx == 1) // Limit
+			{
+				orderCustomEntryPrice = isOrderSideBuy
+					? RoundToInstrumentTick(bid - tick * 4.0)
+					: RoundToInstrumentTick(ask + tick * 4.0);
+			}
+			else if (selectedOrderTypeIdx == 2) // Stop
+			{
+				orderCustomEntryPrice = isOrderSideBuy
+					? RoundToInstrumentTick(ask + tick * 4.0)
+					: RoundToInstrumentTick(bid - tick * 4.0);
+			}
+			else
+			{
+				orderCustomEntryPrice = RoundToInstrumentTick(last);
+			}
+			orderCustomEntrySeeded = true;
+		}
+
+		private List<Account> GetAvailableTradeAccounts()
+		{
+			List<Account> result = new List<Account>();
+			try
+			{
+				if (Account.All != null)
+				{
+					Account[] snap;
+					lock (Account.All)
+					{
+						snap = Account.All.ToArray();
+					}
+					for (int i = 0; i < snap.Length; i++)
+					{
+						Account a = snap[i];
+						if (a == null || string.IsNullOrWhiteSpace(a.Name))
+							continue;
+						if (string.Equals(a.Name, "Backtest", StringComparison.OrdinalIgnoreCase))
+							continue;
+						result.Add(a);
+					}
+				}
+			}
+			catch { }
+			return result;
+		}
+
+		private Account EnsureActiveTradeAccountSelected()
+		{
+			if (activeTradeAccount != null)
+			{
+				EnsureAccountEventsSubscribed(activeTradeAccount);
+				return activeTradeAccount;
+			}
+
+			try
+			{
+				ChartControl cc = hookedOrderflowCC ?? ChartControl;
+				if (cc != null && cc.OwnerChart != null && cc.OwnerChart.ChartTrader != null && cc.OwnerChart.ChartTrader.Account != null)
+				{
+					activeTradeAccount = cc.OwnerChart.ChartTrader.Account;
+				}
+			}
+			catch { }
+
+			if (activeTradeAccount == null)
+			{
+				List<Account> all = GetAvailableTradeAccounts();
+				for (int i = 0; i < all.Count; i++)
+				{
+					if (string.Equals(all[i].Name, "Sim101", StringComparison.OrdinalIgnoreCase))
+					{
+						activeTradeAccount = all[i];
+						break;
+					}
+				}
+				if (activeTradeAccount == null && all.Count > 0)
+					activeTradeAccount = all[0];
+			}
+
+			EnsureAccountEventsSubscribed(activeTradeAccount);
+			return activeTradeAccount;
+		}
+
+		private void SelectTradeAccount(Account nextAcc)
+		{
+			if (nextAcc == null)
+				return;
+			activeTradeAccount = nextAcc;
+			EnsureAccountEventsSubscribed(nextAcc);
+
+			try
+			{
+				ChartControl cc = hookedOrderflowCC ?? ChartControl;
+				if (cc != null && cc.OwnerChart != null && cc.OwnerChart.ChartTrader != null)
+					cc.OwnerChart.ChartTrader.Account = nextAcc;
+			}
+			catch { }
+
+			SyncTradePanelUiFromState();
+			RequestImmediateOrderflowRedraw();
+		}
+
+		private void EnsureAccountEventsSubscribed(Account acc)
+		{
+			if (ReferenceEquals(subscribedTradeAccount, acc))
+				return;
+
+			UnsubscribeAccountEventsOnly();
+			if (acc == null)
+				return;
+
+			try
+			{
+				acc.OrderUpdate += OnSelectedAccountOrderUpdate;
+				acc.PositionUpdate += OnSelectedAccountPositionUpdate;
+				acc.AccountItemUpdate += OnSelectedAccountItemUpdate;
+				subscribedTradeAccount = acc;
+			}
+			catch { }
+		}
+
+		private void UnsubscribeAccountEventsOnly()
+		{
+			Account prev = subscribedTradeAccount;
+			subscribedTradeAccount = null;
+			if (prev != null)
+			{
+				try { prev.OrderUpdate -= OnSelectedAccountOrderUpdate; } catch { }
+				try { prev.PositionUpdate -= OnSelectedAccountPositionUpdate; } catch { }
+				try { prev.AccountItemUpdate -= OnSelectedAccountItemUpdate; } catch { }
+			}
+		}
+
+		private Position GetCurrentInstrumentPosition(Account acc, bool nonBlocking = false)
+		{
+			if (acc == null || acc.Positions == null || Instrument == null)
+				return null;
+			try
+			{
+				Position[] snap = null;
+				if (nonBlocking)
+				{
+					bool entered = false;
+					try
+					{
+						System.Threading.Monitor.TryEnter(acc.Positions, 0, ref entered);
+						if (entered)
+							snap = acc.Positions.ToArray();
+					}
+					finally
+					{
+						if (entered)
+							System.Threading.Monitor.Exit(acc.Positions);
+					}
+					if (snap == null)
+						return cachedLastKnownPosition;
+				}
+				else
+				{
+					lock (acc.Positions)
+					{
+						snap = acc.Positions.ToArray();
+					}
+				}
+
+				Position found = null;
+				for (int i = 0; i < snap.Length; i++)
+				{
+					Position p = snap[i];
+					if (p != null && p.MarketPosition != MarketPosition.Flat && p.Quantity > 0 && InstrumentMatchesChart(p.Instrument))
+					{
+						found = p;
+						break;
+					}
+				}
+				cachedLastKnownPosition = found;
+				return found;
+			}
+			catch { }
+			return nonBlocking ? cachedLastKnownPosition : null;
+		}
+
+		private List<Order> GetCurrentInstrumentWorkingOrders(Account acc, bool nonBlocking = false)
+		{
+			List<Order> list = new List<Order>();
+			if (acc == null || acc.Orders == null || Instrument == null)
+				return list;
+			try
+			{
+				Order[] snap = null;
+				if (nonBlocking)
+				{
+					bool entered = false;
+					try
+					{
+						System.Threading.Monitor.TryEnter(acc.Orders, 0, ref entered);
+						if (entered)
+							snap = acc.Orders.ToArray();
+					}
+					finally
+					{
+						if (entered)
+							System.Threading.Monitor.Exit(acc.Orders);
+					}
+					if (snap == null)
+						return cachedLastKnownWorkingOrders ?? list;
+				}
+				else
+				{
+					lock (acc.Orders)
+					{
+						snap = acc.Orders.ToArray();
+					}
+				}
+
+				for (int i = 0; i < snap.Length; i++)
+				{
+					Order o = snap[i];
+					if (o != null && IsOrderWorkingState(o.OrderState) && InstrumentMatchesChart(o.Instrument))
+						list.Add(o);
+				}
+				cachedLastKnownWorkingOrders = list;
+			}
+			catch
+			{
+				if (nonBlocking && cachedLastKnownWorkingOrders != null)
+					return cachedLastKnownWorkingOrders;
+			}
+			return list;
+		}
+
+		private static bool IsOrderBuySide(OrderAction act)
+		{
+			return act == OrderAction.Buy || act == OrderAction.BuyToCover;
+		}
+
+		private static bool IsStopOrderType(OrderType ot)
+		{
+			return ot == OrderType.StopMarket || ot == OrderType.StopLimit;
+		}
+
+		private static double GetWorkingOrderEffectivePrice(Order o)
+		{
+			if (o == null)
+				return 0.0;
+			if (o.OrderType == OrderType.StopMarket || o.OrderType == OrderType.StopLimit)
+				return o.StopPrice > 0 ? o.StopPrice : o.LimitPrice;
+			return o.LimitPrice > 0 ? o.LimitPrice : o.StopPrice;
+		}
+
+		private int ClassifyWorkingOrderRole(Order o, Position pos)
+		{
+			// Returns: 1 = Protective TP, 2 = Protective SL, 0 = Working Entry
+			if (o == null)
+				return 0;
+
+			string nm = o.Name ?? string.Empty;
+			if (string.Equals(nm, "TP", StringComparison.OrdinalIgnoreCase) ||
+				nm.IndexOf("AK10X_TP", StringComparison.OrdinalIgnoreCase) >= 0 ||
+				nm.IndexOf("Profit", StringComparison.OrdinalIgnoreCase) >= 0 ||
+				nm.IndexOf("Target", StringComparison.OrdinalIgnoreCase) >= 0)
+			{
+				return 1;
+			}
+			if (string.Equals(nm, "SL", StringComparison.OrdinalIgnoreCase) ||
+				nm.IndexOf("AK10X_SL", StringComparison.OrdinalIgnoreCase) >= 0 ||
+				nm.IndexOf("Stop", StringComparison.OrdinalIgnoreCase) >= 0)
+			{
+				return 2;
+			}
+
+			if (pos != null && pos.MarketPosition != MarketPosition.Flat)
+			{
+				bool posLong = (pos.MarketPosition == MarketPosition.Long);
+				bool orderBuy = IsOrderBuySide(o.OrderAction);
+				if (posLong != orderBuy)
+				{
+					if (IsStopOrderType(o.OrderType))
+						return 2;
+					if (o.OrderType == OrderType.Limit || o.OrderType == OrderType.MIT)
+						return 1;
+				}
+			}
+
+			return 0;
+		}
+
+		private static string GetRiskDisciplineStateFilePath()
+		{
+			string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AK10X");
+			return Path.Combine(dir, "BigSortRiskDiscipline_v1.txt");
+		}
+
+		private static void EnsureSharedRiskDisciplineFileLoaded()
+		{
+			if (sharedRiskFileLoaded)
+				return;
+			lock (riskPersistLock)
+			{
+				if (sharedRiskFileLoaded)
+					return;
+				sharedRiskFileLoaded = true;
+				try
+				{
+					string path = GetRiskDisciplineStateFilePath();
+					if (!File.Exists(path))
+						return;
+					string[] lines = File.ReadAllLines(path);
+					DateTime nowLocal = DateTime.Now;
+					for (int i = 0; i < lines.Length; i++)
+					{
+						string ln = lines[i];
+						if (string.IsNullOrWhiteSpace(ln))
+							continue;
+						string[] parts = ln.Split('\t');
+						if (parts.Length < 4)
+							continue;
+						string key = parts[0];
+						if (!long.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out long unlockTicks))
+							continue;
+						DateTime unlockAt = new DateTime(unlockTicks, DateTimeKind.Local);
+						if (unlockAt <= nowLocal.AddHours(-24))
+							continue;
+						bool isLck = string.Equals(parts[2], "1", StringComparison.Ordinal);
+						string reason = parts[3] ?? string.Empty;
+						var rec = new DailyRiskDisciplineRecord
+						{
+							AccountAndDayKey = key,
+							UnlockLocalTime = unlockAt,
+							IsLocked = isLck && nowLocal < unlockAt,
+							LockReason = reason
+						};
+						if (parts.Length >= 5 && !string.IsNullOrEmpty(parts[4]))
+						{
+							string[] ids = parts[4].Split(',');
+							for (int k = 0; k < ids.Length; k++)
+							{
+								if (!string.IsNullOrWhiteSpace(ids[k]))
+									rec.FilledEntryOrderIds.Add(ids[k].Trim());
+							}
+						}
+						SharedDailyRiskRecords[key] = rec;
+					}
+				}
+				catch { }
+			}
+		}
+
+		private static void SaveSharedRiskDisciplineFile()
+		{
+			lock (riskPersistLock)
+			{
+				try
+				{
+					string path = GetRiskDisciplineStateFilePath();
+					string dir = Path.GetDirectoryName(path);
+					if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+						Directory.CreateDirectory(dir);
+					DateTime cutoff = DateTime.Now.AddHours(-18);
+					List<string> outLines = new List<string>();
+					foreach (var kv in SharedDailyRiskRecords)
+					{
+						DailyRiskDisciplineRecord r = kv.Value;
+						if (r == null || r.UnlockLocalTime < cutoff)
+							continue;
+						string joinedIds = string.Join(",", r.FilledEntryOrderIds);
+						outLines.Add(string.Join("\t",
+							r.AccountAndDayKey ?? kv.Key,
+							r.UnlockLocalTime.Ticks.ToString(CultureInfo.InvariantCulture),
+							r.IsLocked ? "1" : "0",
+							(r.LockReason ?? string.Empty).Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' '),
+							joinedIds));
+					}
+					File.WriteAllLines(path, outLines.ToArray());
+				}
+				catch { }
+			}
+		}
+
+		private void ResolveCurrentTradingDayWindow(DateTime nowLocal, out string dayKey, out DateTime dayOpenLocal, out DateTime nextDayOpenLocal)
+		{
+			int openSec;
+			if (ShowIndianSession && IsValidTime(MarketOpen))
+				openSec = ToSeconds(MarketOpen);
+			else if (!TryParseSessionTime(AsiaFromTime, out openSec))
+				openSec = 3 * 3600 + 30 * 60; // 03:30 AM IST Global Asia Open
+
+			int curSec = nowLocal.Hour * 3600 + nowLocal.Minute * 60 + nowLocal.Second;
+			DateTime tradingDate = (curSec < openSec) ? nowLocal.Date.AddDays(-1) : nowLocal.Date;
+			dayOpenLocal = tradingDate.AddSeconds(openSec);
+
+			DateTime nextDate = tradingDate.AddDays(1);
+			while (nextDate.DayOfWeek == DayOfWeek.Saturday || nextDate.DayOfWeek == DayOfWeek.Sunday)
+				nextDate = nextDate.AddDays(1);
+			nextDayOpenLocal = nextDate.AddSeconds(openSec);
+			dayKey = tradingDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+		}
+
+		private DailyRiskDisciplineRecord GetOrCreateTodayRiskRecord(Account acc, DateTime nowLocal, out DateTime dayOpenLocal, out DateTime nextDayOpenLocal)
+		{
+			EnsureSharedRiskDisciplineFileLoaded();
+			ResolveCurrentTradingDayWindow(nowLocal, out string dayKey, out dayOpenLocal, out nextDayOpenLocal);
+			string accName = (acc != null && !string.IsNullOrWhiteSpace(acc.Name)) ? acc.Name.Trim() : "Default";
+			string mapKey = accName + "|" + dayKey;
+			DateTime capturedNextOpen = nextDayOpenLocal;
+
+			DailyRiskDisciplineRecord rec = SharedDailyRiskRecords.GetOrAdd(mapKey, _ => new DailyRiskDisciplineRecord
+			{
+				AccountAndDayKey = mapKey,
+				UnlockLocalTime = capturedNextOpen,
+				IsLocked = false,
+				LockReason = string.Empty
+			});
+
+			if (nowLocal >= rec.UnlockLocalTime && rec.IsLocked)
+			{
+				rec.IsLocked = false;
+				rec.LockReason = string.Empty;
+			}
+			rec.UnlockLocalTime = nextDayOpenLocal;
+			return rec;
+		}
+
+		private int RefreshTodayEntryTradeCountNonBlocking(Account acc, DailyRiskDisciplineRecord rec, DateTime dayOpenLocal)
+		{
+			if (rec == null)
+				return 0;
+			if (acc != null && acc.Executions != null)
+			{
+				bool entered = false;
+				Execution[] execSnap = null;
+				try
+				{
+					System.Threading.Monitor.TryEnter(acc.Executions, 0, ref entered);
+					if (entered)
+						execSnap = acc.Executions.ToArray();
+				}
+				catch { }
+				finally
+				{
+					if (entered)
+						System.Threading.Monitor.Exit(acc.Executions);
+				}
+
+				if (execSnap != null)
+				{
+					bool addedAny = false;
+					for (int i = 0; i < execSnap.Length; i++)
+					{
+						Execution ex = execSnap[i];
+						if (ex == null || ex.Order == null || ex.Time < dayOpenLocal)
+							continue;
+						OrderAction oa = ex.Order.OrderAction;
+						if (oa == OrderAction.Buy || oa == OrderAction.SellShort)
+						{
+							string oid = !string.IsNullOrWhiteSpace(ex.Order.OrderId)
+								? ex.Order.OrderId
+								: (ex.Order.Id > 0 ? ex.Order.Id.ToString(CultureInfo.InvariantCulture) : ex.ExecutionId);
+							if (!string.IsNullOrWhiteSpace(oid))
+							{
+								lock (riskPersistLock)
+								{
+									if (rec.FilledEntryOrderIds.Add(oid))
+										addedAny = true;
+								}
+							}
+						}
+					}
+					if (addedAny)
+						SaveSharedRiskDisciplineFile();
+				}
+			}
+			lock (riskPersistLock)
+			{
+				return rec.FilledEntryOrderIds.Count;
+			}
+		}
+
+		private void LatchDailyTradingLockout(DailyRiskDisciplineRecord rec, string reason, DateTime nextDayOpenLocal)
+		{
+			if (rec == null)
+				return;
+			bool changed = false;
+			lock (riskPersistLock)
+			{
+				if (!rec.IsLocked)
+				{
+					rec.IsLocked = true;
+					rec.LockReason = reason;
+					rec.UnlockLocalTime = nextDayOpenLocal;
+					changed = true;
+				}
+			}
+			if (changed)
+			{
+				SaveSharedRiskDisciplineFile();
+				ShowTradeToast("🔒 " + reason + " — Locked until " + nextDayOpenLocal.ToString("hh:mm tt", CultureInfo.InvariantCulture), true);
+				RequestTradeUiSyncAsync();
+				RequestImmediateOrderflowRedraw();
+			}
+		}
+
+		private void TriggerEmergencyFlattenPosition(Account acc, Instrument inst, string toastMessage)
+		{
+			if (acc == null || inst == null)
+				return;
+			DateTime nowUtc = DateTime.UtcNow;
+			if ((nowUtc - lastEmergencyFlattenUtc).TotalSeconds < 1.5)
+				return;
+			lastEmergencyFlattenUtc = nowUtc;
+
+			try
+			{
+				lock (bracketLock)
+				{
+					pendingEntryBrackets.Clear();
+					activeTrailingOrders.Clear();
+				}
+				acc.Flatten(new Instrument[] { inst });
+				ShowTradeToast(toastMessage, true);
+				RequestTradeUiSyncAsync();
+				RequestImmediateOrderflowRedraw();
+			}
+			catch { }
+		}
+
+		private int ComputeCapitalProtectorMaxSlTicks(int qty)
+		{
+			if (!EnableCapitalProtector || CapitalProtectorAmount <= 0)
+				return 100000;
+			double tick = TickSize > 0 ? TickSize : 0.05;
+			double pv = (Instrument != null && Instrument.MasterInstrument != null && Instrument.MasterInstrument.PointValue > 0)
+				? Instrument.MasterInstrument.PointValue
+				: 1.0;
+			double riskPerTick = Math.Max(1e-6, Math.Max(1, qty) * tick * pv);
+			return Math.Max(1, (int)Math.Floor((CapitalProtectorAmount + 1e-6) / riskPerTick));
+		}
+
+		private void EnforceRiskAndCapitalProtectorOnTick(double liveTickPrice)
+		{
+			Account acc = activeTradeAccount ?? EnsureActiveTradeAccountSelected();
+			Instrument inst = Instrument;
+			if (acc == null || inst == null)
+				return;
+
+			DateTime nowLocal = DateTime.Now;
+			try
+			{
+				if (Connection.PlaybackConnection != null && Connection.PlaybackConnection.Status == ConnectionStatus.Connected)
+					nowLocal = Connection.PlaybackConnection.Now;
+			}
+			catch { }
+
+			DailyRiskDisciplineRecord rec = GetOrCreateTodayRiskRecord(acc, nowLocal, out DateTime dayOpenLocal, out DateTime nextDayOpenLocal);
+			int tradesDone = RefreshTodayEntryTradeCountNonBlocking(acc, rec, dayOpenLocal);
+
+			Position pos = GetCurrentInstrumentPosition(acc, nonBlocking: true);
+			bool hasOpenPos = (pos != null && pos.MarketPosition != MarketPosition.Flat && pos.Quantity > 0);
+			if (hasOpenPos)
+			{
+				if (posOpenedObservedUtc == DateTime.MinValue)
+					posOpenedObservedUtc = DateTime.UtcNow;
+			}
+			else
+			{
+				posOpenedObservedUtc = DateTime.MinValue;
+			}
+
+			ResolveLiveBidAskLast(out double bid, out double ask, out double last);
+			double pxRef = liveTickPrice > 0 ? liveTickPrice : last;
+			double pv = (inst.MasterInstrument != null && inst.MasterInstrument.PointValue > 0) ? inst.MasterInstrument.PointValue : 1.0;
+			double tick = TickSize > 0 ? TickSize : 0.05;
+			string curSym = GetAccountCurrencyPrefix(acc);
+
+			double rpl = 0.0;
+			try { rpl = acc.Get(AccountItem.RealizedProfitLoss, acc.Denomination); } catch { }
+
+			double openUpl = 0.0;
+			if (hasOpenPos && pxRef > 0)
+			{
+				bool pLong = (pos.MarketPosition == MarketPosition.Long);
+				double exitEvalPx = pLong ? (bid > 0 ? bid : pxRef) : (ask > 0 ? ask : pxRef);
+				openUpl = (pLong ? (exitEvalPx - pos.AveragePrice) : (pos.AveragePrice - exitEvalPx)) * pos.Quantity * pv;
+			}
+			double dailyNetPnl = rpl + openUpl;
+
+			cachedTradesDoneToday = tradesDone;
+			cachedDailyNetPnl = dailyNetPnl;
+			cachedUnlockLocalTime = nextDayOpenLocal;
+
+			// 1. GOD-MODE CAPITAL PROTECTOR (Instant Sub-Millisecond Spike / News / Big-Candle Capital Shield)
+			if (EnableCapitalProtector && CapitalProtectorAmount > 0 && hasOpenPos)
+			{
+				if (openUpl <= -CapitalProtectorAmount - 1e-6)
+				{
+					string capMsg = string.Format(CultureInfo.InvariantCulture, "🛡 Capital Protector Saved ({0}{1:0.##} Limit)", curSym, CapitalProtectorAmount);
+					TriggerEmergencyFlattenPosition(acc, inst, capMsg + " — Emergency Flatten!");
+					if (CapitalProtectorLockDayOnTrigger)
+						LatchDailyTradingLockout(rec, capMsg, nextDayOpenLocal);
+					cachedIsTradingLocked = rec.IsLocked;
+					cachedLockReason = rec.LockReason;
+					return;
+				}
+
+				// Auto-inject / clamp server-side protective StopMarket if open position is missing SL for > 2.2s (protects against naked spikes!)
+				DateTime nowUtc = DateTime.UtcNow;
+				if ((nowUtc - posOpenedObservedUtc).TotalSeconds >= 2.2 && (nowUtc - lastMissingSlGuardCheckUtc).TotalSeconds >= 2.0)
+				{
+					lastMissingSlGuardCheckUtc = nowUtc;
+					List<Order> wos = GetCurrentInstrumentWorkingOrders(acc, nonBlocking: true);
+					Order existingSl = null;
+					for (int i = 0; i < wos.Count; i++)
+					{
+						if (ClassifyWorkingOrderRole(wos[i], pos) == 2)
+						{
+							existingSl = wos[i];
+							break;
+						}
+					}
+
+					int maxTicks = ComputeCapitalProtectorMaxSlTicks(pos.Quantity);
+					bool pLong = (pos.MarketPosition == MarketPosition.Long);
+					double maxAllowedSlPx = RoundToInstrumentTick(pLong ? (pos.AveragePrice - maxTicks * tick) : (pos.AveragePrice + maxTicks * tick));
+
+					if (existingSl == null)
+					{
+						// Check no pending bracket is still mid-flight
+						bool hasPendingInFlight = false;
+						lock (bracketLock) { hasPendingInFlight = pendingEntryBrackets.Count > 0; }
+						if (!hasPendingInFlight)
+						{
+							double safeSl = pLong
+								? ((bid > 0 && maxAllowedSlPx >= bid) ? RoundToInstrumentTick(bid - tick) : maxAllowedSlPx)
+								: ((ask > 0 && maxAllowedSlPx <= ask) ? RoundToInstrumentTick(ask + tick) : maxAllowedSlPx);
+							try
+							{
+								Order guardSl = acc.CreateOrder(
+									inst,
+									pLong ? OrderAction.Sell : OrderAction.BuyToCover,
+									OrderType.StopMarket,
+									OrderEntry.Manual,
+									selectedOrderTif,
+									pos.Quantity,
+									0.0,
+									safeSl,
+									string.Empty,
+									"SL",
+									Globals.MaxDate,
+									null);
+								if (guardSl != null)
+								{
+									acc.Submit(new[] { guardSl });
+									ShowTradeToast("🛡 Capital Protector attached hard SL @ " + FormatOrderflowPrice(safeSl));
+								}
+							}
+							catch { }
+						}
+					}
+					else
+					{
+						double curSlPx = GetWorkingOrderEffectivePrice(existingSl);
+						if (curSlPx > 0)
+						{
+							bool exceedsCap = pLong ? (curSlPx < maxAllowedSlPx - tick * 0.5) : (curSlPx > maxAllowedSlPx + tick * 0.5);
+							if (exceedsCap)
+								ModifyLiveWorkingOrderPrice(acc, existingSl, maxAllowedSlPx, silentToast: true);
+						}
+					}
+				}
+			}
+
+			// 2. DAILY DISCIPLINE ENGINE (Max Trades Per Day, Per-Day Profit Target, Per-Day StopLoss -> Lock Until Next Day Open)
+			if (EnableRiskManagement)
+			{
+				if (DailyProfitTargetAmount > 0 && dailyNetPnl >= DailyProfitTargetAmount - 1e-6)
+				{
+					string reason = string.Format(CultureInfo.InvariantCulture, "Daily Target Reached (+{0}{1:0.##})", curSym, dailyNetPnl);
+					if (hasOpenPos && AutoFlattenOnDailyLimit)
+						TriggerEmergencyFlattenPosition(acc, inst, "🎯 " + reason + " — Auto-Closed!");
+					LatchDailyTradingLockout(rec, reason, nextDayOpenLocal);
+				}
+				else if (DailyMaxLossAmount > 0 && dailyNetPnl <= -Math.Abs(DailyMaxLossAmount) + 1e-6)
+				{
+					string reason = string.Format(CultureInfo.InvariantCulture, "Daily StopLoss Hit (-{0}{1:0.##})", curSym, Math.Abs(dailyNetPnl));
+					if (hasOpenPos && AutoFlattenOnDailyLimit)
+						TriggerEmergencyFlattenPosition(acc, inst, "🛑 " + reason + " — Auto-Closed!");
+					LatchDailyTradingLockout(rec, reason, nextDayOpenLocal);
+				}
+				else if (MaxTradesPerDay > 0 && tradesDone >= MaxTradesPerDay && !hasOpenPos)
+				{
+					string reason = string.Format(CultureInfo.InvariantCulture, "Max Trades Done ({0}/{1})", tradesDone, MaxTradesPerDay);
+					LatchDailyTradingLockout(rec, reason, nextDayOpenLocal);
+				}
+			}
+
+			cachedIsTradingLocked = rec.IsLocked;
+			cachedLockReason = rec.LockReason;
+		}
+
+		private bool IsNewOrderBlockedByRiskDiscipline(Account acc, out string blockReason, out DateTime unlockAtLocal)
+		{
+			blockReason = string.Empty;
+			unlockAtLocal = DateTime.MinValue;
+			if (!EnableRiskManagement && !EnableCapitalProtector)
+				return false;
+
+			DateTime nowLocal = DateTime.Now;
+			try
+			{
+				if (Connection.PlaybackConnection != null && Connection.PlaybackConnection.Status == ConnectionStatus.Connected)
+					nowLocal = Connection.PlaybackConnection.Now;
+			}
+			catch { }
+
+			DailyRiskDisciplineRecord rec = GetOrCreateTodayRiskRecord(acc, nowLocal, out DateTime dayOpenLocal, out DateTime nextDayOpenLocal);
+			unlockAtLocal = nextDayOpenLocal;
+
+			if (rec.IsLocked && nowLocal < nextDayOpenLocal)
+			{
+				blockReason = !string.IsNullOrEmpty(rec.LockReason) ? rec.LockReason : "Daily Limit Reached";
+				return true;
+			}
+
+			if (!EnableRiskManagement)
+				return false;
+
+			int tradesDone = RefreshTodayEntryTradeCountNonBlocking(acc, rec, dayOpenLocal);
+			Position pos = GetCurrentInstrumentPosition(acc, nonBlocking: true);
+			List<Order> working = GetCurrentInstrumentWorkingOrders(acc, nonBlocking: true);
+			int pendingEntryCount = 0;
+			for (int i = 0; i < working.Count; i++)
+			{
+				if (ClassifyWorkingOrderRole(working[i], pos) == 0)
+					pendingEntryCount++;
+			}
+
+			if (MaxTradesPerDay > 0 && (tradesDone + pendingEntryCount) >= MaxTradesPerDay)
+			{
+				blockReason = tradesDone >= MaxTradesPerDay
+					? string.Format(CultureInfo.InvariantCulture, "Max Trades Reached ({0}/{1})", tradesDone, MaxTradesPerDay)
+					: string.Format(CultureInfo.InvariantCulture, "Max Trades Allocated ({0} Done + {1} Working = {2}/{2})", tradesDone, pendingEntryCount, MaxTradesPerDay);
+				if (tradesDone >= MaxTradesPerDay && (pos == null || pos.MarketPosition == MarketPosition.Flat))
+					LatchDailyTradingLockout(rec, blockReason, nextDayOpenLocal);
+				return true;
+			}
+
+			string curSym = GetAccountCurrencyPrefix(acc);
+			double rpl = 0.0, upl = 0.0;
+			try { if (acc != null) rpl = acc.Get(AccountItem.RealizedProfitLoss, acc.Denomination); } catch { }
+			if (pos != null && pos.MarketPosition != MarketPosition.Flat && pos.Quantity > 0)
+			{
+				ResolveLiveBidAskLast(out _, out _, out double last);
+				try { upl = pos.GetUnrealizedProfitLoss(PerformanceUnit.Currency, last); } catch { }
+			}
+			double netPnl = rpl + upl;
+
+			if (DailyProfitTargetAmount > 0 && netPnl >= DailyProfitTargetAmount - 1e-6)
+			{
+				blockReason = string.Format(CultureInfo.InvariantCulture, "Daily Target Reached (+{0}{1:0.##})", curSym, netPnl);
+				LatchDailyTradingLockout(rec, blockReason, nextDayOpenLocal);
+				return true;
+			}
+
+			if (DailyMaxLossAmount > 0 && netPnl <= -Math.Abs(DailyMaxLossAmount) + 1e-6)
+			{
+				blockReason = string.Format(CultureInfo.InvariantCulture, "Daily StopLoss Hit (-{0}{1:0.##})", curSym, Math.Abs(netPnl));
+				LatchDailyTradingLockout(rec, blockReason, nextDayOpenLocal);
+				return true;
+			}
+
+			return false;
+		}
+
+		private PendingBracketSpec FindPendingBracketForEntryOrder(Order entryOrd)
+		{
+			if (entryOrd == null)
+				return null;
+			lock (bracketLock)
+			{
+				for (int i = pendingEntryBrackets.Count - 1; i >= 0; i--)
+				{
+					PendingBracketSpec sp = pendingEntryBrackets[i];
+					if (sp == null)
+						continue;
+					if (ReferenceEquals(sp.EntryOrder, entryOrd) ||
+						(sp.EntryOrder != null && !string.IsNullOrEmpty(sp.EntryOrder.OrderId) && string.Equals(sp.EntryOrder.OrderId, entryOrd.OrderId, StringComparison.Ordinal)))
+					{
+						return sp;
+					}
+				}
+			}
+			return null;
+		}
+
+		private void ShowTradeToast(string msg, bool isError = false)
+		{
+			tradeToastExpireUtc = DateTime.UtcNow.AddSeconds(4.5);
+			ChartControl cc = hookedOrderflowCC ?? ChartControl;
+			if (cc == null || txtTradeStatusToast == null)
+				return;
+
+			try
+			{
+				cc.Dispatcher.InvokeAsync(() =>
+				{
+					if (txtTradeStatusToast == null)
+						return;
+					txtTradeStatusToast.Text = msg ?? string.Empty;
+					txtTradeStatusToast.Foreground = isError
+						? MakeFrozenBrush(248, 113, 113)
+						: MakeFrozenBrush(52, 211, 153);
+				});
+			}
+			catch { }
+		}
+
+		private void OnSelectedAccountItemUpdate(object sender, AccountItemEventArgs e)
+		{
+			if (State == State.Terminated)
+				return;
+			RequestTradeUiSyncAsync();
+		}
+
+		private void OnSelectedAccountPositionUpdate(object sender, PositionEventArgs e)
+		{
+			if (State == State.Terminated || e == null)
+				return;
+
+			try
+			{
+				if (e.Position != null && InstrumentMatchesChart(e.Position.Instrument) && e.MarketPosition == MarketPosition.Flat)
+				{
+					// Position closed -> automatically cancel any leftover AK10X protective SL/TP exit orders so they cannot reverse!
+					Account acc = e.Position.Account ?? activeTradeAccount;
+					if (acc != null)
+					{
+						List<Order> working = GetCurrentInstrumentWorkingOrders(acc);
+						List<Order> orphanExits = new List<Order>();
+						for (int i = 0; i < working.Count; i++)
+						{
+							Order wo = working[i];
+							string nm = wo.Name ?? string.Empty;
+							if (nm.StartsWith("AK10X_SL", StringComparison.OrdinalIgnoreCase) ||
+								nm.StartsWith("AK10X_TP", StringComparison.OrdinalIgnoreCase) ||
+								string.Equals(nm, "SL", StringComparison.OrdinalIgnoreCase) ||
+								string.Equals(nm, "TP", StringComparison.OrdinalIgnoreCase))
+							{
+								orphanExits.Add(wo);
+							}
+						}
+						if (orphanExits.Count > 0)
+						{
+							try { acc.Cancel(orphanExits.ToArray()); } catch { }
+						}
+					}
+
+					lock (bracketLock)
+					{
+						activeTrailingOrders.Clear();
+					}
+				}
+			}
+			catch { }
+
+			RequestTradeUiSyncAsync();
+			RequestThrottledChartRefresh(true);
+		}
+
+		private void OnSelectedAccountOrderUpdate(object sender, OrderEventArgs e)
+		{
+			if (State == State.Terminated || e == null || e.Order == null)
+				return;
+
+			try
+			{
+				if (InstrumentMatchesChart(e.Order.Instrument))
+				{
+					if ((e.OrderState == OrderState.Filled || e.OrderState == OrderState.PartFilled) &&
+						(e.Order.OrderAction == OrderAction.Buy || e.Order.OrderAction == OrderAction.SellShort))
+					{
+						Account ordAcc = e.Order.Account ?? activeTradeAccount;
+						DateTime nowLoc = DateTime.Now;
+						try
+						{
+							if (Connection.PlaybackConnection != null && Connection.PlaybackConnection.Status == ConnectionStatus.Connected)
+								nowLoc = Connection.PlaybackConnection.Now;
+						}
+						catch { }
+						DailyRiskDisciplineRecord rec = GetOrCreateTodayRiskRecord(ordAcc, nowLoc, out _, out _);
+						string oid = !string.IsNullOrWhiteSpace(e.Order.OrderId)
+							? e.Order.OrderId
+							: (e.Order.Id > 0 ? e.Order.Id.ToString(CultureInfo.InvariantCulture) : string.Empty);
+						if (!string.IsNullOrEmpty(oid))
+						{
+							bool added = false;
+							lock (riskPersistLock) { added = rec.FilledEntryOrderIds.Add(oid); }
+							if (added) SaveSharedRiskDisciplineFile();
+						}
+					}
+
+					TryProcessPendingBracketOnOrderUpdate(e);
+				}
+			}
+			catch { }
+
+			EnforceRiskAndCapitalProtectorOnTick(0.0);
+
+			RequestTradeUiSyncAsync();
+			RequestThrottledChartRefresh(true);
+		}
+
+		private void TryProcessPendingBracketOnOrderUpdate(OrderEventArgs e)
+		{
+			Order ord = e.Order;
+			if (ord == null)
+				return;
+
+			PendingBracketSpec matched = null;
+			int deltaQtyToBracket = 0;
+
+			lock (bracketLock)
+			{
+				for (int i = pendingEntryBrackets.Count - 1; i >= 0; i--)
+				{
+					PendingBracketSpec sp = pendingEntryBrackets[i];
+					if ((DateTime.UtcNow - sp.CreatedUtc).TotalHours > 12.0)
+					{
+						pendingEntryBrackets.RemoveAt(i);
+						continue;
+					}
+
+					bool sameOrder = ReferenceEquals(sp.EntryOrder, ord) ||
+						(sp.EntryOrder != null && !string.IsNullOrEmpty(sp.EntryOrder.OrderId) && string.Equals(sp.EntryOrder.OrderId, ord.OrderId, StringComparison.Ordinal)) ||
+						(!string.IsNullOrEmpty(sp.EntryTag) && string.Equals(ord.Name, sp.EntryTag, StringComparison.Ordinal));
+					if (!sameOrder)
+						continue;
+
+					if (e.OrderState == OrderState.Cancelled || e.OrderState == OrderState.Rejected)
+					{
+						pendingEntryBrackets.RemoveAt(i);
+						break;
+					}
+
+					if ((e.OrderState == OrderState.Filled || e.OrderState == OrderState.PartFilled) && e.Filled > sp.BracketedQty)
+					{
+						deltaQtyToBracket = e.Filled - sp.BracketedQty;
+						sp.BracketedQty = e.Filled;
+						matched = sp;
+						if (e.OrderState == OrderState.Filled || sp.BracketedQty >= sp.TotalQty)
+							pendingEntryBrackets.RemoveAt(i);
+						break;
+					}
+				}
+			}
+
+			if (matched == null || deltaQtyToBracket <= 0 || (!matched.HasSl && !matched.HasTp))
+				return;
+
+			Account acc = matched.Account ?? activeTradeAccount;
+			Instrument inst = matched.Instrument ?? Instrument;
+			if (acc == null || inst == null)
+				return;
+
+			// Confirm we actually hold an open position in the entry direction (avoid orphaned brackets if the order merely flattened an opposite position)
+			Position pos = GetCurrentInstrumentPosition(acc);
+			int attachQty = deltaQtyToBracket;
+			if (pos != null)
+			{
+				bool posIsLong = (pos.MarketPosition == MarketPosition.Long);
+				if (posIsLong != matched.IsLong)
+					return;
+				attachQty = Math.Min(deltaQtyToBracket, Math.Max(1, pos.Quantity));
+			}
+
+			double tick = TickSize > 0 ? TickSize : 0.05;
+			ResolveLiveBidAskLast(out double bid, out double ask, out double last);
+			double fillAnchor = e.AverageFillPrice > 0 ? e.AverageFillPrice : (ord.AverageFillPrice > 0 ? ord.AverageFillPrice : last);
+
+			OrderAction exitAction = matched.IsLong ? OrderAction.Sell : OrderAction.BuyToCover;
+			string ocoId = (matched.HasSl && matched.HasTp)
+				? ("AK10X_OCO_" + Guid.NewGuid().ToString("N").Substring(0, 10))
+				: string.Empty;
+
+			List<Order> toSubmit = new List<Order>(2);
+			Order createdSlOrder = null;
+
+			if (matched.HasSl && matched.SlTicks > 0)
+			{
+				double rawSl = matched.IsLong
+					? (fillAnchor - matched.SlTicks * tick)
+					: (fillAnchor + matched.SlTicks * tick);
+				// Keep StopMarket safely on valid side of market
+				if (matched.IsLong && bid > 0 && rawSl >= bid)
+					rawSl = bid - tick;
+				else if (!matched.IsLong && ask > 0 && rawSl <= ask)
+					rawSl = ask + tick;
+				double slPx = RoundToInstrumentTick(rawSl);
+
+				createdSlOrder = acc.CreateOrder(
+					inst,
+					exitAction,
+					OrderType.StopMarket,
+					OrderEntry.Manual,
+					matched.Tif,
+					attachQty,
+					0.0,
+					slPx,
+					ocoId,
+					"SL",
+					Globals.MaxDate,
+					null);
+				if (createdSlOrder != null)
+					toSubmit.Add(createdSlOrder);
+			}
+
+			if (matched.HasTp && matched.TpTicks > 0)
+			{
+				double rawTp = matched.IsLong
+					? (fillAnchor + matched.TpTicks * tick)
+					: (fillAnchor - matched.TpTicks * tick);
+				if (matched.IsLong && ask > 0 && rawTp <= ask)
+					rawTp = ask + tick;
+				else if (!matched.IsLong && bid > 0 && rawTp >= bid)
+					rawTp = bid - tick;
+				double tpPx = RoundToInstrumentTick(rawTp);
+
+				Order tpOrd = acc.CreateOrder(
+					inst,
+					exitAction,
+					OrderType.Limit,
+					OrderEntry.Manual,
+					matched.Tif,
+					attachQty,
+					tpPx,
+					0.0,
+					ocoId,
+					"TP",
+					Globals.MaxDate,
+					null);
+				if (tpOrd != null)
+					toSubmit.Add(tpOrd);
+			}
+
+			if (toSubmit.Count > 0)
+			{
+				acc.Submit(toSubmit.ToArray());
+
+				if (createdSlOrder != null && matched.TrailEnabled && matched.TrailTicks > 0)
+				{
+					lock (bracketLock)
+					{
+						activeTrailingOrders.Add(new ActiveTrailingOrderState
+						{
+							StopOrder = createdSlOrder,
+							Account = acc,
+							IsLong = matched.IsLong,
+							TrailTicks = matched.TrailTicks,
+							BestExtremePrice = fillAnchor,
+							LastChangeSentUtc = DateTime.UtcNow
+						});
+					}
+				}
+			}
+		}
+
+		private void UpdateLiveTrailingStopsOnTick(double tickPrice)
+		{
+			if (tickPrice <= 0)
+				return;
+
+			List<Tuple<Order, Account, double>> pendingMoves = null;
+			double tick = TickSize > 0 ? TickSize : 0.05;
+
+			lock (bracketLock)
+			{
+				if (activeTrailingOrders.Count == 0)
+					return;
+
+				DateTime nowUtc = DateTime.UtcNow;
+				for (int i = activeTrailingOrders.Count - 1; i >= 0; i--)
+				{
+					ActiveTrailingOrderState tr = activeTrailingOrders[i];
+					if (tr.StopOrder == null || tr.Account == null ||
+						tr.StopOrder.OrderState == OrderState.Filled ||
+						tr.StopOrder.OrderState == OrderState.Cancelled ||
+						tr.StopOrder.OrderState == OrderState.Rejected)
+					{
+						activeTrailingOrders.RemoveAt(i);
+						continue;
+					}
+
+					if (tr.StopOrder.OrderState != OrderState.Working && tr.StopOrder.OrderState != OrderState.Accepted)
+						continue;
+
+					if (tr.IsLong)
+					{
+						if (tickPrice > tr.BestExtremePrice)
+							tr.BestExtremePrice = tickPrice;
+						double desiredStop = RoundToInstrumentTick(tr.BestExtremePrice - tr.TrailTicks * tick);
+						if (desiredStop >= tr.StopOrder.StopPrice + tick - 1e-9 && (nowUtc - tr.LastChangeSentUtc).TotalMilliseconds >= 350.0)
+						{
+							tr.LastChangeSentUtc = nowUtc;
+							if (pendingMoves == null) pendingMoves = new List<Tuple<Order, Account, double>>();
+							pendingMoves.Add(Tuple.Create(tr.StopOrder, tr.Account, desiredStop));
+						}
+					}
+					else
+					{
+						if (tr.BestExtremePrice <= 0 || tickPrice < tr.BestExtremePrice)
+							tr.BestExtremePrice = tickPrice;
+						double desiredStop = RoundToInstrumentTick(tr.BestExtremePrice + tr.TrailTicks * tick);
+						if (desiredStop <= tr.StopOrder.StopPrice - tick + 1e-9 && (nowUtc - tr.LastChangeSentUtc).TotalMilliseconds >= 350.0)
+						{
+							tr.LastChangeSentUtc = nowUtc;
+							if (pendingMoves == null) pendingMoves = new List<Tuple<Order, Account, double>>();
+							pendingMoves.Add(Tuple.Create(tr.StopOrder, tr.Account, desiredStop));
+						}
+					}
+				}
+			}
+
+			if (pendingMoves != null)
+			{
+				for (int i = 0; i < pendingMoves.Count; i++)
+				{
+					ModifyLiveWorkingOrderPrice(pendingMoves[i].Item2, pendingMoves[i].Item1, pendingMoves[i].Item3, silentToast: true);
+				}
+			}
+		}
+
+		private bool ModifyLiveWorkingOrderPrice(Account acc, Order ord, double rawNewPrice, bool silentToast = false)
+		{
+			if (acc == null || ord == null || rawNewPrice <= 0)
+				return false;
+
+			try
+			{
+				double newPrice = RoundToInstrumentTick(rawNewPrice);
+				double curPrice = GetWorkingOrderEffectivePrice(ord);
+				double tick = TickSize > 0 ? TickSize : 0.05;
+				if (Math.Abs(newPrice - curPrice) < tick * 0.25)
+					return false;
+
+				ord.QuantityChanged = ord.Quantity;
+				if (ord.OrderType == OrderType.StopMarket)
+				{
+					ord.StopPriceChanged = newPrice;
+					ord.LimitPriceChanged = 0.0;
+				}
+				else if (ord.OrderType == OrderType.StopLimit)
+				{
+					ord.StopPriceChanged = newPrice;
+					ord.LimitPriceChanged = newPrice;
+				}
+				else
+				{
+					ord.LimitPriceChanged = newPrice;
+					ord.StopPriceChanged = ord.StopPrice;
+				}
+
+				acc.Change(new[] { ord });
+
+				// If this working Entry order has a pending bracket spec, keep it linked seamlessly!
+				if (!silentToast)
+				{
+					ShowTradeToast("Modified " + (ord.OrderType == OrderType.StopMarket ? "Stop" : "Limit") + " → " + FormatOrderflowPrice(newPrice));
+				}
+				RequestImmediateOrderflowRedraw();
+				return true;
+			}
+			catch (Exception ex)
+			{
+				if (!silentToast)
+					ShowTradeToast("Modify failed: " + ex.Message, true);
+				return false;
+			}
+		}
+
+		private void SubmitProtectiveExitOrderFromChart(bool isTakeProfit, double rawTargetPrice)
+		{
+			Account acc = EnsureActiveTradeAccountSelected();
+			Instrument inst = Instrument;
+			if (acc == null || inst == null)
+			{
+				ShowTradeToast("No active NinjaTrader account selected", true);
+				return;
+			}
+
+			Position pos = GetCurrentInstrumentPosition(acc);
+			if (pos == null || pos.MarketPosition == MarketPosition.Flat || pos.Quantity <= 0)
+			{
+				ShowTradeToast("No open position to attach " + (isTakeProfit ? "TP" : "SL"), true);
+				return;
+			}
+
+			double tick = TickSize > 0 ? TickSize : 0.05;
+			ResolveLiveBidAskLast(out double bid, out double ask, out _);
+			bool posLong = (pos.MarketPosition == MarketPosition.Long);
+			OrderAction exitAct = posLong ? OrderAction.Sell : OrderAction.BuyToCover;
+			double px = RoundToInstrumentTick(rawTargetPrice);
+
+			// Check if a working protective order of this same role already exists -> modify it instead of duplicating!
+			List<Order> working = GetCurrentInstrumentWorkingOrders(acc);
+			for (int i = 0; i < working.Count; i++)
+			{
+				int role = ClassifyWorkingOrderRole(working[i], pos);
+				if ((isTakeProfit && role == 1) || (!isTakeProfit && role == 2))
+				{
+					ModifyLiveWorkingOrderPrice(acc, working[i], px);
+					return;
+				}
+			}
+
+			try
+			{
+				if (isTakeProfit)
+				{
+					if (posLong && ask > 0 && px <= ask) px = RoundToInstrumentTick(ask + tick);
+					else if (!posLong && bid > 0 && px >= bid) px = RoundToInstrumentTick(bid - tick);
+
+					Order tpOrd = acc.CreateOrder(
+						inst, exitAct, OrderType.Limit, OrderEntry.Manual, selectedOrderTif,
+						pos.Quantity, px, 0.0, string.Empty, "TP", Globals.MaxDate, null);
+					acc.Submit(new[] { tpOrd });
+					ShowTradeToast("Placed TP Limit @ " + FormatOrderflowPrice(px));
+				}
+				else
+				{
+					if (posLong && bid > 0 && px >= bid) px = RoundToInstrumentTick(bid - tick);
+					else if (!posLong && ask > 0 && px <= ask) px = RoundToInstrumentTick(ask + tick);
+
+					Order slOrd = acc.CreateOrder(
+						inst, exitAct, OrderType.StopMarket, OrderEntry.Manual, selectedOrderTif,
+						pos.Quantity, 0.0, px, string.Empty, "SL", Globals.MaxDate, null);
+					acc.Submit(new[] { slOrd });
+					ShowTradeToast("Placed SL Stop @ " + FormatOrderflowPrice(px));
+				}
+				RequestImmediateOrderflowRedraw();
+			}
+			catch (Exception ex)
+			{
+				ShowTradeToast("Order error: " + ex.Message, true);
+			}
+		}
+
+		private void ExecuteSubmitOrderCore(
+			bool isBuy,
+			OrderType ordType,
+			double entryLimitOrStopPx,
+			int qty,
+			bool attachSl,
+			int slTicks,
+			bool attachTp,
+			int tpTicks,
+			bool enableTrail,
+			int trailTicks)
+		{
+			Account acc = EnsureActiveTradeAccountSelected();
+			Instrument inst = Instrument;
+			if (acc == null || inst == null)
+			{
+				ShowTradeToast("Select a connected NinjaTrader Account first", true);
+				return;
+			}
+
+			if (IsNewOrderBlockedByRiskDiscipline(acc, out string lockReason, out DateTime unlockAt))
+			{
+				ShowTradeToast("🔒 Order Blocked: " + lockReason + " (Unlocks " + unlockAt.ToString("hh:mm tt", CultureInfo.InvariantCulture) + ")", true);
+				RequestTradeUiSyncAsync();
+				return;
+			}
+
+			int safeQty = Math.Max(1, qty);
+			if (EnableCapitalProtector && CapitalProtectorAmount > 0)
+			{
+				int maxCapSlTicks = ComputeCapitalProtectorMaxSlTicks(safeQty);
+				if (!attachSl || slTicks <= 0)
+				{
+					attachSl = true;
+					slTicks = Math.Min(Math.Max(1, DefaultSlTicks), maxCapSlTicks);
+				}
+				else if (slTicks > maxCapSlTicks)
+				{
+					slTicks = maxCapSlTicks;
+					ShowTradeToast("🛡 Capital Protector capped SL to " + slTicks + "T (" + GetAccountCurrencyPrefix(acc) + CapitalProtectorAmount.ToString("0.##", CultureInfo.InvariantCulture) + " max)");
+				}
+			}
+
+			Position curPos = GetCurrentInstrumentPosition(acc);
+
+			OrderAction action;
+			if (isBuy)
+				action = (curPos != null && curPos.MarketPosition == MarketPosition.Short) ? OrderAction.BuyToCover : OrderAction.Buy;
+			else
+				action = (curPos != null && curPos.MarketPosition == MarketPosition.Long) ? OrderAction.Sell : OrderAction.SellShort;
+
+			double lmtPx = 0.0;
+			double stpPx = 0.0;
+			if (ordType == OrderType.Limit)
+				lmtPx = RoundToInstrumentTick(entryLimitOrStopPx);
+			else if (ordType == OrderType.StopMarket)
+				stpPx = RoundToInstrumentTick(entryLimitOrStopPx);
+
+			string entryTag = isBuy ? "Buy" : "Sell";
+
+			try
+			{
+				Order entryOrd = acc.CreateOrder(
+					inst,
+					action,
+					ordType,
+					OrderEntry.Manual,
+					selectedOrderTif,
+					safeQty,
+					lmtPx,
+					stpPx,
+					string.Empty,
+					entryTag,
+					Globals.MaxDate,
+					null);
+
+				if (entryOrd == null)
+				{
+					ShowTradeToast("Failed to create order", true);
+					return;
+				}
+
+				if (attachSl || attachTp)
+				{
+					lock (bracketLock)
+					{
+						pendingEntryBrackets.Add(new PendingBracketSpec
+						{
+							EntryOrder = entryOrd,
+							EntryTag = string.Empty,
+							Account = acc,
+							Instrument = inst,
+							IsLong = isBuy,
+							TotalQty = safeQty,
+							BracketedQty = 0,
+							Tif = selectedOrderTif,
+							HasSl = attachSl && slTicks > 0,
+							SlTicks = Math.Max(1, slTicks),
+							HasTp = attachTp && tpTicks > 0,
+							TpTicks = Math.Max(1, tpTicks),
+							TrailEnabled = enableTrail && attachSl,
+							TrailTicks = Math.Max(1, trailTicks),
+							CreatedUtc = DateTime.UtcNow
+						});
+					}
+				}
+
+				acc.Submit(new[] { entryOrd });
+
+				string sideStr = isBuy ? "BUY" : "SELL";
+				string typeStr = ordType == OrderType.Market
+					? "MKT"
+					: ((ordType == OrderType.Limit ? "LMT @ " : "STP @ ") + FormatOrderflowPrice(entryLimitOrStopPx));
+				ShowTradeToast("Submitted " + sideStr + " " + safeQty + " " + typeStr);
+				RequestImmediateOrderflowRedraw();
+			}
+			catch (Exception ex)
+			{
+				ShowTradeToast("Submit error: " + ex.Message, true);
+			}
+		}
+
+		private void ExecuteMoveStopToBreakeven()
+		{
+			Account acc = EnsureActiveTradeAccountSelected();
+			if (acc == null) return;
+			Position pos = GetCurrentInstrumentPosition(acc);
+			if (pos == null || pos.MarketPosition == MarketPosition.Flat)
+			{
+				ShowTradeToast("No open position for Breakeven", true);
+				return;
+			}
+
+			double bePrice = RoundToInstrumentTick(pos.AveragePrice);
+			List<Order> working = GetCurrentInstrumentWorkingOrders(acc);
+			for (int i = 0; i < working.Count; i++)
+			{
+				if (ClassifyWorkingOrderRole(working[i], pos) == 2)
+				{
+					ModifyLiveWorkingOrderPrice(acc, working[i], bePrice);
+					ShowTradeToast("Moved SL to Breakeven @ " + FormatOrderflowPrice(bePrice));
+					return;
+				}
+			}
+
+			SubmitProtectiveExitOrderFromChart(false, bePrice);
+		}
+
+		private void ExecuteReverseCurrentPosition()
+		{
+			Account acc = EnsureActiveTradeAccountSelected();
+			Instrument inst = Instrument;
+			if (acc == null || inst == null) return;
+
+			Position pos = GetCurrentInstrumentPosition(acc);
+			if (pos == null || pos.MarketPosition == MarketPosition.Flat || pos.Quantity <= 0)
+			{
+				ShowTradeToast("No open position to reverse", true);
+				return;
+			}
+
+			if (IsNewOrderBlockedByRiskDiscipline(acc, out string revBlockReason, out DateTime revUnlockAt))
+			{
+				ShowTradeToast("🔒 Reverse Blocked: " + revBlockReason + " (Unlocks " + revUnlockAt.ToString("hh:mm tt", CultureInfo.InvariantCulture) + ")", true);
+				return;
+			}
+
+			bool wasLong = (pos.MarketPosition == MarketPosition.Long);
+			int qty = pos.Quantity;
+
+			try
+			{
+				CancelAllInstrumentWorkingOrders(silentToast: true);
+				acc.Flatten(new Instrument[] { inst });
+
+				// Re-open same quantity in opposite direction on slight dispatcher delay after flatten
+				ChartControl cc = hookedOrderflowCC ?? ChartControl;
+				if (cc != null)
+				{
+					cc.Dispatcher.InvokeAsync(async () =>
+					{
+						await System.Threading.Tasks.Task.Delay(180);
+						ExecuteSubmitOrderCore(
+							!wasLong,
+							OrderType.Market,
+							0.0,
+							qty,
+							orderSlEnabled,
+							orderSlTicks,
+							orderTpEnabled,
+							orderTpTicks,
+							orderTrailEnabled,
+							orderTrailTicks);
+					});
+				}
+				ShowTradeToast("Reversing to " + (!wasLong ? "LONG " : "SHORT ") + qty);
+			}
+			catch (Exception ex)
+			{
+				ShowTradeToast("Reverse error: " + ex.Message, true);
+			}
+		}
+
+		private void ExecuteFlattenCurrentInstrument()
+		{
+			Account acc = EnsureActiveTradeAccountSelected();
+			Instrument inst = Instrument;
+			if (acc == null || inst == null) return;
+
+			try
+			{
+				lock (bracketLock)
+				{
+					pendingEntryBrackets.Clear();
+					activeTrailingOrders.Clear();
+				}
+				acc.Flatten(new Instrument[] { inst });
+				ShowTradeToast("Closed position & cancelled working orders");
+				RequestImmediateOrderflowRedraw();
+			}
+			catch (Exception ex)
+			{
+				ShowTradeToast("Flatten error: " + ex.Message, true);
+			}
+		}
+
+		private void CancelAllInstrumentWorkingOrders(bool silentToast = false)
+		{
+			Account acc = EnsureActiveTradeAccountSelected();
+			if (acc == null) return;
+
+			List<Order> working = GetCurrentInstrumentWorkingOrders(acc);
+			if (working.Count == 0)
+			{
+				if (!silentToast)
+					ShowTradeToast("Cancelled draft / no working orders");
+				return;
+			}
+
+			try
+			{
+				acc.Cancel(working.ToArray());
+				if (!silentToast)
+					ShowTradeToast("Cancelled " + working.Count + " working order(s)");
+				RequestImmediateOrderflowRedraw();
+			}
+			catch (Exception ex)
+			{
+				if (!silentToast)
+					ShowTradeToast("Cancel error: " + ex.Message, true);
+			}
+		}
+
+		// ====================================================================================================
+		// DOCKED RIGHT-SIDE TRADESEA WPF PANEL (Scalp | Order Tabs — Zero DOM, Docked Outside D2D Airspace)
+		// ====================================================================================================
+		private void EnsureTradePanelAttachedAsync()
+		{
+			ChartControl cc = ChartControl;
+			if (cc == null || State == State.Terminated)
+				return;
+
+			EnsureActiveTradeAccountSelected();
+
+			if (tradePanelRoot != null && hookedTradeChartWindow == cc.OwnerChart)
+				return;
+
+			if (tradePanelAttachQueued)
+				return;
+			tradePanelAttachQueued = true;
+
+			try
+			{
+				cc.Dispatcher.InvokeAsync(() =>
+				{
+					tradePanelAttachQueued = false;
+					if (State == State.Terminated || ChartControl == null)
+						return;
+					AttachTradePanelOnUiThread(ChartControl);
+				});
+			}
+			catch
+			{
+				tradePanelAttachQueued = false;
+			}
+		}
+
+		private WpfControls.Grid ResolveChartHostGrid(NinjaTrader.Gui.Chart.Chart chartWin)
+		{
+			if (chartWin == null)
+				return null;
+			try
+			{
+				FieldInfo fi = typeof(NinjaTrader.Gui.Chart.Chart).GetField("grdChart", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+				if (fi != null)
+				{
+					var g = fi.GetValue(chartWin) as WpfControls.Grid;
+					if (g != null)
+						return g;
+				}
+			}
+			catch { }
+
+			try
+			{
+				if (chartWin.MainTabControl != null)
+				{
+					var parent = WpfMedia.VisualTreeHelper.GetParent(chartWin.MainTabControl) as WpfControls.Grid;
+					if (parent != null)
+						return parent;
+				}
+			}
+			catch { }
+			return null;
+		}
+
+		private void AttachTradePanelOnUiThread(ChartControl cc)
+		{
+			if (cc == null || cc.OwnerChart == null)
+				return;
+
+			NinjaTrader.Gui.Chart.Chart chartWin = cc.OwnerChart;
+			if (tradePanelRoot != null && ReferenceEquals(hookedTradeChartWindow, chartWin))
+			{
+				UpdateTradePanelVisibilityImmediate();
+				return;
+			}
+
+			DetachTradePanelOnlyOnUiThread();
+
+			WpfControls.Grid hostGrid = ResolveChartHostGrid(chartWin);
+			if (hostGrid == null)
+				return;
+
+			// Inherit selected Account from NinjaTrader's ChartTrader before hiding ChartTrader
+			try
+			{
+				if (chartWin.ChartTrader != null && chartWin.ChartTrader.Account != null && activeTradeAccount == null)
+					activeTradeAccount = chartWin.ChartTrader.Account;
+			}
+			catch { }
+			EnsureActiveTradeAccountSelected();
+
+			tradePanelRoot = BuildTradeseaRightPanelVisualTree();
+			tradePanelColumnDef = new WpfControls.ColumnDefinition
+			{
+				Width = new GridLength(0, GridUnitType.Pixel)
+			};
+
+			hostGrid.ColumnDefinitions.Add(tradePanelColumnDef);
+			int colIdx = hostGrid.ColumnDefinitions.Count - 1;
+			WpfControls.Grid.SetColumn(tradePanelRoot, colIdx);
+			if (hostGrid.RowDefinitions != null && hostGrid.RowDefinitions.Count > 1)
+				WpfControls.Grid.SetRowSpan(tradePanelRoot, hostGrid.RowDefinitions.Count);
+
+			hostGrid.Children.Add(tradePanelRoot);
+			hookedTradeChartWindow = chartWin;
+			hookedChartMainGrid = hostGrid;
+
+			try
+			{
+				if (chartWin.MainTabControl != null)
+				{
+					hookedChartTabCtrl = chartWin.MainTabControl;
+					hookedChartTabCtrl.SelectionChanged -= OnOwnerChartTabSelectionChanged;
+					hookedChartTabCtrl.SelectionChanged += OnOwnerChartTabSelectionChanged;
+				}
+			}
+			catch { }
+
+			if (tradeUiTimer == null)
+			{
+				tradeUiTimer = new System.Windows.Threading.DispatcherTimer(
+					TimeSpan.FromMilliseconds(260),
+					System.Windows.Threading.DispatcherPriority.Background,
+					(s, e) =>
+					{
+						if (State == State.Terminated)
+							return;
+						UpdateTradePanelVisibilityImmediate();
+						if (tradePanelRoot != null && tradePanelRoot.Visibility == Visibility.Visible)
+							SyncTradePanelUiFromState();
+
+						int curSec = DateTime.UtcNow.Second;
+						if (curSec != lastCountdownTickSec)
+						{
+							lastCountdownTickSec = curSec;
+							ChartControl activeCc = hookedOrderflowCC ?? ChartControl;
+							if (activeCc != null && IsOrderflowChartControlActive(activeCc))
+								RequestImmediateOrderflowRedraw();
+						}
+					},
+					cc.Dispatcher);
+			}
+			tradeUiTimer.Start();
+
+			UpdateTradePanelVisibilityImmediate();
+			SyncTradePanelUiFromState();
+		}
+
+		private void OnOwnerChartTabSelectionChanged(object sender, WpfControls.SelectionChangedEventArgs e)
+		{
+			UpdateTradePanelVisibilityImmediate();
+		}
+
+		private void UpdateTradePanelVisibilityImmediate()
+		{
+			ChartControl cc = hookedOrderflowCC ?? ChartControl;
+			if (cc == null)
+				return;
+
+			Action applyAct = () =>
+			{
+				try
+				{
+					if (tradePanelRoot == null || tradePanelColumnDef == null)
+					{
+						if (runtimeShowTradePanel && State != State.Terminated && ChartControl != null)
+							AttachTradePanelOnUiThread(ChartControl);
+						return;
+					}
+
+					bool isActiveTab = IsOrderflowChartControlActive(cc);
+					bool showNow = runtimeShowTradePanel && isActiveTab && State != State.Terminated;
+
+					if (showNow && HideBuiltInChartTrader && hookedTradeChartWindow != null && hookedTradeChartWindow.ChartTrader != null)
+					{
+						try
+						{
+							if (hookedTradeChartWindow.ChartTrader.ChartTraderVisibility == ChartTraderVisibility.Visible)
+							{
+								if (hookedTradeChartWindow.ChartTrader.Account != null && activeTradeAccount == null)
+									SelectTradeAccount(hookedTradeChartWindow.ChartTrader.Account);
+								hookedTradeChartWindow.ChartTrader.ChartTraderVisibility = ChartTraderVisibility.Collapsed;
+							}
+						}
+						catch { }
+					}
+
+					double targetW = showNow ? 288.0 : 0.0;
+					Visibility targetVis = showNow ? Visibility.Visible : Visibility.Collapsed;
+					if (tradePanelRoot.Visibility != targetVis)
+						tradePanelRoot.Visibility = targetVis;
+					if (Math.Abs(tradePanelColumnDef.Width.Value - targetW) > 0.5)
+						tradePanelColumnDef.Width = new GridLength(targetW, GridUnitType.Pixel);
+
+					if (showNow)
+						SyncTradePanelUiFromState();
+				}
+				catch { }
+			};
+
+			if (cc.Dispatcher.CheckAccess())
+				applyAct();
+			else
+				cc.Dispatcher.InvokeAsync(applyAct);
+		}
+
+		private void DetachTradePanelAndAccountEvents()
+		{
+			UnsubscribeAccountEventsOnly();
+			ChartControl cc = hookedOrderflowCC ?? ChartControl;
+			if (cc != null && cc.Dispatcher != null)
+			{
+				try
+				{
+					if (cc.Dispatcher.CheckAccess())
+						DetachTradePanelOnlyOnUiThread();
+					else
+						cc.Dispatcher.InvokeAsync(DetachTradePanelOnlyOnUiThread);
+				}
+				catch { }
+			}
+		}
+
+		private void DetachTradePanelOnlyOnUiThread()
+		{
+			try
+			{
+				if (tradeUiTimer != null)
+				{
+					tradeUiTimer.Stop();
+					tradeUiTimer = null;
+				}
+			}
+			catch { }
+
+			try
+			{
+				if (tradeAccountPopup != null)
+				{
+					tradeAccountPopup.IsOpen = false;
+					tradeAccountPopup = null;
+				}
+			}
+			catch { }
+
+			try
+			{
+				if (hookedChartTabCtrl != null)
+				{
+					hookedChartTabCtrl.SelectionChanged -= OnOwnerChartTabSelectionChanged;
+					hookedChartTabCtrl = null;
+				}
+			}
+			catch { }
+
+			try
+			{
+				if (hookedChartMainGrid != null)
+				{
+					if (tradePanelRoot != null && hookedChartMainGrid.Children.Contains(tradePanelRoot))
+						hookedChartMainGrid.Children.Remove(tradePanelRoot);
+					if (tradePanelColumnDef != null && hookedChartMainGrid.ColumnDefinitions.Contains(tradePanelColumnDef))
+						hookedChartMainGrid.ColumnDefinitions.Remove(tradePanelColumnDef);
+				}
+			}
+			catch { }
+
+			tradePanelRoot = null;
+			tradePanelColumnDef = null;
+			hookedChartMainGrid = null;
+			hookedTradeChartWindow = null;
+		}
+
+		private void RequestTradeUiSyncAsync()
+		{
+			ChartControl cc = hookedOrderflowCC ?? ChartControl;
+			if (cc == null || tradePanelRoot == null)
+				return;
+			if (System.Threading.Interlocked.CompareExchange(ref uiTradeSyncQueued, 1, 0) != 0)
+				return;
+			try
+			{
+				cc.Dispatcher.InvokeAsync(() =>
+				{
+					System.Threading.Interlocked.Exchange(ref uiTradeSyncQueued, 0);
+					SyncTradePanelUiFromState();
+				}, System.Windows.Threading.DispatcherPriority.Background);
+			}
+			catch
+			{
+				System.Threading.Interlocked.Exchange(ref uiTradeSyncQueued, 0);
+			}
+		}
+
+		private readonly WpfControls.Button[] slPresetBtns = new WpfControls.Button[4];
+		private readonly WpfControls.Button[] tpPresetBtns = new WpfControls.Button[4];
+
+		private WpfControls.TextBox CreateDarkInputBox(string initialText, double fontSize = 13.0, System.Windows.TextAlignment align = System.Windows.TextAlignment.Left)
+		{
+			var tb = new WpfControls.TextBox
+			{
+				Style = null,
+				MinWidth = 0,
+				MinHeight = 0,
+				Text = initialText,
+				FontFamily = new WpfMedia.FontFamily("Segoe UI"),
+				FontSize = fontSize,
+				FontWeight = FontWeights.Bold,
+				Foreground = MakeFrozenBrush(248, 250, 252),
+				CaretBrush = MakeFrozenBrush(56, 189, 248),
+				SelectionBrush = MakeFrozenBrush(37, 99, 235),
+				Background = WpfMedia.Brushes.Transparent,
+				BorderThickness = new Thickness(0),
+				VerticalAlignment = VerticalAlignment.Center,
+				VerticalContentAlignment = VerticalAlignment.Center,
+				TextAlignment = align,
+				Padding = new Thickness(2, 0, 2, 0)
+			};
+
+			// Clean custom template so NinjaTrader's global TextBox chrome/padding never clips digits
+			var tmpl = new WpfControls.ControlTemplate(typeof(WpfControls.TextBox));
+			var hostFactory = new FrameworkElementFactory(typeof(WpfControls.ScrollViewer));
+			hostFactory.Name = "PART_ContentHost";
+			hostFactory.SetValue(FrameworkElement.MarginProperty, new Thickness(0));
+			hostFactory.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+			tmpl.VisualTree = hostFactory;
+			tb.Template = tmpl;
+			return tb;
+		}
+
+		private WpfControls.CheckBox CreateDarkCheckBox(string labelText, bool initialChecked, Action<bool> onChanged)
+		{
+			var cb = new WpfControls.CheckBox
+			{
+				Style = null,
+				MinWidth = 0,
+				MinHeight = 0,
+				Content = labelText,
+				FontFamily = new WpfMedia.FontFamily("Segoe UI"),
+				FontSize = 12.5,
+				FontWeight = FontWeights.Bold,
+				Foreground = MakeFrozenBrush(241, 245, 249),
+				IsChecked = initialChecked,
+				VerticalAlignment = VerticalAlignment.Center,
+				VerticalContentAlignment = VerticalAlignment.Center,
+				Cursor = Cursors.Hand,
+				FocusVisualStyle = null
+			};
+
+			var tmpl = new WpfControls.ControlTemplate(typeof(WpfControls.CheckBox));
+			var stackFactory = new FrameworkElementFactory(typeof(WpfControls.StackPanel));
+			stackFactory.SetValue(WpfControls.StackPanel.OrientationProperty, WpfControls.Orientation.Horizontal);
+			stackFactory.SetValue(WpfControls.Panel.BackgroundProperty, WpfMedia.Brushes.Transparent);
+
+			var boxFactory = new FrameworkElementFactory(typeof(WpfControls.Border));
+			boxFactory.Name = "chkBox";
+			boxFactory.SetValue(FrameworkElement.WidthProperty, 16.0);
+			boxFactory.SetValue(FrameworkElement.HeightProperty, 16.0);
+			boxFactory.SetValue(WpfControls.Border.CornerRadiusProperty, new CornerRadius(3.5));
+			boxFactory.SetValue(WpfControls.Border.BackgroundProperty, MakeFrozenBrush(22, 29, 42));
+			boxFactory.SetValue(WpfControls.Border.BorderBrushProperty, MakeFrozenBrush(100, 116, 139));
+			boxFactory.SetValue(WpfControls.Border.BorderThicknessProperty, new Thickness(1.5));
+			boxFactory.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+
+			var markFactory = new FrameworkElementFactory(typeof(WpfControls.TextBlock));
+			markFactory.Name = "chkMark";
+			markFactory.SetValue(FrameworkElement.StyleProperty, null);
+			markFactory.SetValue(WpfControls.TextBlock.TextProperty, "✓");
+			markFactory.SetValue(WpfControls.TextBlock.FontSizeProperty, 11.2);
+			markFactory.SetValue(WpfControls.TextBlock.FontWeightProperty, FontWeights.Bold);
+			markFactory.SetValue(WpfControls.TextBlock.ForegroundProperty, WpfMedia.Brushes.White);
+			markFactory.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+			markFactory.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+			markFactory.SetValue(FrameworkElement.MarginProperty, new Thickness(0, -1, 0, 0));
+			markFactory.SetValue(UIElement.VisibilityProperty, Visibility.Collapsed);
+			boxFactory.AppendChild(markFactory);
+
+			var lblFactory = new FrameworkElementFactory(typeof(WpfControls.TextBlock));
+			lblFactory.SetValue(FrameworkElement.StyleProperty, null);
+			lblFactory.SetBinding(WpfControls.TextBlock.TextProperty, new System.Windows.Data.Binding("Content") { RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+			lblFactory.SetBinding(WpfControls.TextBlock.FontFamilyProperty, new System.Windows.Data.Binding("FontFamily") { RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+			lblFactory.SetBinding(WpfControls.TextBlock.FontSizeProperty, new System.Windows.Data.Binding("FontSize") { RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+			lblFactory.SetBinding(WpfControls.TextBlock.FontWeightProperty, new System.Windows.Data.Binding("FontWeight") { RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+			lblFactory.SetBinding(WpfControls.TextBlock.ForegroundProperty, new System.Windows.Data.Binding("Foreground") { RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+			lblFactory.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+			lblFactory.SetValue(FrameworkElement.MarginProperty, new Thickness(7, 0, 0, 0));
+
+			stackFactory.AppendChild(boxFactory);
+			stackFactory.AppendChild(lblFactory);
+			tmpl.VisualTree = stackFactory;
+
+			var checkedTrig = new Trigger { Property = WpfPrimitives.ToggleButton.IsCheckedProperty, Value = true };
+			checkedTrig.Setters.Add(new Setter(WpfControls.Border.BackgroundProperty, MakeFrozenBrush(16, 185, 129), "chkBox"));
+			checkedTrig.Setters.Add(new Setter(WpfControls.Border.BorderBrushProperty, MakeFrozenBrush(52, 211, 153), "chkBox"));
+			checkedTrig.Setters.Add(new Setter(UIElement.VisibilityProperty, Visibility.Visible, "chkMark"));
+			tmpl.Triggers.Add(checkedTrig);
+
+			cb.Template = tmpl;
+			cb.Checked += (s, e) => { if (!isSyncingTradePanelUi) onChanged?.Invoke(true); };
+			cb.Unchecked += (s, e) => { if (!isSyncingTradePanelUi) onChanged?.Invoke(false); };
+			return cb;
+		}
+
+		private WpfControls.Button CreateFlatDarkButton(string text, WpfMedia.Brush bg, WpfMedia.Brush border, WpfMedia.Brush fg, double fontSize = 11.0, double cornerRadius = 5.0, Thickness? pad = null)
+		{
+			var btn = new WpfControls.Button
+			{
+				Style = null,
+				MinWidth = 0,
+				MinHeight = 0,
+				Content = text,
+				FontFamily = new WpfMedia.FontFamily("Segoe UI"),
+				FontSize = fontSize,
+				FontWeight = FontWeights.SemiBold,
+				Foreground = fg,
+				Background = bg,
+				BorderBrush = border,
+				BorderThickness = new Thickness(1.0),
+				Padding = pad ?? new Thickness(6, 4, 6, 4),
+				HorizontalContentAlignment = HorizontalAlignment.Center,
+				VerticalContentAlignment = VerticalAlignment.Center,
+				Cursor = Cursors.Hand,
+				FocusVisualStyle = null
+			};
+
+			var template = new WpfControls.ControlTemplate(typeof(WpfControls.Button));
+			var bdFactory = new FrameworkElementFactory(typeof(WpfControls.Border));
+			bdFactory.Name = "bd";
+			bdFactory.SetValue(WpfControls.Border.CornerRadiusProperty, new CornerRadius(cornerRadius));
+			bdFactory.SetBinding(WpfControls.Border.BackgroundProperty, new System.Windows.Data.Binding("Background") { RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+			bdFactory.SetBinding(WpfControls.Border.BorderBrushProperty, new System.Windows.Data.Binding("BorderBrush") { RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+			bdFactory.SetBinding(WpfControls.Border.BorderThicknessProperty, new System.Windows.Data.Binding("BorderThickness") { RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+			bdFactory.SetBinding(WpfControls.Border.PaddingProperty, new System.Windows.Data.Binding("Padding") { RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+
+			// Explicit style-free centered TextBlock so NinjaTrader's global implicit styles never push button text off-center
+			var txtFactory = new FrameworkElementFactory(typeof(WpfControls.TextBlock));
+			txtFactory.SetValue(FrameworkElement.StyleProperty, null);
+			txtFactory.SetBinding(WpfControls.TextBlock.TextProperty, new System.Windows.Data.Binding("Content") { RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+			txtFactory.SetBinding(WpfControls.TextBlock.FontFamilyProperty, new System.Windows.Data.Binding("FontFamily") { RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+			txtFactory.SetBinding(WpfControls.TextBlock.FontSizeProperty, new System.Windows.Data.Binding("FontSize") { RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+			txtFactory.SetBinding(WpfControls.TextBlock.FontWeightProperty, new System.Windows.Data.Binding("FontWeight") { RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+			txtFactory.SetBinding(WpfControls.TextBlock.ForegroundProperty, new System.Windows.Data.Binding("Foreground") { RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent });
+			txtFactory.SetValue(WpfControls.TextBlock.TextAlignmentProperty, System.Windows.TextAlignment.Center);
+			txtFactory.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+			txtFactory.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+			bdFactory.AppendChild(txtFactory);
+
+			var hoverTrig = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
+			hoverTrig.Setters.Add(new Setter(UIElement.OpacityProperty, 0.88, "bd"));
+			template.Triggers.Add(hoverTrig);
+
+			template.VisualTree = bdFactory;
+			btn.Template = template;
+			return btn;
+		}
+
+		private WpfControls.Border BuildTradeseaRightPanelVisualTree()
+		{
+			var bgPanel = MakeFrozenBrush(13, 16, 23);         // #0D1017 Tradesea Deep Obsidian
+			var bgHeader = MakeFrozenBrush(9, 12, 18);         // #090C12 Header
+			var bgInput = MakeFrozenBrush(21, 27, 38);         // #151B26 Elevated Readable Input Card
+			var borderSubtle = MakeFrozenBrush(51, 65, 85);    // #334155 High-Clarity Slate Border
+			var txtMuted = MakeFrozenBrush(168, 181, 199);     // #A8B5C7 Readable Crisp Secondary Label
+			var txtBright = MakeFrozenBrush(248, 250, 252);    // #F8FAFC Pure Crisp White
+			var greenTradesea = MakeFrozenBrush(15, 159, 114); // #0F9F72 Tradesea Confirm Teal-Green
+			var redTradesea = MakeFrozenBrush(225, 29, 72);    // #E11D48 Vivid Crimson
+
+			var root = new WpfControls.Border
+			{
+				Background = bgPanel,
+				BorderBrush = MakeFrozenBrush(38, 49, 66),
+				BorderThickness = new Thickness(1, 0, 0, 0),
+				UseLayoutRounding = true,
+				SnapsToDevicePixels = true
+			};
+			WpfMedia.TextOptions.SetTextFormattingMode(root, WpfMedia.TextFormattingMode.Display);
+			WpfMedia.TextOptions.SetTextRenderingMode(root, WpfMedia.TextRenderingMode.ClearType);
+			WpfMedia.RenderOptions.SetClearTypeHint(root, WpfMedia.ClearTypeHint.Enabled);
+			// Shield all child TextBlocks from NinjaTrader's global implicit TextBlock alignment/margin styles
+			root.Resources[typeof(WpfControls.TextBlock)] = new Style(typeof(WpfControls.TextBlock));
+
+			// Prevent chart shortcut keys from firing when typing numbers inside panel inputs
+			root.PreviewKeyDown += (s, e) =>
+			{
+				if (e.OriginalSource is WpfPrimitives.TextBoxBase)
+					e.Handled = false;
+			};
+
+			var outerGrid = new WpfControls.Grid();
+			outerGrid.RowDefinitions.Add(new WpfControls.RowDefinition { Height = GridLength.Auto }); // 0: Top Account & Bal/RP&L/UP&L
+			outerGrid.RowDefinitions.Add(new WpfControls.RowDefinition { Height = GridLength.Auto }); // 1: Scalp | Order Tabs
+			outerGrid.RowDefinitions.Add(new WpfControls.RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // 2: Scrollable Body
+			outerGrid.RowDefinitions.Add(new WpfControls.RowDefinition { Height = GridLength.Auto }); // 3: Pinned Confirm / Cancel Footer
+			root.Child = outerGrid;
+
+			// =========================================================================
+			// ROW 0: Top Account Selector Pill + Live Bal / RP&L / UP&L Header
+			// =========================================================================
+			var hdrBorder = new WpfControls.Border
+			{
+				Background = bgHeader,
+				BorderBrush = borderSubtle,
+				BorderThickness = new Thickness(0, 0, 0, 1),
+				Padding = new Thickness(10, 7, 10, 7)
+			};
+			var hdrStack = new WpfControls.StackPanel();
+			hdrBorder.Child = hdrStack;
+
+			var acctTopRow = new WpfControls.Grid();
+			acctTopRow.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+			acctTopRow.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = GridLength.Auto });
+
+			var acctPickerBtn = new WpfControls.Border
+			{
+				Background = bgInput,
+				BorderBrush = borderSubtle,
+				BorderThickness = new Thickness(1),
+				CornerRadius = new CornerRadius(5),
+				Padding = new Thickness(8, 4, 8, 4),
+				Cursor = Cursors.Hand,
+				HorizontalAlignment = HorizontalAlignment.Stretch,
+				Margin = new Thickness(0, 0, 6, 0)
+			};
+			var acctBtnInner = new WpfControls.DockPanel();
+			var greenDot = new WpfShapes.Ellipse
+			{
+				Width = 7,
+				Height = 7,
+				Fill = MakeFrozenBrush(16, 185, 129),
+				VerticalAlignment = VerticalAlignment.Center,
+				Margin = new Thickness(0, 0, 6, 0)
+			};
+			WpfControls.DockPanel.SetDock(greenDot, WpfControls.Dock.Left);
+			acctBtnInner.Children.Add(greenDot);
+
+			var acctChevron = new WpfControls.TextBlock
+			{
+				Text = "▾",
+				FontSize = 11,
+				Foreground = txtMuted,
+				VerticalAlignment = VerticalAlignment.Center,
+				Margin = new Thickness(6, 0, 0, 0)
+			};
+			WpfControls.DockPanel.SetDock(acctChevron, WpfControls.Dock.Right);
+			acctBtnInner.Children.Add(acctChevron);
+
+			txtSelectedAccountLabel = new WpfControls.TextBlock
+			{
+				Text = "Sim101",
+				FontFamily = new WpfMedia.FontFamily("Segoe UI"),
+				FontSize = 11.8,
+				FontWeight = FontWeights.Bold,
+				Foreground = txtBright,
+				VerticalAlignment = VerticalAlignment.Center,
+				TextTrimming = TextTrimming.CharacterEllipsis
+			};
+			acctBtnInner.Children.Add(txtSelectedAccountLabel);
+			acctPickerBtn.Child = acctBtnInner;
+
+			tradeAccountPopupList = new WpfControls.StackPanel();
+			tradeAccountPopup = new WpfPrimitives.Popup
+			{
+				PlacementTarget = acctPickerBtn,
+				Placement = WpfPrimitives.PlacementMode.Bottom,
+				StaysOpen = false,
+				AllowsTransparency = true,
+				Child = new WpfControls.Border
+				{
+					MinWidth = 205,
+					MaxHeight = 240,
+					Background = MakeFrozenBrush(18, 23, 33),
+					BorderBrush = MakeFrozenBrush(48, 60, 82),
+					BorderThickness = new Thickness(1),
+					CornerRadius = new CornerRadius(6),
+					Padding = new Thickness(4),
+					Child = new WpfControls.ScrollViewer
+					{
+						VerticalScrollBarVisibility = WpfControls.ScrollBarVisibility.Auto,
+						Content = tradeAccountPopupList
+					}
+				}
+			};
+
+			acctPickerBtn.MouseLeftButtonDown += (s, e) =>
+			{
+				PopulateAccountPopupItems();
+				tradeAccountPopup.IsOpen = !tradeAccountPopup.IsOpen;
+				e.Handled = true;
+			};
+			WpfControls.Grid.SetColumn(acctPickerBtn, 0);
+			acctTopRow.Children.Add(acctPickerBtn);
+
+			var btnCollapsePanel = CreateFlatDarkButton(
+				"⇥", bgInput, borderSubtle, txtBright, 12.0, 5.0, new Thickness(8, 3, 8, 3));
+			btnCollapsePanel.Width = 32;
+			btnCollapsePanel.ToolTip = "Collapse Order Panel (Re-open from Top Toolbar)";
+			btnCollapsePanel.Click += (s, e) =>
+			{
+				runtimeShowTradePanel = false;
+				EnableTradePanel = false;
+				UpdateTradePanelVisibilityImmediate();
+				RequestImmediateOrderflowRedraw();
+			};
+			WpfControls.Grid.SetColumn(btnCollapsePanel, 1);
+			acctTopRow.Children.Add(btnCollapsePanel);
+			hdrStack.Children.Add(acctTopRow);
+
+			// Live Bal | RP&L | UP&L Metrics Bar (Tradesea Top Strip)
+			var metricsGrid = new WpfControls.Grid { Margin = new Thickness(0, 6, 0, 0) };
+			metricsGrid.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(1.15, GridUnitType.Star) });
+			metricsGrid.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(1.0, GridUnitType.Star) });
+			metricsGrid.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(1.0, GridUnitType.Star) });
+
+			WpfControls.StackPanel MakeMetricCol(string title, out WpfControls.TextBlock valOut, HorizontalAlignment hAlign)
+			{
+				var sp = new WpfControls.StackPanel { Orientation = WpfControls.Orientation.Horizontal, HorizontalAlignment = hAlign };
+				sp.Children.Add(new WpfControls.TextBlock
+				{
+					Text = title + " ",
+					FontSize = 10.8,
+					FontWeight = FontWeights.SemiBold,
+					Foreground = txtMuted,
+					VerticalAlignment = VerticalAlignment.Center
+				});
+				valOut = new WpfControls.TextBlock
+				{
+					Text = "$--",
+					FontSize = 11.4,
+					FontWeight = FontWeights.Bold,
+					Foreground = txtBright,
+					VerticalAlignment = VerticalAlignment.Center
+				};
+				sp.Children.Add(valOut);
+				return sp;
+			}
+
+			var colBal = MakeMetricCol("Bal", out txtBalVal, HorizontalAlignment.Left);
+			var colRpl = MakeMetricCol("RP&L", out txtRplVal, HorizontalAlignment.Center);
+			var colUpl = MakeMetricCol("UP&L", out txtUplVal, HorizontalAlignment.Right);
+			WpfControls.Grid.SetColumn(colBal, 0);
+			WpfControls.Grid.SetColumn(colRpl, 1);
+			WpfControls.Grid.SetColumn(colUpl, 2);
+			metricsGrid.Children.Add(colBal);
+			metricsGrid.Children.Add(colRpl);
+			metricsGrid.Children.Add(colUpl);
+			hdrStack.Children.Add(metricsGrid);
+
+			WpfControls.Grid.SetRow(hdrBorder, 0);
+			outerGrid.Children.Add(hdrBorder);
+
+			// =========================================================================
+			// ROW 1: Mode Tabs Bar — [ Scalp ]  [ Order ] (Zero DOM Tab, Blue Underline)
+			// =========================================================================
+			var tabsBorder = new WpfControls.Border
+			{
+				Background = bgPanel,
+				BorderBrush = borderSubtle,
+				BorderThickness = new Thickness(0, 0, 0, 1),
+				Padding = new Thickness(10, 2, 10, 0)
+			};
+			var tabsGrid = new WpfControls.Grid();
+			tabsGrid.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+			tabsGrid.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+			WpfControls.Border MakeModeTab(string title, out WpfControls.TextBlock tOut, out WpfControls.Border underlineOut, Action onClick)
+			{
+				var tabBd = new WpfControls.Border { Background = WpfMedia.Brushes.Transparent, Cursor = Cursors.Hand, Padding = new Thickness(0, 6, 0, 0) };
+				var st = new WpfControls.StackPanel();
+				tOut = new WpfControls.TextBlock
+				{
+					Text = title,
+					FontSize = 12.2,
+					FontWeight = FontWeights.SemiBold,
+					HorizontalAlignment = HorizontalAlignment.Center,
+					Margin = new Thickness(0, 0, 0, 6)
+				};
+				underlineOut = new WpfControls.Border
+				{
+					Height = 2.2,
+					CornerRadius = new CornerRadius(1),
+					Background = WpfMedia.Brushes.Transparent
+				};
+				st.Children.Add(tOut);
+				st.Children.Add(underlineOut);
+				tabBd.Child = st;
+				tabBd.MouseLeftButtonDown += (s, e) => { onClick?.Invoke(); e.Handled = true; };
+				return tabBd;
+			}
+
+			tabBtnScalp = MakeModeTab("Scalp", out tabTxtScalp, out tabLineScalp, () =>
+			{
+				isTradeTabScalp = true;
+				SyncTradePanelUiFromState();
+				RequestImmediateOrderflowRedraw();
+			});
+			tabBtnOrder = MakeModeTab("Order", out tabTxtOrder, out tabLineOrder, () =>
+			{
+				isTradeTabScalp = false;
+				SyncTradePanelUiFromState();
+				RequestImmediateOrderflowRedraw();
+			});
+			WpfControls.Grid.SetColumn(tabBtnScalp, 0);
+			WpfControls.Grid.SetColumn(tabBtnOrder, 1);
+			tabsGrid.Children.Add(tabBtnScalp);
+			tabsGrid.Children.Add(tabBtnOrder);
+			tabsBorder.Child = tabsGrid;
+
+			WpfControls.Grid.SetRow(tabsBorder, 1);
+			outerGrid.Children.Add(tabsBorder);
+
+			// =========================================================================
+			// ROW 2: Scrollable Main Content Container (Order Tab + Scalp Tab)
+			// =========================================================================
+			var bodyScroll = new WpfControls.ScrollViewer
+			{
+				VerticalScrollBarVisibility = WpfControls.ScrollBarVisibility.Auto,
+				HorizontalScrollBarVisibility = WpfControls.ScrollBarVisibility.Disabled,
+				Padding = new Thickness(11, 10, 11, 8)
+			};
+			var bodyHost = new WpfControls.StackPanel();
+			bodyScroll.Content = bodyHost;
+
+			// Symbol + TIF Header Row (Shared above tabs, matching "COMEX:MGC" in Image 2)
+			var symRow = new WpfControls.DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+			btnTifToggle = CreateFlatDarkButton("DAY", bgInput, borderSubtle, txtMuted, 10.2, 4.0, new Thickness(7, 2, 7, 2));
+			btnTifToggle.ToolTip = "Toggle Time-In-Force (DAY / GTC)";
+			btnTifToggle.Click += (s, e) =>
+			{
+				selectedOrderTif = (selectedOrderTif == TimeInForce.Day) ? TimeInForce.Gtc : TimeInForce.Day;
+				SyncTradePanelUiFromState();
+			};
+			WpfControls.DockPanel.SetDock(btnTifToggle, WpfControls.Dock.Right);
+			symRow.Children.Add(btnTifToggle);
+
+			txtSymbolHeader = new WpfControls.TextBlock
+			{
+				Text = "MGC",
+				FontSize = 12.0,
+				FontWeight = FontWeights.SemiBold,
+				Foreground = MakeFrozenBrush(203, 213, 225),
+				VerticalAlignment = VerticalAlignment.Center
+			};
+			symRow.Children.Add(txtSymbolHeader);
+			bodyHost.Children.Add(symRow);
+
+			// Live Open Position Quick-Management Banner (Visible whenever holding an open position on this symbol)
+			livePosBanner = new WpfControls.Border
+			{
+				Background = MakeFrozenBrush(17, 25, 39),
+				BorderBrush = MakeFrozenBrush(59, 76, 104),
+				BorderThickness = new Thickness(1.2),
+				CornerRadius = new CornerRadius(6),
+				Padding = new Thickness(10, 8, 10, 8),
+				Margin = new Thickness(0, 0, 0, 10),
+				Visibility = Visibility.Collapsed
+			};
+			var livePosStack = new WpfControls.StackPanel();
+			var livePosTop = new WpfControls.DockPanel { Margin = new Thickness(0, 0, 0, 7) };
+			txtLivePosPnl = new WpfControls.TextBlock
+			{
+				Style = null,
+				Text = "+$0.00",
+				FontSize = 11.6,
+				FontWeight = FontWeights.SemiBold,
+				Foreground = greenTradesea,
+				VerticalAlignment = VerticalAlignment.Center
+			};
+			WpfControls.DockPanel.SetDock(txtLivePosPnl, WpfControls.Dock.Right);
+			livePosTop.Children.Add(txtLivePosPnl);
+
+			txtLivePosBanner = new WpfControls.TextBlock
+			{
+				Style = null,
+				Text = "LONG +1",
+				FontSize = 11.4,
+				FontWeight = FontWeights.SemiBold,
+				Foreground = txtBright,
+				VerticalAlignment = VerticalAlignment.Center
+			};
+			livePosTop.Children.Add(txtLivePosBanner);
+			livePosStack.Children.Add(livePosTop);
+
+			var livePosActions = new WpfControls.Grid();
+			livePosActions.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(0.85, GridUnitType.Star) });
+			livePosActions.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(6, GridUnitType.Pixel) });
+			livePosActions.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(1.10, GridUnitType.Star) });
+			livePosActions.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(6, GridUnitType.Pixel) });
+			livePosActions.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(1.15, GridUnitType.Star) });
+
+			var btnQuickBe = CreateFlatDarkButton("BE", MakeFrozenBrush(26, 35, 50), borderSubtle, txtBright, 10.6, 5.0, new Thickness(4, 4, 4, 4));
+			btnQuickBe.ToolTip = "Move Stop Loss to Breakeven (Entry Price)";
+			btnQuickBe.Click += (s, e) => ExecuteMoveStopToBreakeven();
+
+			var btnQuickRev = CreateFlatDarkButton("Reverse", MakeFrozenBrush(26, 35, 50), borderSubtle, txtBright, 10.6, 5.0, new Thickness(4, 4, 4, 4));
+			btnQuickRev.Click += (s, e) => ExecuteReverseCurrentPosition();
+
+			var btnQuickFlat = CreateFlatDarkButton("Close ✕", MakeFrozenBrush(145, 24, 42), MakeFrozenBrush(244, 63, 94), WpfMedia.Brushes.White, 10.6, 5.0, new Thickness(4, 4, 4, 4));
+			btnQuickFlat.Click += (s, e) => ExecuteFlattenCurrentInstrument();
+
+			btnQuickRevRef = btnQuickRev;
+			WpfControls.Grid.SetColumn(btnQuickBe, 0);
+			WpfControls.Grid.SetColumn(btnQuickRev, 2);
+			WpfControls.Grid.SetColumn(btnQuickFlat, 4);
+			livePosActions.Children.Add(btnQuickBe);
+			livePosActions.Children.Add(btnQuickRev);
+			livePosActions.Children.Add(btnQuickFlat);
+			livePosStack.Children.Add(livePosActions);
+			livePosBanner.Child = livePosStack;
+			bodyHost.Children.Add(livePosBanner);
+
+			// =========================================================================
+			// VIEW A: ORDER TAB (Exact 1:1 Tradesea Layout)
+			// =========================================================================
+			viewOrderTab = new WpfControls.StackPanel();
+
+			// 1. Dual Buy (BID) | Sell (ASK) Cards
+			var sideGrid = new WpfControls.Grid { Margin = new Thickness(0, 0, 0, 12) };
+			sideGrid.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+			sideGrid.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(6, GridUnitType.Pixel) });
+			sideGrid.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+			WpfControls.Border MakeBuySellCard(string sideTitle, string quotePrefix, out WpfControls.TextBlock quoteValOut, Action onSelect)
+			{
+				var card = new WpfControls.Border
+				{
+					CornerRadius = new CornerRadius(6),
+					BorderThickness = new Thickness(1.4),
+					Padding = new Thickness(8, 8, 8, 8),
+					Cursor = Cursors.Hand
+				};
+				var sp = new WpfControls.StackPanel { HorizontalAlignment = HorizontalAlignment.Center };
+				sp.Children.Add(new WpfControls.TextBlock
+				{
+					Text = sideTitle,
+					FontSize = 13.5,
+					FontWeight = FontWeights.Bold,
+					Foreground = txtBright,
+					HorizontalAlignment = HorizontalAlignment.Center
+				});
+				var qRow = new WpfControls.StackPanel { Orientation = WpfControls.Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 3, 0, 0) };
+				qRow.Children.Add(new WpfControls.TextBlock
+				{
+					Text = quotePrefix + " ",
+					FontSize = 10.2,
+					FontWeight = FontWeights.SemiBold,
+					Foreground = txtMuted,
+					VerticalAlignment = VerticalAlignment.Center
+				});
+				quoteValOut = new WpfControls.TextBlock
+				{
+					Text = "--",
+					FontSize = 11.2,
+					FontWeight = FontWeights.Bold,
+					Foreground = txtBright,
+					VerticalAlignment = VerticalAlignment.Center
+				};
+				qRow.Children.Add(quoteValOut);
+				sp.Children.Add(qRow);
+				card.Child = sp;
+				card.MouseLeftButtonDown += (s, e) => { onSelect?.Invoke(); e.Handled = true; };
+				return card;
+			}
+
+			cardBuySide = MakeBuySellCard("Buy", "BID", out txtBuyBidVal, () =>
+			{
+				if (!isOrderSideBuy)
+				{
+					isOrderSideBuy = true;
+					if (selectedOrderTypeIdx != 0) SeedDefaultCustomEntryPrice();
+					SyncTradePanelUiFromState();
+					RequestImmediateOrderflowRedraw();
+				}
+			});
+			cardSellSide = MakeBuySellCard("Sell", "ASK", out txtSellAskVal, () =>
+			{
+				if (isOrderSideBuy)
+				{
+					isOrderSideBuy = false;
+					if (selectedOrderTypeIdx != 0) SeedDefaultCustomEntryPrice();
+					SyncTradePanelUiFromState();
+					RequestImmediateOrderflowRedraw();
+				}
+			});
+			WpfControls.Grid.SetColumn(cardBuySide, 0);
+			WpfControls.Grid.SetColumn(cardSellSide, 2);
+			sideGrid.Children.Add(cardBuySide);
+			sideGrid.Children.Add(cardSellSide);
+			viewOrderTab.Children.Add(sideGrid);
+
+			// 2. Order type: [ Market ] [ Limit ] [ Stop ] Pills
+			var ordTypeRow = new WpfControls.Grid { Margin = new Thickness(0, 0, 0, 12) };
+			ordTypeRow.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = GridLength.Auto });
+			ordTypeRow.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+			ordTypeRow.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+			ordTypeRow.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+			var lblOrdType = new WpfControls.TextBlock
+			{
+				Text = "Order type:",
+				FontSize = 11.2,
+				Foreground = txtMuted,
+				VerticalAlignment = VerticalAlignment.Center,
+				Margin = new Thickness(0, 0, 6, 0)
+			};
+			WpfControls.Grid.SetColumn(lblOrdType, 0);
+			ordTypeRow.Children.Add(lblOrdType);
+
+			WpfControls.Border MakeOrderTypePill(string text, int idx, out WpfControls.TextBlock tOut)
+			{
+				var p = new WpfControls.Border
+				{
+					CornerRadius = new CornerRadius(12),
+					BorderThickness = new Thickness(1),
+					Padding = new Thickness(6, 4, 6, 4),
+					Margin = new Thickness(2, 0, 2, 0),
+					Cursor = Cursors.Hand
+				};
+				tOut = new WpfControls.TextBlock
+				{
+					Text = text,
+					FontSize = 11.2,
+					FontWeight = FontWeights.SemiBold,
+					HorizontalAlignment = HorizontalAlignment.Center
+				};
+				p.Child = tOut;
+				p.MouseLeftButtonDown += (s, e) =>
+				{
+					selectedOrderTypeIdx = idx;
+					if (idx != 0) SeedDefaultCustomEntryPrice();
+					SyncTradePanelUiFromState();
+					RequestImmediateOrderflowRedraw();
+					e.Handled = true;
+				};
+				return p;
+			}
+
+			pillTypeMkt = MakeOrderTypePill("Market", 0, out txtTypeMkt);
+			pillTypeLmt = MakeOrderTypePill("Limit", 1, out txtTypeLmt);
+			pillTypeStp = MakeOrderTypePill("Stop", 2, out txtTypeStp);
+			WpfControls.Grid.SetColumn(pillTypeMkt, 1);
+			WpfControls.Grid.SetColumn(pillTypeLmt, 2);
+			WpfControls.Grid.SetColumn(pillTypeStp, 3);
+			ordTypeRow.Children.Add(pillTypeMkt);
+			ordTypeRow.Children.Add(pillTypeLmt);
+			ordTypeRow.Children.Add(pillTypeStp);
+			viewOrderTab.Children.Add(ordTypeRow);
+
+			// 3. Market Price / Limit Price / Stop Price Display & Input
+			lblEntryPriceTitle = new WpfControls.TextBlock
+			{
+				Text = "Market Price",
+				FontSize = 11.2,
+				Foreground = txtMuted,
+				Margin = new Thickness(0, 0, 0, 4)
+			};
+			viewOrderTab.Children.Add(lblEntryPriceTitle);
+
+			txtMarketPriceBig = new WpfControls.TextBlock
+			{
+				Text = "--",
+				FontSize = 15.2,
+				FontWeight = FontWeights.SemiBold,
+				Foreground = txtBright,
+				Margin = new Thickness(0, 0, 0, 12)
+			};
+			viewOrderTab.Children.Add(txtMarketPriceBig);
+
+			grpCustomEntryInput = new WpfControls.Grid { Margin = new Thickness(0, 0, 0, 12), Visibility = Visibility.Collapsed };
+			grpCustomEntryInput.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+			grpCustomEntryInput.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(6, GridUnitType.Pixel) });
+			grpCustomEntryInput.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = GridLength.Auto });
+
+			var entryBoxBorder = new WpfControls.Border
+			{
+				Background = bgInput,
+				BorderBrush = borderSubtle,
+				BorderThickness = new Thickness(1),
+				CornerRadius = new CornerRadius(6),
+				Height = 34,
+				Padding = new Thickness(6, 0, 6, 0)
+			};
+			txtCustomEntryPrice = CreateDarkInputBox("0.00", 13.0);
+			txtCustomEntryPrice.LostFocus += (s, e) =>
+			{
+				if (double.TryParse(txtCustomEntryPrice.Text, NumberStyles.Any, CultureInfo.InvariantCulture, out double v) && v > 0)
+				{
+					orderCustomEntryPrice = RoundToInstrumentTick(v);
+					orderCustomEntrySeeded = true;
+					SyncTradePanelUiFromState();
+					RequestImmediateOrderflowRedraw();
+				}
+			};
+			txtCustomEntryPrice.KeyDown += (s, e) =>
+			{
+				if (e.Key == Key.Enter && double.TryParse(txtCustomEntryPrice.Text, NumberStyles.Any, CultureInfo.InvariantCulture, out double v) && v > 0)
+				{
+					orderCustomEntryPrice = RoundToInstrumentTick(v);
+					orderCustomEntrySeeded = true;
+					SyncTradePanelUiFromState();
+					RequestImmediateOrderflowRedraw();
+				}
+			};
+			entryBoxBorder.Child = txtCustomEntryPrice;
+			WpfControls.Grid.SetColumn(entryBoxBorder, 0);
+			grpCustomEntryInput.Children.Add(entryBoxBorder);
+
+			var entryStepBorder = new WpfControls.Border
+			{
+				Background = bgInput,
+				BorderBrush = borderSubtle,
+				BorderThickness = new Thickness(1),
+				CornerRadius = new CornerRadius(6),
+				Height = 34
+			};
+			var entryStepRow = new WpfControls.StackPanel { Orientation = WpfControls.Orientation.Horizontal };
+			var btnEntryMinus = CreateFlatDarkButton("−", WpfMedia.Brushes.Transparent, WpfMedia.Brushes.Transparent, txtMuted, 14.0, 4.0, new Thickness(10, 0, 10, 0));
+			btnEntryMinus.Click += (s, e) =>
+			{
+				double tick = TickSize > 0 ? TickSize : 0.05;
+				orderCustomEntryPrice = RoundToInstrumentTick(GetCurrentOrderReferenceEntryPrice() - tick);
+				orderCustomEntrySeeded = true;
+				SyncTradePanelUiFromState();
+				RequestImmediateOrderflowRedraw();
+			};
+			var btnEntryPlus = CreateFlatDarkButton("+", WpfMedia.Brushes.Transparent, WpfMedia.Brushes.Transparent, txtBright, 14.0, 4.0, new Thickness(10, 0, 10, 0));
+			btnEntryPlus.Click += (s, e) =>
+			{
+				double tick = TickSize > 0 ? TickSize : 0.05;
+				orderCustomEntryPrice = RoundToInstrumentTick(GetCurrentOrderReferenceEntryPrice() + tick);
+				orderCustomEntrySeeded = true;
+				SyncTradePanelUiFromState();
+				RequestImmediateOrderflowRedraw();
+			};
+			entryStepRow.Children.Add(btnEntryMinus);
+			entryStepRow.Children.Add(new WpfControls.Border { Width = 1, Background = borderSubtle, Margin = new Thickness(0, 6, 0, 6) });
+			entryStepRow.Children.Add(btnEntryPlus);
+			entryStepBorder.Child = entryStepRow;
+			WpfControls.Grid.SetColumn(entryStepBorder, 2);
+			grpCustomEntryInput.Children.Add(entryStepBorder);
+			viewOrderTab.Children.Add(grpCustomEntryInput);
+
+			// 4. Quantity Section (Input Box + [ − | + ] Stepper Pill)
+			viewOrderTab.Children.Add(new WpfControls.TextBlock
+			{
+				Text = "Quantity",
+				FontSize = 11.2,
+				Foreground = txtMuted,
+				Margin = new Thickness(0, 0, 0, 5)
+			});
+
+			var qtyGrid = new WpfControls.Grid { Margin = new Thickness(0, 0, 0, 13) };
+			qtyGrid.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+			qtyGrid.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(6, GridUnitType.Pixel) });
+			qtyGrid.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = GridLength.Auto });
+
+			var qtyBoxBd = new WpfControls.Border
+			{
+				Background = bgInput,
+				BorderBrush = borderSubtle,
+				BorderThickness = new Thickness(1),
+				CornerRadius = new CornerRadius(6),
+				Height = 34,
+				Padding = new Thickness(6, 0, 6, 0)
+			};
+			txtOrderQty = CreateDarkInputBox(orderQtyValue.ToString(CultureInfo.InvariantCulture), 13.0);
+			txtOrderQty.LostFocus += (s, e) =>
+			{
+				if (int.TryParse(txtOrderQty.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int q) && q >= 1)
+					orderQtyValue = Math.Min(100000, q);
+				SyncTradePanelUiFromState();
+			};
+			qtyBoxBd.Child = txtOrderQty;
+			WpfControls.Grid.SetColumn(qtyBoxBd, 0);
+			qtyGrid.Children.Add(qtyBoxBd);
+
+			var qtyStepBd = new WpfControls.Border
+			{
+				Background = bgInput,
+				BorderBrush = borderSubtle,
+				BorderThickness = new Thickness(1),
+				CornerRadius = new CornerRadius(6),
+				Height = 34
+			};
+			var qtyStepRow = new WpfControls.StackPanel { Orientation = WpfControls.Orientation.Horizontal };
+			var btnQtyMinus = CreateFlatDarkButton("−", WpfMedia.Brushes.Transparent, WpfMedia.Brushes.Transparent, txtMuted, 14.0, 4.0, new Thickness(10, 0, 10, 0));
+			btnQtyMinus.Click += (s, e) =>
+			{
+				orderQtyValue = Math.Max(1, orderQtyValue - 1);
+				SyncTradePanelUiFromState();
+			};
+			var btnQtyPlus = CreateFlatDarkButton("+", WpfMedia.Brushes.Transparent, WpfMedia.Brushes.Transparent, txtBright, 14.0, 4.0, new Thickness(10, 0, 10, 0));
+			btnQtyPlus.Click += (s, e) =>
+			{
+				orderQtyValue = Math.Min(100000, orderQtyValue + 1);
+				SyncTradePanelUiFromState();
+			};
+			qtyStepRow.Children.Add(btnQtyMinus);
+			qtyStepRow.Children.Add(new WpfControls.Border { Width = 1, Background = borderSubtle, Margin = new Thickness(0, 6, 0, 6) });
+			qtyStepRow.Children.Add(btnQtyPlus);
+			qtyStepBd.Child = qtyStepRow;
+			WpfControls.Grid.SetColumn(qtyStepBd, 2);
+			qtyGrid.Children.Add(qtyStepBd);
+			viewOrderTab.Children.Add(qtyGrid);
+
+			// Dashed Divider (Exact Tradesea Divider)
+			viewOrderTab.Children.Add(new WpfShapes.Line
+			{
+				X1 = 0,
+				X2 = 240,
+				Stroke = borderSubtle,
+				StrokeThickness = 1,
+				StrokeDashArray = new WpfMedia.DoubleCollection { 3, 3 },
+				Stretch = WpfMedia.Stretch.Fill,
+				Margin = new Thickness(0, 0, 0, 12)
+			});
+
+			// 5. Stop Loss + Trail + [ Price | Ticks ▾ ] + [ 10 | 25 | 50 | 100 ] Presets
+			var slHdrDock = new WpfControls.DockPanel { Margin = new Thickness(0, 0, 0, 6) };
+			var trailRightStack = new WpfControls.StackPanel { Orientation = WpfControls.Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+			chkTrailEnable = CreateDarkCheckBox("Trail", orderTrailEnabled, isOn =>
+			{
+				orderTrailEnabled = isOn;
+				if (isOn && !orderSlEnabled) orderSlEnabled = true;
+				SyncTradePanelUiFromState();
+				RequestImmediateOrderflowRedraw();
+			});
+			trailRightStack.Children.Add(chkTrailEnable);
+
+			var trailTicksBd = new WpfControls.Border
+			{
+				Background = bgInput,
+				BorderBrush = borderSubtle,
+				BorderThickness = new Thickness(1),
+				CornerRadius = new CornerRadius(4),
+				Margin = new Thickness(6, 0, 0, 0),
+				Padding = new Thickness(5, 2, 6, 2)
+			};
+			var trailTicksInner = new WpfControls.StackPanel { Orientation = WpfControls.Orientation.Horizontal };
+			txtTrailTicks = CreateDarkInputBox(orderTrailTicks.ToString(CultureInfo.InvariantCulture), 11.8, System.Windows.TextAlignment.Center);
+			txtTrailTicks.Width = 30;
+			txtTrailTicks.LostFocus += (s, e) =>
+			{
+				if (int.TryParse(txtTrailTicks.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int tv) && tv >= 1)
+					orderTrailTicks = Math.Min(10000, tv);
+				SyncTradePanelUiFromState();
+			};
+			trailTicksInner.Children.Add(txtTrailTicks);
+			trailTicksInner.Children.Add(new WpfControls.TextBlock
+			{
+				Text = "Ticks",
+				FontSize = 10.5,
+				FontWeight = FontWeights.SemiBold,
+				Foreground = txtMuted,
+				VerticalAlignment = VerticalAlignment.Center,
+				Margin = new Thickness(2, 0, 0, 0)
+			});
+			trailTicksBd.Child = trailTicksInner;
+			trailRightStack.Children.Add(trailTicksBd);
+			WpfControls.DockPanel.SetDock(trailRightStack, WpfControls.Dock.Right);
+			slHdrDock.Children.Add(trailRightStack);
+
+			chkSlEnable = CreateDarkCheckBox("Stop Loss", orderSlEnabled, isOn =>
+			{
+				orderSlEnabled = isOn;
+				if (!isOn) orderTrailEnabled = false;
+				SyncTradePanelUiFromState();
+				RequestImmediateOrderflowRedraw();
+			});
+			slHdrDock.Children.Add(chkSlEnable);
+			viewOrderTab.Children.Add(slHdrDock);
+
+			var slDualBd = new WpfControls.Border
+			{
+				Background = bgInput,
+				BorderBrush = borderSubtle,
+				BorderThickness = new Thickness(1.1),
+				CornerRadius = new CornerRadius(6),
+				Height = 36,
+				Padding = new Thickness(8, 0, 6, 0),
+				Margin = new Thickness(0, 0, 0, 7)
+			};
+			var slDualGrid = new WpfControls.Grid();
+			slDualGrid.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(1.18, GridUnitType.Star) });
+			slDualGrid.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = GridLength.Auto });
+			slDualGrid.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(1.0, GridUnitType.Star) });
+
+			var slLeftDock = new WpfControls.DockPanel();
+			var lblSlPx = new WpfControls.TextBlock { Style = null, Text = "Price", FontSize = 10.8, FontWeight = FontWeights.SemiBold, Foreground = txtMuted, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 4, 0) };
+			WpfControls.DockPanel.SetDock(lblSlPx, WpfControls.Dock.Right);
+			slLeftDock.Children.Add(lblSlPx);
+			txtSlPrice = CreateDarkInputBox("00.00", 12.8);
+			txtSlPrice.LostFocus += (s, e) => OnUserEditedSlPriceText();
+			txtSlPrice.KeyDown += (s, e) => { if (e.Key == Key.Enter) OnUserEditedSlPriceText(); };
+			slLeftDock.Children.Add(txtSlPrice);
+			WpfControls.Grid.SetColumn(slLeftDock, 0);
+			slDualGrid.Children.Add(slLeftDock);
+
+			var slDiv = new WpfControls.Border { Width = 1, Background = borderSubtle, Margin = new Thickness(4, 6, 6, 6) };
+			WpfControls.Grid.SetColumn(slDiv, 1);
+			slDualGrid.Children.Add(slDiv);
+
+			var slRightDock = new WpfControls.DockPanel();
+			btnSlUnit = CreateFlatDarkButton("Ticks ▾", WpfMedia.Brushes.Transparent, WpfMedia.Brushes.Transparent, txtMuted, 10.8, 3.0, new Thickness(4, 0, 2, 0));
+			btnSlUnit.Click += (s, e) =>
+			{
+				orderSlUnitIsCurrency = !orderSlUnitIsCurrency;
+				SyncTradePanelUiFromState();
+			};
+			WpfControls.DockPanel.SetDock(btnSlUnit, WpfControls.Dock.Right);
+			slRightDock.Children.Add(btnSlUnit);
+			txtSlOffset = CreateDarkInputBox(orderSlTicks.ToString(CultureInfo.InvariantCulture), 12.8);
+			txtSlOffset.LostFocus += (s, e) => OnUserEditedSlOffsetText();
+			txtSlOffset.KeyDown += (s, e) => { if (e.Key == Key.Enter) OnUserEditedSlOffsetText(); };
+			slRightDock.Children.Add(txtSlOffset);
+			WpfControls.Grid.SetColumn(slRightDock, 2);
+			slDualGrid.Children.Add(slRightDock);
+			slDualBd.Child = slDualGrid;
+			viewOrderTab.Children.Add(slDualBd);
+
+			var slPresetsGrid = new WpfPrimitives.UniformGrid { Rows = 1, Columns = 4, Margin = new Thickness(0, 0, 0, 14) };
+			int[] slPresetVals = new int[] { 10, 25, 50, 100 };
+			for (int pIdx = 0; pIdx < slPresetVals.Length; pIdx++)
+			{
+				int captured = slPresetVals[pIdx];
+				var pb = CreateFlatDarkButton(
+					captured.ToString(CultureInfo.InvariantCulture),
+					MakeFrozenBrush(36, 18, 26),
+					MakeFrozenBrush(136, 38, 56),
+					MakeFrozenBrush(252, 165, 165),
+					11.4, 5.0, new Thickness(2, 4, 2, 4));
+				pb.Margin = new Thickness(pIdx == 0 ? 0 : 2.5, 0, pIdx == 3 ? 0 : 2.5, 0);
+				pb.Click += (s, e) =>
+				{
+					orderSlEnabled = true;
+					orderSlUnitIsCurrency = false;
+					int maxCapT = ComputeCapitalProtectorMaxSlTicks(orderQtyValue);
+					orderSlTicks = Math.Min(captured, maxCapT);
+					if (!orderTpManuallyCustomized)
+					{
+						double rrInit = InitialOrderRrRatio > 0.1 ? InitialOrderRrRatio : 3.0;
+						orderTpEnabled = true;
+						orderTpTicks = Math.Max(1, (int)Math.Round(orderSlTicks * rrInit));
+					}
+					SyncTradePanelUiFromState();
+					RequestImmediateOrderflowRedraw();
+				};
+				slPresetBtns[pIdx] = pb;
+				slPresetsGrid.Children.Add(pb);
+			}
+			viewOrderTab.Children.Add(slPresetsGrid);
+
+			// 6. Take Profit + [ Price | Ticks ▾ ] + [ 10 | 25 | 50 | 100 ] Presets
+			var tpHdrDock = new WpfControls.DockPanel { Margin = new Thickness(0, 0, 0, 6) };
+			txtOrderRrSummary = new WpfControls.TextBlock
+			{
+				Style = null,
+				Text = string.Empty,
+				FontSize = 11.2,
+				FontWeight = FontWeights.Bold,
+				Foreground = MakeFrozenBrush(52, 211, 153),
+				VerticalAlignment = VerticalAlignment.Center
+			};
+			WpfControls.DockPanel.SetDock(txtOrderRrSummary, WpfControls.Dock.Right);
+			tpHdrDock.Children.Add(txtOrderRrSummary);
+
+			chkTpEnable = CreateDarkCheckBox("Take Profit", orderTpEnabled, isOn =>
+			{
+				orderTpEnabled = isOn;
+				SyncTradePanelUiFromState();
+				RequestImmediateOrderflowRedraw();
+			});
+			tpHdrDock.Children.Add(chkTpEnable);
+			viewOrderTab.Children.Add(tpHdrDock);
+
+			var tpDualBd = new WpfControls.Border
+			{
+				Background = bgInput,
+				BorderBrush = borderSubtle,
+				BorderThickness = new Thickness(1.1),
+				CornerRadius = new CornerRadius(6),
+				Height = 36,
+				Padding = new Thickness(8, 0, 6, 0),
+				Margin = new Thickness(0, 0, 0, 7)
+			};
+			var tpDualGrid = new WpfControls.Grid();
+			tpDualGrid.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(1.18, GridUnitType.Star) });
+			tpDualGrid.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = GridLength.Auto });
+			tpDualGrid.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(1.0, GridUnitType.Star) });
+
+			var tpLeftDock = new WpfControls.DockPanel();
+			var lblTpPx = new WpfControls.TextBlock { Style = null, Text = "Price", FontSize = 10.8, FontWeight = FontWeights.SemiBold, Foreground = txtMuted, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 4, 0) };
+			WpfControls.DockPanel.SetDock(lblTpPx, WpfControls.Dock.Right);
+			tpLeftDock.Children.Add(lblTpPx);
+			txtTpPrice = CreateDarkInputBox("00.00", 12.8);
+			txtTpPrice.LostFocus += (s, e) => OnUserEditedTpPriceText();
+			txtTpPrice.KeyDown += (s, e) => { if (e.Key == Key.Enter) OnUserEditedTpPriceText(); };
+			tpLeftDock.Children.Add(txtTpPrice);
+			WpfControls.Grid.SetColumn(tpLeftDock, 0);
+			tpDualGrid.Children.Add(tpLeftDock);
+
+			var tpDiv = new WpfControls.Border { Width = 1, Background = borderSubtle, Margin = new Thickness(4, 6, 6, 6) };
+			WpfControls.Grid.SetColumn(tpDiv, 1);
+			tpDualGrid.Children.Add(tpDiv);
+
+			var tpRightDock = new WpfControls.DockPanel();
+			btnTpUnit = CreateFlatDarkButton("Ticks ▾", WpfMedia.Brushes.Transparent, WpfMedia.Brushes.Transparent, txtMuted, 10.8, 3.0, new Thickness(4, 0, 2, 0));
+			btnTpUnit.Click += (s, e) =>
+			{
+				orderTpUnitIsCurrency = !orderTpUnitIsCurrency;
+				SyncTradePanelUiFromState();
+			};
+			WpfControls.DockPanel.SetDock(btnTpUnit, WpfControls.Dock.Right);
+			tpRightDock.Children.Add(btnTpUnit);
+			txtTpOffset = CreateDarkInputBox(orderTpTicks.ToString(CultureInfo.InvariantCulture), 12.8);
+			txtTpOffset.LostFocus += (s, e) => OnUserEditedTpOffsetText();
+			txtTpOffset.KeyDown += (s, e) => { if (e.Key == Key.Enter) OnUserEditedTpOffsetText(); };
+			tpRightDock.Children.Add(txtTpOffset);
+			WpfControls.Grid.SetColumn(tpRightDock, 2);
+			tpDualGrid.Children.Add(tpRightDock);
+			tpDualBd.Child = tpDualGrid;
+			viewOrderTab.Children.Add(tpDualBd);
+
+			var tpPresetsGrid = new WpfPrimitives.UniformGrid { Rows = 1, Columns = 4, Margin = new Thickness(0, 0, 0, 8) };
+			int[] tpPresetVals = new int[] { 10, 25, 50, 100 };
+			for (int pIdx = 0; pIdx < tpPresetVals.Length; pIdx++)
+			{
+				int captured = tpPresetVals[pIdx];
+				var pb = CreateFlatDarkButton(
+					captured.ToString(CultureInfo.InvariantCulture),
+					MakeFrozenBrush(14, 34, 29),
+					MakeFrozenBrush(24, 114, 86),
+					MakeFrozenBrush(110, 231, 183),
+					11.4, 5.0, new Thickness(2, 4, 2, 4));
+				pb.Margin = new Thickness(pIdx == 0 ? 0 : 2.5, 0, pIdx == 3 ? 0 : 2.5, 0);
+				pb.Click += (s, e) =>
+				{
+					orderTpEnabled = true;
+					orderTpUnitIsCurrency = false;
+					orderTpTicks = captured;
+					orderTpManuallyCustomized = true;
+					SyncTradePanelUiFromState();
+					RequestImmediateOrderflowRedraw();
+				};
+				tpPresetBtns[pIdx] = pb;
+				tpPresetsGrid.Children.Add(pb);
+			}
+			viewOrderTab.Children.Add(tpPresetsGrid);
+			bodyHost.Children.Add(viewOrderTab);
+
+			// =========================================================================
+			// VIEW B: SCALP TAB (1-Click High-Speed Scalping + Working Orders Monitor)
+			// =========================================================================
+			viewScalpTab = new WpfControls.StackPanel { Visibility = Visibility.Collapsed };
+
+			viewScalpTab.Children.Add(new WpfControls.TextBlock
+			{
+				Text = "1-Click Scalp Quantity",
+				FontSize = 11.0,
+				Foreground = txtMuted,
+				Margin = new Thickness(0, 0, 0, 5)
+			});
+
+			var scQtyRow = new WpfControls.Grid { Margin = new Thickness(0, 0, 0, 6) };
+			scQtyRow.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+			scQtyRow.ColumnDefinitions.Add(new WpfControls.ColumnDefinition { Width = GridLength.Auto });
+			var scQtyBd = new WpfControls.Border
+			{
+				Background = bgInput,
+				BorderBrush = borderSubtle,
+				BorderThickness = new Thickness(1),
+				CornerRadius = new CornerRadius(6),
+				Height = 32,
+				Margin = new Thickness(0, 0, 6, 0),
+				Padding = new Thickness(6, 0, 6, 0)
+			};
+			txtScalpQty = CreateDarkInputBox(orderQtyValue.ToString(CultureInfo.InvariantCulture), 12.5);
+			txtScalpQty.LostFocus += (s, e) =>
+			{
+				if (int.TryParse(txtScalpQty.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int q) && q >= 1)
+					orderQtyValue = Math.Min(100000, q);
+				SyncTradePanelUiFromState();
+			};
+			scQtyBd.Child = txtScalpQty;
+			WpfControls.Grid.SetColumn(scQtyBd, 0);
+			scQtyRow.Children.Add(scQtyBd);
+
+			var scQuickLots = new WpfControls.StackPanel { Orientation = WpfControls.Orientation.Horizontal };
+			foreach (int lq in new int[] { 1, 2, 5, 10 })
+			{
+				int capLq = lq;
+				var lb = CreateFlatDarkButton(capLq.ToString(CultureInfo.InvariantCulture), bgInput, borderSubtle, txtBright, 10.5, 4.0, new Thickness(7, 4, 7, 4));
+				lb.Margin = new Thickness(2, 0, 0, 0);
+				lb.Click += (s, e) => { orderQtyValue = capLq; SyncTradePanelUiFromState(); };
+				scQuickLots.Children.Add(lb);
+			}
+			WpfControls.Grid.SetColumn(scQuickLots, 1);
+			scQtyRow.Children.Add(scQuickLots);
+			viewScalpTab.Children.Add(scQtyRow);
+
+			var scBrkRow = new WpfControls.DockPanel { Margin = new Thickness(0, 2, 0, 10) };
+			txtScalpBracketInfo = new WpfControls.TextBlock
+			{
+				Text = "SL 20T / TP 40T",
+				FontSize = 10.2,
+				FontWeight = FontWeights.SemiBold,
+				Foreground = txtMuted,
+				VerticalAlignment = VerticalAlignment.Center
+			};
+			WpfControls.DockPanel.SetDock(txtScalpBracketInfo, WpfControls.Dock.Right);
+			scBrkRow.Children.Add(txtScalpBracketInfo);
+
+			chkScalpAutoBracket = CreateDarkCheckBox("Auto Bracket (SL/TP)", scalpUseAutoBracket, isOn =>
+			{
+				scalpUseAutoBracket = isOn;
+				SyncTradePanelUiFromState();
+			});
+			scBrkRow.Children.Add(chkScalpAutoBracket);
+			viewScalpTab.Children.Add(scBrkRow);
+
+			// 1-Click Buy / Sell Market & Bid / Ask Grid
+			var scExecGrid = new WpfPrimitives.UniformGrid { Rows = 3, Columns = 2, Margin = new Thickness(0, 0, 0, 10) };
+
+			var btnScBuyMkt = CreateFlatDarkButton("Buy Market", greenTradesea, MakeFrozenBrush(20, 184, 132), WpfMedia.Brushes.White, 12.0, 6.0, new Thickness(4, 9, 4, 9));
+			btnScBuyMkt.Margin = new Thickness(0, 0, 3, 6);
+			btnScBuyMkt.Click += (s, e) => TriggerScalpExecution(true, OrderType.Market, 0);
+
+			var btnScSellMkt = CreateFlatDarkButton("Sell Market", redTradesea, MakeFrozenBrush(244, 63, 94), WpfMedia.Brushes.White, 12.0, 6.0, new Thickness(4, 9, 4, 9));
+			btnScSellMkt.Margin = new Thickness(3, 0, 0, 6);
+			btnScSellMkt.Click += (s, e) => TriggerScalpExecution(false, OrderType.Market, 0);
+
+			var btnScBuyBid = CreateFlatDarkButton("Buy Bid", MakeFrozenBrush(12, 42, 34), MakeFrozenBrush(16, 185, 129), MakeFrozenBrush(110, 231, 183), 11.2, 5.0, new Thickness(4, 7, 4, 7));
+			btnScBuyBid.Margin = new Thickness(0, 0, 3, 6);
+			btnScBuyBid.Click += (s, e) => { ResolveLiveBidAskLast(out double b, out _, out _); TriggerScalpExecution(true, OrderType.Limit, b); };
+
+			var btnScSellAsk = CreateFlatDarkButton("Sell Ask", MakeFrozenBrush(46, 16, 24), MakeFrozenBrush(239, 68, 68), MakeFrozenBrush(252, 165, 165), 11.2, 5.0, new Thickness(4, 7, 4, 7));
+			btnScSellAsk.Margin = new Thickness(3, 0, 0, 6);
+			btnScSellAsk.Click += (s, e) => { ResolveLiveBidAskLast(out _, out double a, out _); TriggerScalpExecution(false, OrderType.Limit, a); };
+
+			var btnScBuyAsk = CreateFlatDarkButton("Buy Ask", bgInput, borderSubtle, MakeFrozenBrush(110, 231, 183), 11.0, 5.0, new Thickness(4, 7, 4, 7));
+			btnScBuyAsk.Margin = new Thickness(0, 0, 3, 0);
+			btnScBuyAsk.Click += (s, e) => { ResolveLiveBidAskLast(out _, out double a, out _); TriggerScalpExecution(true, OrderType.Limit, a); };
+
+			var btnScSellBid = CreateFlatDarkButton("Sell Bid", bgInput, borderSubtle, MakeFrozenBrush(252, 165, 165), 11.0, 5.0, new Thickness(4, 7, 4, 7));
+			btnScSellBid.Margin = new Thickness(3, 0, 0, 0);
+			btnScSellBid.Click += (s, e) => { ResolveLiveBidAskLast(out double b, out _, out _); TriggerScalpExecution(false, OrderType.Limit, b); };
+
+			scalpEntryButtons.Clear();
+			scalpEntryButtons.Add(btnScBuyMkt);
+			scalpEntryButtons.Add(btnScSellMkt);
+			scalpEntryButtons.Add(btnScBuyBid);
+			scalpEntryButtons.Add(btnScSellAsk);
+			scalpEntryButtons.Add(btnScBuyAsk);
+			scalpEntryButtons.Add(btnScSellBid);
+
+			scExecGrid.Children.Add(btnScBuyMkt);
+			scExecGrid.Children.Add(btnScSellMkt);
+			scExecGrid.Children.Add(btnScBuyBid);
+			scExecGrid.Children.Add(btnScSellAsk);
+			scExecGrid.Children.Add(btnScBuyAsk);
+			scExecGrid.Children.Add(btnScSellBid);
+			viewScalpTab.Children.Add(scExecGrid);
+
+			// 1-Click Scalp Position Actions
+			var scManageGrid = new WpfPrimitives.UniformGrid { Rows = 2, Columns = 2, Margin = new Thickness(0, 0, 0, 10) };
+			var btnScBe = CreateFlatDarkButton("Breakeven", bgInput, borderSubtle, txtBright, 11.0, 5.0, new Thickness(4, 7, 4, 7));
+			btnScBe.Margin = new Thickness(0, 0, 3, 6);
+			btnScBe.Click += (s, e) => ExecuteMoveStopToBreakeven();
+
+			var btnScRev = CreateFlatDarkButton("Reverse", bgInput, borderSubtle, txtBright, 11.0, 5.0, new Thickness(4, 7, 4, 7));
+			btnScRev.Margin = new Thickness(3, 0, 0, 6);
+			btnScRev.Click += (s, e) => ExecuteReverseCurrentPosition();
+			btnScalpRevRef = btnScRev;
+
+			var btnScCxl = CreateFlatDarkButton("Cancel All", bgInput, borderSubtle, txtMuted, 11.0, 5.0, new Thickness(4, 7, 4, 7));
+			btnScCxl.Margin = new Thickness(0, 0, 3, 0);
+			btnScCxl.Click += (s, e) => CancelAllInstrumentWorkingOrders();
+
+			var btnScFlat = CreateFlatDarkButton("Flatten All", MakeFrozenBrush(72, 18, 28), MakeFrozenBrush(180, 40, 60), WpfMedia.Brushes.White, 11.0, 5.0, new Thickness(4, 7, 4, 7));
+			btnScFlat.Margin = new Thickness(3, 0, 0, 0);
+			btnScFlat.Click += (s, e) => ExecuteFlattenCurrentInstrument();
+
+			scManageGrid.Children.Add(btnScBe);
+			scManageGrid.Children.Add(btnScRev);
+			scManageGrid.Children.Add(btnScCxl);
+			scManageGrid.Children.Add(btnScFlat);
+			viewScalpTab.Children.Add(scManageGrid);
+
+			viewScalpTab.Children.Add(new WpfControls.TextBlock
+			{
+				Text = "Working Orders (Drag TP/SL on Chart)",
+				FontSize = 10.6,
+				FontWeight = FontWeights.SemiBold,
+				Foreground = txtMuted,
+				Margin = new Thickness(0, 2, 0, 5)
+			});
+			pnlScalpWorkingOrders = new WpfControls.StackPanel();
+			viewScalpTab.Children.Add(pnlScalpWorkingOrders);
+
+			bodyHost.Children.Add(viewScalpTab);
+			WpfControls.Grid.SetRow(bodyScroll, 2);
+			outerGrid.Children.Add(bodyScroll);
+
+			// =========================================================================
+			// ROW 3: Pinned Bottom Risk & Discipline Guard + Confirm & Cancel Footer
+			// =========================================================================
+			var footerBd = new WpfControls.Border
+			{
+				Background = bgPanel,
+				BorderBrush = borderSubtle,
+				BorderThickness = new Thickness(0, 1, 0, 0),
+				Padding = new Thickness(11, 7, 11, 10)
+			};
+			var footerStack = new WpfControls.StackPanel();
+
+			// Live AK10X Risk & Discipline + Capital Protector Guardrail Card (Pinned right above Confirm/Cancel)
+			riskGuardCardBorder = new WpfControls.Border
+			{
+				Background = MakeFrozenBrush(14, 22, 36),
+				BorderBrush = MakeFrozenBrush(34, 150, 198),
+				BorderThickness = new Thickness(1.0),
+				CornerRadius = new CornerRadius(6),
+				Padding = new Thickness(8, 6, 8, 6),
+				Margin = new Thickness(0, 0, 0, 7)
+			};
+			var rgStack = new WpfControls.StackPanel();
+			var rgHdr = new WpfControls.DockPanel { Margin = new Thickness(0, 0, 0, 3) };
+
+			riskGuardTradesPill = new WpfControls.Border
+			{
+				Background = MakeFrozenBrush(20, 34, 52),
+				BorderBrush = MakeFrozenBrush(56, 189, 248),
+				BorderThickness = new Thickness(0.9),
+				CornerRadius = new CornerRadius(4),
+				Padding = new Thickness(6, 1, 6, 1),
+				VerticalAlignment = VerticalAlignment.Center
+			};
+			txtRiskGuardTrades = new WpfControls.TextBlock
+			{
+				Style = null,
+				Text = "Trades 0/3",
+				FontSize = 9.8,
+				FontWeight = FontWeights.Bold,
+				Foreground = MakeFrozenBrush(125, 211, 252),
+				VerticalAlignment = VerticalAlignment.Center
+			};
+			riskGuardTradesPill.Child = txtRiskGuardTrades;
+			WpfControls.DockPanel.SetDock(riskGuardTradesPill, WpfControls.Dock.Right);
+			rgHdr.Children.Add(riskGuardTradesPill);
+
+			txtRiskGuardTitle = new WpfControls.TextBlock
+			{
+				Style = null,
+				Text = "🛡 RISK & CAPITAL GUARD",
+				FontSize = 10.0,
+				FontWeight = FontWeights.Bold,
+				Foreground = MakeFrozenBrush(56, 189, 248),
+				VerticalAlignment = VerticalAlignment.Center,
+				TextTrimming = TextTrimming.CharacterEllipsis
+			};
+			rgHdr.Children.Add(txtRiskGuardTitle);
+			rgStack.Children.Add(rgHdr);
+
+			txtRiskGuardRow1 = new WpfControls.TextBlock
+			{
+				Style = null,
+				Text = "Day P&L: $0.00  ·  Tgt $500 / SL -$300",
+				FontSize = 9.8,
+				FontWeight = FontWeights.SemiBold,
+				Foreground = MakeFrozenBrush(226, 232, 240),
+				TextTrimming = TextTrimming.CharacterEllipsis,
+				Margin = new Thickness(0, 1, 0, 1)
+			};
+			rgStack.Children.Add(txtRiskGuardRow1);
+
+			txtRiskGuardRow2 = new WpfControls.TextBlock
+			{
+				Style = null,
+				Text = "Capital Protector: $200  ·  Base 1:3 R:R",
+				FontSize = 9.6,
+				FontWeight = FontWeights.SemiBold,
+				Foreground = MakeFrozenBrush(52, 211, 153),
+				TextTrimming = TextTrimming.CharacterEllipsis
+			};
+			rgStack.Children.Add(txtRiskGuardRow2);
+			riskGuardCardBorder.Child = rgStack;
+			footerStack.Children.Add(riskGuardCardBorder);
+
+			txtTradeStatusToast = new WpfControls.TextBlock
+			{
+				Text = string.Empty,
+				FontSize = 10.2,
+				FontWeight = FontWeights.SemiBold,
+				Foreground = MakeFrozenBrush(52, 211, 153),
+				TextTrimming = TextTrimming.CharacterEllipsis,
+				Margin = new Thickness(0, 0, 0, 5)
+			};
+			footerStack.Children.Add(txtTradeStatusToast);
+
+			btnOrderConfirm = CreateFlatDarkButton(
+				"Confirm",
+				greenTradesea,
+				MakeFrozenBrush(20, 184, 132),
+				WpfMedia.Brushes.White,
+				12.8, 6.0, new Thickness(8, 8, 8, 8));
+			btnOrderConfirm.Margin = new Thickness(0, 0, 0, 6);
+			btnOrderConfirm.Click += (s, e) => OnConfirmButtonClicked();
+			footerStack.Children.Add(btnOrderConfirm);
+
+			var btnOrderCancel = CreateFlatDarkButton(
+				"Cancel",
+				MakeFrozenBrush(38, 43, 53),
+				MakeFrozenBrush(55, 65, 81),
+				MakeFrozenBrush(226, 232, 240),
+				12.0, 6.0, new Thickness(8, 6, 8, 6));
+			btnOrderCancel.Click += (s, e) =>
+			{
+				CancelAllInstrumentWorkingOrders();
+			};
+			footerStack.Children.Add(btnOrderCancel);
+			footerBd.Child = footerStack;
+
+			WpfControls.Grid.SetRow(footerBd, 3);
+			outerGrid.Children.Add(footerBd);
+
+			return root;
+		}
+
+		private void TriggerScalpExecution(bool isBuy, OrderType ordType, double limitOrStopPx)
+		{
+			bool attachBrk = scalpUseAutoBracket;
+			int slT = Math.Max(1, orderSlTicks > 0 ? orderSlTicks : DefaultSlTicks);
+			int tpT = Math.Max(1, orderTpTicks > 0 ? orderTpTicks : DefaultTpTicks);
+			ExecuteSubmitOrderCore(
+				isBuy,
+				ordType,
+				limitOrStopPx,
+				orderQtyValue,
+				attachBrk,
+				slT,
+				attachBrk,
+				tpT,
+				attachBrk && orderTrailEnabled,
+				orderTrailTicks);
+		}
+
+		private void OnConfirmButtonClicked()
+		{
+			if (isTradeTabScalp)
+			{
+				TriggerScalpExecution(isOrderSideBuy, OrderType.Market, 0.0);
+				return;
+			}
+
+			// Commit any typed values right before submitting
+			if (txtOrderQty != null && int.TryParse(txtOrderQty.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsedQ) && parsedQ >= 1)
+				orderQtyValue = Math.Min(100000, parsedQ);
+
+			OrderType ot = selectedOrderTypeIdx == 1
+				? OrderType.Limit
+				: (selectedOrderTypeIdx == 2 ? OrderType.StopMarket : OrderType.Market);
+			double entryPx = (ot == OrderType.Market) ? 0.0 : GetCurrentOrderReferenceEntryPrice();
+
+			ExecuteSubmitOrderCore(
+				isOrderSideBuy,
+				ot,
+				entryPx,
+				orderQtyValue,
+				orderSlEnabled,
+				orderSlTicks,
+				orderTpEnabled,
+				orderTpTicks,
+				orderTrailEnabled,
+				orderTrailTicks);
+		}
+
+		private void OnUserEditedSlPriceText()
+		{
+			if (txtSlPrice == null || !double.TryParse(txtSlPrice.Text, NumberStyles.Any, CultureInfo.InvariantCulture, out double px) || px <= 0)
+				return;
+			double tick = TickSize > 0 ? TickSize : 0.05;
+			double refEntry = GetCurrentOrderReferenceEntryPrice();
+			int ticks = Math.Max(1, (int)Math.Round(Math.Abs(refEntry - RoundToInstrumentTick(px)) / tick));
+			orderSlTicks = Math.Min(ComputeCapitalProtectorMaxSlTicks(orderQtyValue), Math.Min(100000, ticks));
+			orderSlEnabled = true;
+			if (!orderTpManuallyCustomized)
+			{
+				double rrInit = InitialOrderRrRatio > 0.1 ? InitialOrderRrRatio : 3.0;
+				orderTpEnabled = true;
+				orderTpTicks = Math.Max(1, (int)Math.Round(orderSlTicks * rrInit));
+			}
+			SyncTradePanelUiFromState();
+			RequestImmediateOrderflowRedraw();
+		}
+
+		private void OnUserEditedSlOffsetText()
+		{
+			if (txtSlOffset == null || !double.TryParse(txtSlOffset.Text, NumberStyles.Any, CultureInfo.InvariantCulture, out double val) || val <= 0)
+				return;
+			double tick = TickSize > 0 ? TickSize : 0.05;
+			double pv = (Instrument != null && Instrument.MasterInstrument != null && Instrument.MasterInstrument.PointValue > 0) ? Instrument.MasterInstrument.PointValue : 1.0;
+			if (orderSlUnitIsCurrency)
+			{
+				double dollarPerTick = Math.Max(1e-6, orderQtyValue * tick * pv);
+				orderSlTicks = Math.Max(1, Math.Min(100000, (int)Math.Round(val / dollarPerTick)));
+			}
+			else
+			{
+				orderSlTicks = Math.Max(1, Math.Min(100000, (int)Math.Round(val)));
+			}
+			orderSlTicks = Math.Min(orderSlTicks, ComputeCapitalProtectorMaxSlTicks(orderQtyValue));
+			orderSlEnabled = true;
+			if (!orderTpManuallyCustomized)
+			{
+				double rrInit = InitialOrderRrRatio > 0.1 ? InitialOrderRrRatio : 3.0;
+				orderTpEnabled = true;
+				orderTpTicks = Math.Max(1, (int)Math.Round(orderSlTicks * rrInit));
+			}
+			SyncTradePanelUiFromState();
+			RequestImmediateOrderflowRedraw();
+		}
+
+		private void OnUserEditedTpPriceText()
+		{
+			if (txtTpPrice == null || !double.TryParse(txtTpPrice.Text, NumberStyles.Any, CultureInfo.InvariantCulture, out double px) || px <= 0)
+				return;
+			double tick = TickSize > 0 ? TickSize : 0.05;
+			double refEntry = GetCurrentOrderReferenceEntryPrice();
+			int ticks = Math.Max(1, (int)Math.Round(Math.Abs(RoundToInstrumentTick(px) - refEntry) / tick));
+			orderTpTicks = Math.Min(100000, ticks);
+			orderTpEnabled = true;
+			orderTpManuallyCustomized = true;
+			SyncTradePanelUiFromState();
+			RequestImmediateOrderflowRedraw();
+		}
+
+		private void OnUserEditedTpOffsetText()
+		{
+			if (txtTpOffset == null || !double.TryParse(txtTpOffset.Text, NumberStyles.Any, CultureInfo.InvariantCulture, out double val) || val <= 0)
+				return;
+			double tick = TickSize > 0 ? TickSize : 0.05;
+			double pv = (Instrument != null && Instrument.MasterInstrument != null && Instrument.MasterInstrument.PointValue > 0) ? Instrument.MasterInstrument.PointValue : 1.0;
+			if (orderTpUnitIsCurrency)
+			{
+				double dollarPerTick = Math.Max(1e-6, orderQtyValue * tick * pv);
+				orderTpTicks = Math.Max(1, Math.Min(100000, (int)Math.Round(val / dollarPerTick)));
+			}
+			else
+			{
+				orderTpTicks = Math.Max(1, Math.Min(100000, (int)Math.Round(val)));
+			}
+			orderTpEnabled = true;
+			orderTpManuallyCustomized = true;
+			SyncTradePanelUiFromState();
+			RequestImmediateOrderflowRedraw();
+		}
+
+		private void PopulateAccountPopupItems()
+		{
+			if (tradeAccountPopupList == null)
+				return;
+			tradeAccountPopupList.Children.Clear();
+			List<Account> accounts = GetAvailableTradeAccounts();
+			Account cur = EnsureActiveTradeAccountSelected();
+
+			for (int i = 0; i < accounts.Count; i++)
+			{
+				Account acc = accounts[i];
+				bool isSel = (cur != null && string.Equals(acc.Name, cur.Name, StringComparison.OrdinalIgnoreCase));
+				var itemBd = new WpfControls.Border
+				{
+					Background = isSel ? MakeFrozenBrush(26, 38, 56) : WpfMedia.Brushes.Transparent,
+					CornerRadius = new CornerRadius(4),
+					Padding = new Thickness(8, 6, 8, 6),
+					Cursor = Cursors.Hand
+				};
+				var row = new WpfControls.StackPanel { Orientation = WpfControls.Orientation.Horizontal };
+				row.Children.Add(new WpfShapes.Ellipse
+				{
+					Width = 6,
+					Height = 6,
+					Fill = isSel ? MakeFrozenBrush(16, 185, 129) : MakeFrozenBrush(100, 116, 139),
+					VerticalAlignment = VerticalAlignment.Center,
+					Margin = new Thickness(0, 0, 7, 0)
+				});
+				row.Children.Add(new WpfControls.TextBlock
+				{
+					Text = !string.IsNullOrWhiteSpace(acc.DisplayName) ? acc.DisplayName : acc.Name,
+					FontSize = 11.5,
+					FontWeight = isSel ? FontWeights.Bold : FontWeights.SemiBold,
+					Foreground = isSel ? MakeFrozenBrush(248, 250, 252) : MakeFrozenBrush(203, 213, 225)
+				});
+				itemBd.Child = row;
+				Account capturedAcc = acc;
+				itemBd.MouseLeftButtonDown += (s, e) =>
+				{
+					SelectTradeAccount(capturedAcc);
+					if (tradeAccountPopup != null) tradeAccountPopup.IsOpen = false;
+					e.Handled = true;
+				};
+				tradeAccountPopupList.Children.Add(itemBd);
+			}
+		}
+
+		private void SyncTradePanelUiFromState()
+		{
+			if (tradePanelRoot == null || isSyncingTradePanelUi)
+				return;
+
+			isSyncingTradePanelUi = true;
+			try
+			{
+				Account acc = EnsureActiveTradeAccountSelected();
+				string curSym = GetAccountCurrencyPrefix(acc);
+				ResolveLiveBidAskLast(out double bid, out double ask, out double last);
+				double tick = TickSize > 0 ? TickSize : 0.05;
+				double pv = (Instrument != null && Instrument.MasterInstrument != null && Instrument.MasterInstrument.PointValue > 0)
+					? Instrument.MasterInstrument.PointValue
+					: 1.0;
+
+				// 1. Account Header & Bal / RP&L / UP&L
+				if (txtSelectedAccountLabel != null)
+					txtSelectedAccountLabel.Text = acc != null ? (!string.IsNullOrWhiteSpace(acc.DisplayName) ? acc.DisplayName : acc.Name) : "No Account";
+
+				double bal = 0.0, rpl = 0.0;
+				if (acc != null)
+				{
+					try
+					{
+						bal = acc.Get(AccountItem.CashValue, acc.Denomination);
+						if (Math.Abs(bal) < 1e-6)
+							bal = acc.Get(AccountItem.NetLiquidation, acc.Denomination);
+						rpl = acc.Get(AccountItem.RealizedProfitLoss, acc.Denomination);
+					}
+					catch { }
+				}
+
+				Position pos = GetCurrentInstrumentPosition(acc, nonBlocking: true);
+				double upl = 0.0;
+				bool hasOpenPos = (pos != null && pos.MarketPosition != MarketPosition.Flat && pos.Quantity > 0);
+				if (hasOpenPos)
+				{
+					try { upl = pos.GetUnrealizedProfitLoss(PerformanceUnit.Currency, last); } catch { }
+				}
+
+				if (txtBalVal != null)
+					txtBalVal.Text = curSym + bal.ToString("N2", CultureInfo.InvariantCulture);
+
+				if (txtRplVal != null)
+				{
+					string sign = rpl > 0.004 ? "+" : (rpl < -0.004 ? "-" : "");
+					txtRplVal.Text = sign + curSym + Math.Abs(rpl).ToString("N2", CultureInfo.InvariantCulture);
+					txtRplVal.Foreground = rpl > 0.004
+						? MakeFrozenBrush(16, 185, 129)
+						: (rpl < -0.004 ? MakeFrozenBrush(239, 68, 68) : MakeFrozenBrush(203, 213, 225));
+				}
+
+				if (txtUplVal != null)
+				{
+					if (!hasOpenPos)
+					{
+						txtUplVal.Text = curSym + "--";
+						txtUplVal.Foreground = MakeFrozenBrush(148, 163, 184);
+					}
+					else
+					{
+						string sign = upl >= 0 ? "+" : "-";
+						txtUplVal.Text = sign + curSym + Math.Abs(upl).ToString("N2", CultureInfo.InvariantCulture);
+						txtUplVal.Foreground = upl >= 0 ? MakeFrozenBrush(16, 185, 129) : MakeFrozenBrush(239, 68, 68);
+					}
+				}
+
+				// 2. Symbol & TIF
+				if (txtSymbolHeader != null && Instrument != null)
+				{
+					string exch = (Instrument.MasterInstrument != null) ? Instrument.MasterInstrument.InstrumentType.ToString().ToUpperInvariant() : "";
+					try
+					{
+						if (Instrument.MasterInstrument != null && Instrument.MasterInstrument.TradingHours != null)
+						{
+							string th = Instrument.MasterInstrument.TradingHours.Name ?? "";
+							if (th.IndexOf("Comex", StringComparison.OrdinalIgnoreCase) >= 0) exch = "COMEX";
+							else if (th.IndexOf("CME", StringComparison.OrdinalIgnoreCase) >= 0) exch = "CME";
+							else if (th.IndexOf("Nymex", StringComparison.OrdinalIgnoreCase) >= 0) exch = "NYMEX";
+							else if (th.IndexOf("Nse", StringComparison.OrdinalIgnoreCase) >= 0) exch = "NSE";
+							else if (th.IndexOf("MCX", StringComparison.OrdinalIgnoreCase) >= 0) exch = "MCX";
+						}
+					}
+					catch { }
+					txtSymbolHeader.Text = (!string.IsNullOrEmpty(exch) ? (exch + ":") : "") + Instrument.FullName;
+				}
+				if (btnTifToggle != null)
+					btnTifToggle.Content = (selectedOrderTif == TimeInForce.Gtc) ? "GTC" : "DAY";
+
+				// 3. Live Position Banner
+				if (livePosBanner != null)
+				{
+					livePosBanner.Visibility = hasOpenPos ? Visibility.Visible : Visibility.Collapsed;
+					if (hasOpenPos)
+					{
+						bool pLong = (pos.MarketPosition == MarketPosition.Long);
+						string panelRr = string.Empty;
+						List<Order> wos = GetCurrentInstrumentWorkingOrders(acc, nonBlocking: true);
+						double wTpSum = 0.0, wTpQty = 0.0, wSlSum = 0.0, wSlQty = 0.0;
+						for (int wi = 0; wi < wos.Count; wi++)
+						{
+							int wr = ClassifyWorkingOrderRole(wos[wi], pos);
+							double wp = GetWorkingOrderEffectivePrice(wos[wi]);
+							if (wp <= 0.0) continue;
+							double wq = Math.Max(1, wos[wi].Quantity);
+							if (wr == 1) { wTpSum += wp * wq; wTpQty += wq; }
+							else if (wr == 2) { wSlSum += wp * wq; wSlQty += wq; }
+						}
+						if (wTpQty > 0.0 && wSlQty > 0.0)
+						{
+							string rBadge = FormatLiveRiskRewardBadge(pos.AveragePrice, wSlSum / wSlQty, wTpSum / wTpQty, tick);
+							if (!string.IsNullOrEmpty(rBadge))
+								panelRr = " · " + rBadge;
+						}
+						txtLivePosBanner.Text = (pLong ? "LONG +" : "SHORT -") + pos.Quantity + " @ " + FormatOrderflowPrice(pos.AveragePrice) + panelRr;
+						txtLivePosBanner.Foreground = pLong ? MakeFrozenBrush(52, 211, 153) : MakeFrozenBrush(248, 113, 113);
+
+						string uSign = upl >= 0 ? "+" : "-";
+						txtLivePosPnl.Text = uSign + curSym + Math.Abs(upl).ToString("N2", CultureInfo.InvariantCulture);
+						txtLivePosPnl.Foreground = upl >= 0 ? MakeFrozenBrush(52, 211, 153) : MakeFrozenBrush(248, 113, 113);
+					}
+				}
+
+				// 4. Tabs Visual State (Scalp vs Order)
+				var blueTab = MakeFrozenBrush(43, 127, 255);
+				var txtBright = MakeFrozenBrush(248, 250, 252);
+				var txtMuted = MakeFrozenBrush(138, 148, 166);
+				if (tabTxtScalp != null) tabTxtScalp.Foreground = isTradeTabScalp ? blueTab : txtMuted;
+				if (tabLineScalp != null) tabLineScalp.Background = isTradeTabScalp ? blueTab : WpfMedia.Brushes.Transparent;
+				if (tabTxtOrder != null) tabTxtOrder.Foreground = !isTradeTabScalp ? blueTab : txtMuted;
+				if (tabLineOrder != null) tabLineOrder.Background = !isTradeTabScalp ? blueTab : WpfMedia.Brushes.Transparent;
+
+				if (viewOrderTab != null) viewOrderTab.Visibility = !isTradeTabScalp ? Visibility.Visible : Visibility.Collapsed;
+				if (viewScalpTab != null) viewScalpTab.Visibility = isTradeTabScalp ? Visibility.Visible : Visibility.Collapsed;
+
+				// 5. Order Tab Controls
+				if (txtBuyBidVal != null) txtBuyBidVal.Text = FormatOrderflowPrice(bid);
+				if (txtSellAskVal != null) txtSellAskVal.Text = FormatOrderflowPrice(ask);
+
+				if (cardBuySide != null)
+				{
+					cardBuySide.Background = isOrderSideBuy ? MakeFrozenBrush(11, 38, 32) : MakeFrozenBrush(20, 24, 32);
+					cardBuySide.BorderBrush = isOrderSideBuy ? MakeFrozenBrush(16, 185, 129) : MakeFrozenBrush(34, 41, 54);
+				}
+				if (cardSellSide != null)
+				{
+					cardSellSide.Background = !isOrderSideBuy ? MakeFrozenBrush(42, 18, 23) : MakeFrozenBrush(20, 24, 32);
+					cardSellSide.BorderBrush = !isOrderSideBuy ? MakeFrozenBrush(239, 68, 68) : MakeFrozenBrush(34, 41, 54);
+				}
+
+				void StyleTypePill(WpfControls.Border b, WpfControls.TextBlock t, bool active)
+				{
+					if (b == null || t == null) return;
+					b.Background = active ? MakeFrozenBrush(26, 33, 46) : MakeFrozenBrush(16, 20, 28);
+					b.BorderBrush = active ? MakeFrozenBrush(110, 130, 158) : MakeFrozenBrush(36, 44, 58);
+					t.Foreground = active ? txtBright : txtMuted;
+				}
+				StyleTypePill(pillTypeMkt, txtTypeMkt, selectedOrderTypeIdx == 0);
+				StyleTypePill(pillTypeLmt, txtTypeLmt, selectedOrderTypeIdx == 1);
+				StyleTypePill(pillTypeStp, txtTypeStp, selectedOrderTypeIdx == 2);
+
+				double refEntry = GetCurrentOrderReferenceEntryPrice();
+				if (selectedOrderTypeIdx == 0)
+				{
+					if (lblEntryPriceTitle != null) lblEntryPriceTitle.Text = "Market Price";
+					if (txtMarketPriceBig != null)
+					{
+						txtMarketPriceBig.Visibility = Visibility.Visible;
+						txtMarketPriceBig.Text = FormatOrderflowPrice(refEntry);
+					}
+					if (grpCustomEntryInput != null) grpCustomEntryInput.Visibility = Visibility.Collapsed;
+				}
+				else
+				{
+					if (lblEntryPriceTitle != null)
+						lblEntryPriceTitle.Text = selectedOrderTypeIdx == 1 ? "Limit Price (Drag on Chart)" : "Stop Price (Drag on Chart)";
+					if (txtMarketPriceBig != null) txtMarketPriceBig.Visibility = Visibility.Collapsed;
+					if (grpCustomEntryInput != null) grpCustomEntryInput.Visibility = Visibility.Visible;
+					if (txtCustomEntryPrice != null && !txtCustomEntryPrice.IsKeyboardFocused)
+						txtCustomEntryPrice.Text = FormatOrderflowPrice(refEntry);
+				}
+
+				if (txtOrderQty != null && !txtOrderQty.IsKeyboardFocused)
+					txtOrderQty.Text = orderQtyValue.ToString(CultureInfo.InvariantCulture);
+				if (txtScalpQty != null && !txtScalpQty.IsKeyboardFocused)
+					txtScalpQty.Text = orderQtyValue.ToString(CultureInfo.InvariantCulture);
+
+				// Stop Loss & Take Profit Synced Values
+				if (chkSlEnable != null) chkSlEnable.IsChecked = orderSlEnabled;
+				if (chkTrailEnable != null) chkTrailEnable.IsChecked = orderTrailEnabled;
+				if (txtTrailTicks != null && !txtTrailTicks.IsKeyboardFocused)
+					txtTrailTicks.Text = orderTrailTicks.ToString(CultureInfo.InvariantCulture);
+
+				double calcSlPx = isOrderSideBuy
+					? RoundToInstrumentTick(refEntry - orderSlTicks * tick)
+					: RoundToInstrumentTick(refEntry + orderSlTicks * tick);
+				double slDollarAmt = orderQtyValue * orderSlTicks * tick * pv;
+
+				if (txtSlPrice != null && !txtSlPrice.IsKeyboardFocused)
+				{
+					txtSlPrice.Text = orderSlEnabled ? FormatOrderflowPrice(calcSlPx) : "00.00";
+					txtSlPrice.Foreground = orderSlEnabled ? txtBright : MakeFrozenBrush(148, 163, 184);
+				}
+				if (btnSlUnit != null)
+					btnSlUnit.Content = orderSlUnitIsCurrency ? (curSym + " ▾") : "Ticks ▾";
+				if (txtSlOffset != null && !txtSlOffset.IsKeyboardFocused)
+				{
+					txtSlOffset.Text = orderSlUnitIsCurrency
+						? slDollarAmt.ToString("0.##", CultureInfo.InvariantCulture)
+						: orderSlTicks.ToString(CultureInfo.InvariantCulture);
+					txtSlOffset.Foreground = orderSlEnabled ? txtBright : MakeFrozenBrush(186, 198, 214);
+				}
+
+				int[] presetNums = new int[] { 10, 25, 50, 100 };
+				for (int pi = 0; pi < 4; pi++)
+				{
+					var sb = slPresetBtns[pi];
+					if (sb != null)
+					{
+						bool sel = orderSlEnabled && !orderSlUnitIsCurrency && orderSlTicks == presetNums[pi];
+						sb.Background = sel ? MakeFrozenBrush(153, 27, 45) : MakeFrozenBrush(36, 18, 26);
+						sb.BorderBrush = sel ? MakeFrozenBrush(252, 165, 165) : MakeFrozenBrush(136, 38, 56);
+						sb.Foreground = sel ? WpfMedia.Brushes.White : MakeFrozenBrush(252, 165, 165);
+					}
+				}
+
+				if (chkTpEnable != null) chkTpEnable.IsChecked = orderTpEnabled;
+				double calcTpPx = isOrderSideBuy
+					? RoundToInstrumentTick(refEntry + orderTpTicks * tick)
+					: RoundToInstrumentTick(refEntry - orderTpTicks * tick);
+				double tpDollarAmt = orderQtyValue * orderTpTicks * tick * pv;
+
+				if (txtTpPrice != null && !txtTpPrice.IsKeyboardFocused)
+				{
+					txtTpPrice.Text = orderTpEnabled ? FormatOrderflowPrice(calcTpPx) : "00.00";
+					txtTpPrice.Foreground = orderTpEnabled ? txtBright : MakeFrozenBrush(148, 163, 184);
+				}
+				if (btnTpUnit != null)
+					btnTpUnit.Content = orderTpUnitIsCurrency ? (curSym + " ▾") : "Ticks ▾";
+				if (txtTpOffset != null && !txtTpOffset.IsKeyboardFocused)
+				{
+					txtTpOffset.Text = orderTpUnitIsCurrency
+						? tpDollarAmt.ToString("0.##", CultureInfo.InvariantCulture)
+						: orderTpTicks.ToString(CultureInfo.InvariantCulture);
+					txtTpOffset.Foreground = orderTpEnabled ? txtBright : MakeFrozenBrush(186, 198, 214);
+				}
+
+				for (int pi = 0; pi < 4; pi++)
+				{
+					var tb = tpPresetBtns[pi];
+					if (tb != null)
+					{
+						bool sel = orderTpEnabled && !orderTpUnitIsCurrency && orderTpTicks == presetNums[pi];
+						tb.Background = sel ? MakeFrozenBrush(13, 124, 89) : MakeFrozenBrush(14, 34, 29);
+						tb.BorderBrush = sel ? MakeFrozenBrush(110, 231, 183) : MakeFrozenBrush(24, 114, 86);
+						tb.Foreground = sel ? WpfMedia.Brushes.White : MakeFrozenBrush(110, 231, 183);
+					}
+				}
+
+				if (txtOrderRrSummary != null)
+				{
+					if (orderSlEnabled && orderTpEnabled && orderSlTicks > 0)
+					{
+						double rr = (double)orderTpTicks / orderSlTicks;
+						txtOrderRrSummary.Text = string.Format(CultureInfo.InvariantCulture, "RR 1 : {0:0.##}", rr);
+					}
+					else
+					{
+						txtOrderRrSummary.Text = string.Empty;
+					}
+				}
+
+				// Evaluate Live Risk & Discipline Guard State for Panel + Button Lockout
+				EnforceRiskAndCapitalProtectorOnTick(last);
+				bool isBlocked = IsNewOrderBlockedByRiskDiscipline(acc, out string lockReason, out DateTime unlockAt);
+				double dayNet = rpl + (hasOpenPos ? upl : 0.0);
+
+				if (riskGuardCardBorder != null)
+				{
+					bool showCard = EnableRiskManagement || EnableCapitalProtector;
+					riskGuardCardBorder.Visibility = showCard ? Visibility.Visible : Visibility.Collapsed;
+					if (showCard)
+					{
+						string trTxt = MaxTradesPerDay > 0
+							? string.Format(CultureInfo.InvariantCulture, "Trades {0}/{1}", cachedTradesDoneToday, MaxTradesPerDay)
+							: string.Format(CultureInfo.InvariantCulture, "Trades {0}", cachedTradesDoneToday);
+						if (txtRiskGuardTrades != null)
+							txtRiskGuardTrades.Text = trTxt;
+
+						string dNetSign = dayNet >= 0 ? "+" : "-";
+						string tgtPart = DailyProfitTargetAmount > 0 ? (curSym + DailyProfitTargetAmount.ToString("0.##", CultureInfo.InvariantCulture)) : "Off";
+						string slPart = DailyMaxLossAmount > 0 ? ("-" + curSym + Math.Abs(DailyMaxLossAmount).ToString("0.##", CultureInfo.InvariantCulture)) : "Off";
+
+						if (isBlocked)
+						{
+							riskGuardCardBorder.Background = MakeFrozenBrush(46, 16, 24);
+							riskGuardCardBorder.BorderBrush = MakeFrozenBrush(244, 63, 94);
+							if (riskGuardTradesPill != null)
+							{
+								riskGuardTradesPill.Background = MakeFrozenBrush(76, 20, 32);
+								riskGuardTradesPill.BorderBrush = MakeFrozenBrush(251, 113, 133);
+							}
+							if (txtRiskGuardTrades != null)
+								txtRiskGuardTrades.Foreground = MakeFrozenBrush(254, 205, 211);
+							if (txtRiskGuardTitle != null)
+							{
+								txtRiskGuardTitle.Text = "🔒 DISCIPLINE LOCKED";
+								txtRiskGuardTitle.Foreground = MakeFrozenBrush(251, 113, 133);
+							}
+							if (txtRiskGuardRow1 != null)
+							{
+								txtRiskGuardRow1.Text = lockReason;
+								txtRiskGuardRow1.Foreground = MakeFrozenBrush(254, 226, 226);
+							}
+							if (txtRiskGuardRow2 != null)
+							{
+								txtRiskGuardRow2.Text = "Unlocks Next Day Open (" + unlockAt.ToString("dd MMM hh:mm tt", CultureInfo.InvariantCulture) + ")";
+								txtRiskGuardRow2.Foreground = MakeFrozenBrush(251, 191, 36);
+							}
+						}
+						else
+						{
+							riskGuardCardBorder.Background = MakeFrozenBrush(13, 22, 36);
+							riskGuardCardBorder.BorderBrush = MakeFrozenBrush(34, 150, 198);
+							if (riskGuardTradesPill != null)
+							{
+								riskGuardTradesPill.Background = MakeFrozenBrush(18, 34, 52);
+								riskGuardTradesPill.BorderBrush = MakeFrozenBrush(56, 189, 248);
+							}
+							if (txtRiskGuardTrades != null)
+								txtRiskGuardTrades.Foreground = MakeFrozenBrush(125, 211, 252);
+							if (txtRiskGuardTitle != null)
+							{
+								txtRiskGuardTitle.Text = "🛡 RISK & CAPITAL GUARD";
+								txtRiskGuardTitle.Foreground = MakeFrozenBrush(56, 189, 248);
+							}
+							if (txtRiskGuardRow1 != null)
+							{
+								txtRiskGuardRow1.Text = string.Format(CultureInfo.InvariantCulture, "Day {0}{1}{2:N2}  ·  Tgt {3} / SL {4}", dNetSign, curSym, Math.Abs(dayNet), tgtPart, slPart);
+								txtRiskGuardRow1.Foreground = dayNet >= 0 ? MakeFrozenBrush(226, 232, 240) : MakeFrozenBrush(252, 165, 165);
+							}
+							if (txtRiskGuardRow2 != null)
+							{
+								string capPart = EnableCapitalProtector
+									? string.Format(CultureInfo.InvariantCulture, "Cap Protector: {0}{1:0.##}", curSym, CapitalProtectorAmount)
+									: "Cap Protector: Off";
+								double dispRr = (orderSlEnabled && orderTpEnabled && orderSlTicks > 0)
+									? ((double)orderTpTicks / orderSlTicks)
+									: Math.Max(0.5, InitialOrderRrRatio);
+								txtRiskGuardRow2.Text = string.Format(CultureInfo.InvariantCulture, "{0}  ·  R:R 1:{1:0.#}", capPart, dispRr);
+								txtRiskGuardRow2.Foreground = MakeFrozenBrush(52, 211, 153);
+							}
+						}
+					}
+				}
+
+				if (btnOrderConfirm != null)
+				{
+					btnOrderConfirm.IsEnabled = !isBlocked;
+					btnOrderConfirm.Opacity = isBlocked ? 0.58 : 1.0;
+					if (isBlocked)
+					{
+						btnOrderConfirm.Background = MakeFrozenBrush(51, 30, 38);
+						btnOrderConfirm.BorderBrush = MakeFrozenBrush(159, 43, 68);
+						btnOrderConfirm.Content = "🔒 Locked Until " + unlockAt.ToString("hh:mm tt", CultureInfo.InvariantCulture);
+					}
+					else
+					{
+						btnOrderConfirm.Background = isOrderSideBuy
+							? MakeFrozenBrush(15, 159, 114)
+							: MakeFrozenBrush(225, 29, 72);
+						btnOrderConfirm.BorderBrush = isOrderSideBuy
+							? MakeFrozenBrush(22, 192, 138)
+							: MakeFrozenBrush(244, 63, 94);
+						btnOrderConfirm.Content = isTradeTabScalp
+							? (isOrderSideBuy ? "Quick Buy Market" : "Quick Sell Market")
+							: "Confirm";
+					}
+				}
+
+				for (int sbi = 0; sbi < scalpEntryButtons.Count; sbi++)
+				{
+					if (scalpEntryButtons[sbi] != null)
+					{
+						scalpEntryButtons[sbi].IsEnabled = !isBlocked;
+						scalpEntryButtons[sbi].Opacity = isBlocked ? 0.45 : 1.0;
+					}
+				}
+				if (btnQuickRevRef != null) { btnQuickRevRef.IsEnabled = !isBlocked; btnQuickRevRef.Opacity = isBlocked ? 0.45 : 1.0; }
+				if (btnScalpRevRef != null) { btnScalpRevRef.IsEnabled = !isBlocked; btnScalpRevRef.Opacity = isBlocked ? 0.45 : 1.0; }
+
+				// Scalp Tab Working Orders List
+				if (chkScalpAutoBracket != null) chkScalpAutoBracket.IsChecked = scalpUseAutoBracket;
+				if (txtScalpBracketInfo != null)
+					txtScalpBracketInfo.Text = string.Format(CultureInfo.InvariantCulture, "SL {0}T / TP {1}T", orderSlTicks, orderTpTicks);
+
+				if (isTradeTabScalp && pnlScalpWorkingOrders != null)
+				{
+					pnlScalpWorkingOrders.Children.Clear();
+					List<Order> working = GetCurrentInstrumentWorkingOrders(acc);
+					if (working.Count == 0)
+					{
+						pnlScalpWorkingOrders.Children.Add(new WpfControls.TextBlock
+						{
+							Text = "No active working orders",
+							FontSize = 10.5,
+							Foreground = MakeFrozenBrush(100, 116, 139)
+						});
+					}
+					else
+					{
+						for (int i = 0; i < working.Count; i++)
+						{
+							Order wo = working[i];
+							double wPx = GetWorkingOrderEffectivePrice(wo);
+							int role = ClassifyWorkingOrderRole(wo, pos);
+							string tag = role == 1 ? "TP " : (role == 2 ? "SL " : (IsOrderBuySide(wo.OrderAction) ? "BUY " : "SELL "));
+
+							var rowBd = new WpfControls.Border
+							{
+								Background = MakeFrozenBrush(18, 22, 30),
+								BorderBrush = MakeFrozenBrush(33, 40, 54),
+								BorderThickness = new Thickness(1),
+								CornerRadius = new CornerRadius(4),
+								Padding = new Thickness(6, 3, 4, 3),
+								Margin = new Thickness(0, 0, 0, 4)
+							};
+							var dp = new WpfControls.DockPanel();
+							Order capWo = wo;
+							var btnCxlOne = CreateFlatDarkButton("✕", WpfMedia.Brushes.Transparent, WpfMedia.Brushes.Transparent, MakeFrozenBrush(248, 113, 113), 10.2, 3.0, new Thickness(5, 1, 5, 1));
+							btnCxlOne.Click += (s, e) =>
+							{
+								try { acc?.Cancel(new[] { capWo }); } catch { }
+							};
+							WpfControls.DockPanel.SetDock(btnCxlOne, WpfControls.Dock.Right);
+							dp.Children.Add(btnCxlOne);
+
+							dp.Children.Add(new WpfControls.TextBlock
+							{
+								Text = tag + wo.Quantity + " @ " + FormatOrderflowPrice(wPx),
+								FontSize = 10.8,
+								FontWeight = FontWeights.SemiBold,
+								Foreground = role == 1 ? MakeFrozenBrush(52, 211, 153) : (role == 2 ? MakeFrozenBrush(248, 113, 113) : txtBright),
+								VerticalAlignment = VerticalAlignment.Center
+							});
+							rowBd.Child = dp;
+							pnlScalpWorkingOrders.Children.Add(rowBd);
+						}
+					}
+				}
+
+				if (txtTradeStatusToast != null && !string.IsNullOrEmpty(txtTradeStatusToast.Text) && DateTime.UtcNow > tradeToastExpireUtc)
+				{
+					txtTradeStatusToast.Text = string.Empty;
+				}
+			}
+			catch { }
+			finally
+			{
+				isSyncingTradePanelUi = false;
+			}
+		}
+
+		// ====================================================================================================
+		// DIRECT2D LIVE POSITION / WORKING ORDERS OVERLAY + INTERACTIVE DRAG TP / SL / ENTRY ON CHART
+		// ====================================================================================================
+		private int HitTestLiveOrderRegionIndex(float pxX, float pxY, out Cursor hoverCursor)
+		{
+			hoverCursor = null;
+			if (!EnableLiveChartOrders || liveChartHitRegions.Count == 0 || IsPointOverRightScaleLane(pxX, pxY))
+				return -1;
+
+			// 1st Pass: Exact pill / action button rectangles (reverse draw order = topmost first)
+			for (int i = liveChartHitRegions.Count - 1; i >= 0; i--)
+			{
+				LiveChartHitRegion r = liveChartHitRegions[i];
+				if (r.Rect.Width > 0f && ContainsPtPadded(r.Rect, pxX, pxY, 2.0f))
+				{
+					hoverCursor = (r.Kind == LiveOrderHitKind.ClosePositionBtn ||
+						r.Kind == LiveOrderHitKind.ReversePositionBtn ||
+						r.Kind == LiveOrderHitKind.BreakevenPositionBtn ||
+						r.Kind == LiveOrderHitKind.CancelWorkingOrderBtn ||
+						r.Kind == LiveOrderHitKind.CancelPendingBracketTpBtn ||
+						r.Kind == LiveOrderHitKind.CancelPendingBracketSlBtn)
+						? Cursors.Hand
+						: Cursors.SizeNS;
+					return i;
+				}
+			}
+
+			// 2nd Pass: Horizontal draggable order line hit-testing (±5.5px around TP / SL / Entry lines)
+			for (int i = liveChartHitRegions.Count - 1; i >= 0; i--)
+			{
+				LiveChartHitRegion r = liveChartHitRegions[i];
+				if (r.AllowLineGrab && pxX >= r.LineX0 && pxX <= r.LineX1 && Math.Abs(pxY - r.LineY) <= 5.5f)
+				{
+					hoverCursor = Cursors.SizeNS;
+					return i;
+				}
+			}
+
+			return -1;
+		}
+
+		private bool TryBeginLiveOrderCanvasInteraction(ChartControl cc, float pxX, float pxY)
+		{
+			if (!EnableLiveChartOrders || cc == null || lastRenderedChartScale == null)
+				return false;
+
+			int hitIdx = HitTestLiveOrderRegionIndex(pxX, pxY, out _);
+			if (hitIdx < 0 || hitIdx >= liveChartHitRegions.Count)
+				return false;
+
+			LiveChartHitRegion hit = liveChartHitRegions[hitIdx];
+			Account acc = EnsureActiveTradeAccountSelected();
+
+			switch (hit.Kind)
+			{
+				case LiveOrderHitKind.ClosePositionBtn:
+					ExecuteFlattenCurrentInstrument();
+					return true;
+
+				case LiveOrderHitKind.ReversePositionBtn:
+					ExecuteReverseCurrentPosition();
+					return true;
+
+				case LiveOrderHitKind.BreakevenPositionBtn:
+					ExecuteMoveStopToBreakeven();
+					return true;
+
+				case LiveOrderHitKind.CancelWorkingOrderBtn:
+					if (hit.TargetOrder != null && acc != null)
+					{
+						try
+						{
+							acc.Cancel(new[] { hit.TargetOrder });
+							ShowTradeToast("Cancelled order @ " + FormatOrderflowPrice(hit.InitialPrice));
+						}
+						catch (Exception ex)
+						{
+							ShowTradeToast("Cancel failed: " + ex.Message, true);
+						}
+						RequestImmediateOrderflowRedraw();
+					}
+					return true;
+
+				case LiveOrderHitKind.AddTpDragChip:
+					activeLiveOrderDragMode = LiveOrderDragMode.DragNewTpFromPosition;
+					activeDraggedWorkingOrder = null;
+					liveOrderDragStartPrice = hit.InitialPrice;
+					liveOrderDragCurrentPrice = hit.InitialPrice;
+					liveOrderDragStartMouseY = pxY;
+					liveOrderDragMoved = false;
+					EnsureAutoYAxisFor360View();
+					RequestImmediateOrderflowRedraw();
+					return true;
+
+				case LiveOrderHitKind.AddSlDragChip:
+					activeLiveOrderDragMode = LiveOrderDragMode.DragNewSlFromPosition;
+					activeDraggedWorkingOrder = null;
+					liveOrderDragStartPrice = hit.InitialPrice;
+					liveOrderDragCurrentPrice = hit.InitialPrice;
+					liveOrderDragStartMouseY = pxY;
+					liveOrderDragMoved = false;
+					EnsureAutoYAxisFor360View();
+					RequestImmediateOrderflowRedraw();
+					return true;
+
+				case LiveOrderHitKind.WorkingOrderDrag:
+					if (hit.TargetOrder == null)
+						return false;
+					activeLiveOrderDragMode = LiveOrderDragMode.DragWorkingOrder;
+					activeDraggedWorkingOrder = hit.TargetOrder;
+					activeDraggedOrderIsStop = hit.IsStopOrder;
+					liveOrderDragStartPrice = hit.InitialPrice;
+					liveOrderDragCurrentPrice = hit.InitialPrice;
+					liveOrderDragStartMouseY = pxY;
+					liveOrderDragMoved = false;
+					EnsureAutoYAxisFor360View();
+					RequestImmediateOrderflowRedraw();
+					return true;
+
+				case LiveOrderHitKind.DraftEntryDrag:
+					activeLiveOrderDragMode = LiveOrderDragMode.DragDraftEntry;
+					liveOrderDragStartPrice = hit.InitialPrice;
+					liveOrderDragCurrentPrice = hit.InitialPrice;
+					liveOrderDragStartMouseY = pxY;
+					liveOrderDragMoved = false;
+					EnsureAutoYAxisFor360View();
+					RequestImmediateOrderflowRedraw();
+					return true;
+
+				case LiveOrderHitKind.DraftTpDrag:
+					activeLiveOrderDragMode = LiveOrderDragMode.DragDraftTp;
+					liveOrderDragStartPrice = hit.InitialPrice;
+					liveOrderDragCurrentPrice = hit.InitialPrice;
+					liveOrderDragStartMouseY = pxY;
+					liveOrderDragMoved = false;
+					EnsureAutoYAxisFor360View();
+					RequestImmediateOrderflowRedraw();
+					return true;
+
+				case LiveOrderHitKind.DraftSlDrag:
+					activeLiveOrderDragMode = LiveOrderDragMode.DragDraftSl;
+					liveOrderDragStartPrice = hit.InitialPrice;
+					liveOrderDragCurrentPrice = hit.InitialPrice;
+					liveOrderDragStartMouseY = pxY;
+					liveOrderDragMoved = false;
+					EnsureAutoYAxisFor360View();
+					RequestImmediateOrderflowRedraw();
+					return true;
+
+				case LiveOrderHitKind.PendingBracketTpDrag:
+					if (hit.TargetPendingSpec == null)
+						return false;
+					activeLiveOrderDragMode = LiveOrderDragMode.DragPendingBracketTp;
+					activeDraggedPendingSpec = hit.TargetPendingSpec;
+					liveOrderDragStartPrice = hit.InitialPrice;
+					liveOrderDragCurrentPrice = hit.InitialPrice;
+					liveOrderDragStartMouseY = pxY;
+					liveOrderDragMoved = false;
+					EnsureAutoYAxisFor360View();
+					RequestImmediateOrderflowRedraw();
+					return true;
+
+				case LiveOrderHitKind.PendingBracketSlDrag:
+					if (hit.TargetPendingSpec == null)
+						return false;
+					activeLiveOrderDragMode = LiveOrderDragMode.DragPendingBracketSl;
+					activeDraggedPendingSpec = hit.TargetPendingSpec;
+					liveOrderDragStartPrice = hit.InitialPrice;
+					liveOrderDragCurrentPrice = hit.InitialPrice;
+					liveOrderDragStartMouseY = pxY;
+					liveOrderDragMoved = false;
+					EnsureAutoYAxisFor360View();
+					RequestImmediateOrderflowRedraw();
+					return true;
+
+				case LiveOrderHitKind.CancelPendingBracketTpBtn:
+					if (hit.TargetPendingSpec != null)
+					{
+						lock (bracketLock) { hit.TargetPendingSpec.HasTp = false; }
+						ShowTradeToast("Removed pending Take Profit");
+						RequestImmediateOrderflowRedraw();
+					}
+					return true;
+
+				case LiveOrderHitKind.CancelPendingBracketSlBtn:
+					if (hit.TargetPendingSpec != null)
+					{
+						if (EnableCapitalProtector && CapitalProtectorAmount > 0)
+						{
+							ShowTradeToast("🛡 Capital Protector keeps Stop Loss active", true);
+						}
+						else
+						{
+							lock (bracketLock) { hit.TargetPendingSpec.HasSl = false; }
+							ShowTradeToast("Removed pending Stop Loss");
+							RequestImmediateOrderflowRedraw();
+						}
+					}
+					return true;
+			}
+
+			return false;
+		}
+
+		private bool UpdateLiveOrderCanvasDrag(ChartControl cc, float curPxX, float curPxY)
+		{
+			ChartScale cs = lastRenderedChartScale;
+			if (cs == null || activeLiveOrderDragMode == LiveOrderDragMode.None)
+				return false;
+
+			if (Math.Abs(curPxY - liveOrderDragStartMouseY) >= 2.0f)
+				liveOrderDragMoved = true;
+
+			double tick = TickSize > 0 ? TickSize : 0.05;
+			double rawPx = RoundToInstrumentTick(cs.GetValueByY(curPxY));
+			if (rawPx <= 0)
+				return false;
+
+			liveOrderDragCurrentPrice = rawPx;
+
+			// Real-time two-way sync when dragging pre-confirmation Draft Entry / TP / SL lines!
+			if (activeLiveOrderDragMode == LiveOrderDragMode.DragDraftEntry)
+			{
+				orderCustomEntryPrice = rawPx;
+				orderCustomEntrySeeded = true;
+				RequestTradeUiSyncAsync();
+			}
+			else if (activeLiveOrderDragMode == LiveOrderDragMode.DragDraftTp)
+			{
+				double refEntry = GetCurrentOrderReferenceEntryPrice();
+				double clamped = isOrderSideBuy ? Math.Max(refEntry + tick, rawPx) : Math.Min(refEntry - tick, rawPx);
+				liveOrderDragCurrentPrice = RoundToInstrumentTick(clamped);
+				orderTpTicks = Math.Max(1, (int)Math.Round(Math.Abs(liveOrderDragCurrentPrice - refEntry) / tick));
+				orderTpManuallyCustomized = true;
+				RequestTradeUiSyncAsync();
+			}
+			else if (activeLiveOrderDragMode == LiveOrderDragMode.DragDraftSl)
+			{
+				double refEntry = GetCurrentOrderReferenceEntryPrice();
+				int maxCapTicks = ComputeCapitalProtectorMaxSlTicks(orderQtyValue);
+				double clamped = isOrderSideBuy
+					? Math.Max(refEntry - maxCapTicks * tick, Math.Min(refEntry - tick, rawPx))
+					: Math.Min(refEntry + maxCapTicks * tick, Math.Max(refEntry + tick, rawPx));
+				liveOrderDragCurrentPrice = RoundToInstrumentTick(clamped);
+				orderSlTicks = Math.Max(1, (int)Math.Round(Math.Abs(refEntry - liveOrderDragCurrentPrice) / tick));
+				RequestTradeUiSyncAsync();
+			}
+			else if (activeLiveOrderDragMode == LiveOrderDragMode.DragPendingBracketTp && activeDraggedPendingSpec != null)
+			{
+				double entPx = GetWorkingOrderEffectivePrice(activeDraggedPendingSpec.EntryOrder);
+				if (entPx > 0)
+				{
+					double clamped = activeDraggedPendingSpec.IsLong ? Math.Max(entPx + tick, rawPx) : Math.Min(entPx - tick, rawPx);
+					liveOrderDragCurrentPrice = RoundToInstrumentTick(clamped);
+					int newTpT = Math.Max(1, (int)Math.Round(Math.Abs(liveOrderDragCurrentPrice - entPx) / tick));
+					lock (bracketLock) { activeDraggedPendingSpec.TpTicks = newTpT; }
+					orderTpTicks = newTpT;
+					orderTpManuallyCustomized = true;
+					RequestTradeUiSyncAsync();
+				}
+			}
+			else if (activeLiveOrderDragMode == LiveOrderDragMode.DragPendingBracketSl && activeDraggedPendingSpec != null)
+			{
+				double entPx = GetWorkingOrderEffectivePrice(activeDraggedPendingSpec.EntryOrder);
+				if (entPx > 0)
+				{
+					int maxCapTicks = ComputeCapitalProtectorMaxSlTicks(activeDraggedPendingSpec.TotalQty);
+					double clamped = activeDraggedPendingSpec.IsLong
+						? Math.Max(entPx - maxCapTicks * tick, Math.Min(entPx - tick, rawPx))
+						: Math.Min(entPx + maxCapTicks * tick, Math.Max(entPx + tick, rawPx));
+					liveOrderDragCurrentPrice = RoundToInstrumentTick(clamped);
+					int newSlT = Math.Max(1, (int)Math.Round(Math.Abs(entPx - liveOrderDragCurrentPrice) / tick));
+					lock (bracketLock) { activeDraggedPendingSpec.SlTicks = newSlT; }
+					orderSlTicks = newSlT;
+					RequestTradeUiSyncAsync();
+				}
+			}
+			else if (activeLiveOrderDragMode == LiveOrderDragMode.DragWorkingOrder && activeDraggedWorkingOrder != null && EnableCapitalProtector && CapitalProtectorAmount > 0)
+			{
+				Account accDrag = activeTradeAccount ?? EnsureActiveTradeAccountSelected();
+				Position posDrag = GetCurrentInstrumentPosition(accDrag, nonBlocking: true);
+				if (posDrag != null && posDrag.MarketPosition != MarketPosition.Flat && ClassifyWorkingOrderRole(activeDraggedWorkingOrder, posDrag) == 2)
+				{
+					int maxCapTicks = ComputeCapitalProtectorMaxSlTicks(posDrag.Quantity);
+					bool pL = (posDrag.MarketPosition == MarketPosition.Long);
+					double minOrMaxSl = pL
+						? RoundToInstrumentTick(posDrag.AveragePrice - maxCapTicks * tick)
+						: RoundToInstrumentTick(posDrag.AveragePrice + maxCapTicks * tick);
+					if (pL && liveOrderDragCurrentPrice < minOrMaxSl)
+						liveOrderDragCurrentPrice = minOrMaxSl;
+					else if (!pL && liveOrderDragCurrentPrice > minOrMaxSl)
+						liveOrderDragCurrentPrice = minOrMaxSl;
+				}
+			}
+
+			RequestImmediateOrderflowRedraw();
+			return true;
+		}
+
+		private void CommitLiveOrderCanvasDrag(ChartControl cc)
+		{
+			LiveOrderDragMode mode = activeLiveOrderDragMode;
+			Order targetOrd = activeDraggedWorkingOrder;
+			double dropPrice = RoundToInstrumentTick(liveOrderDragCurrentPrice);
+			bool didMove = liveOrderDragMoved;
+
+			activeLiveOrderDragMode = LiveOrderDragMode.None;
+			activeDraggedWorkingOrder = null;
+			activeDraggedPendingSpec = null;
+			liveOrderDragMoved = false;
+
+			Account acc = EnsureActiveTradeAccountSelected();
+			double tick = TickSize > 0 ? TickSize : 0.05;
+
+			if (mode == LiveOrderDragMode.DragWorkingOrder && targetOrd != null && acc != null)
+			{
+				if (didMove && Math.Abs(dropPrice - liveOrderDragStartPrice) >= tick * 0.5)
+				{
+					ModifyLiveWorkingOrderPrice(acc, targetOrd, dropPrice);
+				}
+			}
+			else if (mode == LiveOrderDragMode.DragNewTpFromPosition)
+			{
+				Position pos = GetCurrentInstrumentPosition(acc, nonBlocking: true);
+				if (pos != null && pos.MarketPosition != MarketPosition.Flat)
+				{
+					bool pLong = (pos.MarketPosition == MarketPosition.Long);
+					double tpPx = didMove
+						? dropPrice
+						: RoundToInstrumentTick(pLong ? (pos.AveragePrice + Math.Max(1, orderTpTicks) * tick) : (pos.AveragePrice - Math.Max(1, orderTpTicks) * tick));
+					SubmitProtectiveExitOrderFromChart(true, tpPx);
+				}
+			}
+			else if (mode == LiveOrderDragMode.DragNewSlFromPosition)
+			{
+				Position pos = GetCurrentInstrumentPosition(acc, nonBlocking: true);
+				if (pos != null && pos.MarketPosition != MarketPosition.Flat)
+				{
+					bool pLong = (pos.MarketPosition == MarketPosition.Long);
+					double slPx = didMove
+						? dropPrice
+						: RoundToInstrumentTick(pLong ? (pos.AveragePrice - Math.Max(1, orderSlTicks) * tick) : (pos.AveragePrice + Math.Max(1, orderSlTicks) * tick));
+					SubmitProtectiveExitOrderFromChart(false, slPx);
+				}
+			}
+
+			RequestTradeUiSyncAsync();
+			RequestImmediateOrderflowRedraw();
+		}
+
+		private float ResolveLivePositionEntryStartX(ChartControl cc, Account acc, Position pos, float panelX, float clipRight)
+		{
+			if (cc == null || ChartBars == null || ChartBars.Bars == null || ChartBars.Bars.Count == 0 || pos == null)
+				return Math.Max(panelX + 4f, clipRight - 320f);
+
+			string posKey = string.Concat(
+				acc != null ? acc.Name : string.Empty, "|",
+				pos.MarketPosition.ToString(), "|",
+				pos.Quantity.ToString(CultureInfo.InvariantCulture), "|",
+				pos.AveragePrice.ToString("0.######", CultureInfo.InvariantCulture));
+
+			DateTime entryTime = string.Equals(posKey, cachedPositionEntryKey, StringComparison.Ordinal)
+				? cachedPositionEntryTime
+				: DateTime.MinValue;
+
+			if (entryTime == DateTime.MinValue)
+			{
+				try
+				{
+					if (pos.FirstEntry != null && pos.FirstEntry.Time > DateTime.MinValue)
+						entryTime = pos.FirstEntry.Time;
+				}
+				catch { }
+			}
+
+			if (entryTime == DateTime.MinValue)
+			{
+				try
+				{
+					Execution[] entries = pos.Entries;
+					if (entries != null && entries.Length > 0 && entries[0] != null && entries[0].Time > DateTime.MinValue)
+						entryTime = entries[0].Time;
+				}
+				catch { }
+			}
+
+			if (entryTime == DateTime.MinValue && acc != null && acc.Orders != null)
+			{
+				try
+				{
+					Order[] snap = null;
+					bool entered = false;
+					try
+					{
+						System.Threading.Monitor.TryEnter(acc.Orders, 0, ref entered);
+						if (entered)
+							snap = acc.Orders.ToArray();
+					}
+					finally
+					{
+						if (entered)
+							System.Threading.Monitor.Exit(acc.Orders);
+					}
+					if (snap != null)
+					{
+						for (int i = snap.Length - 1; i >= 0; i--)
+						{
+							Order o = snap[i];
+							if (o != null && o.OrderState == OrderState.Filled && InstrumentMatchesChart(o.Instrument) && o.Time > DateTime.MinValue)
+							{
+								entryTime = o.Time;
+								break;
+							}
+						}
+					}
+				}
+				catch { }
+			}
+
+			if (entryTime > DateTime.MinValue)
+			{
+				cachedPositionEntryKey = posKey;
+				cachedPositionEntryTime = entryTime;
+				float rawX = ResolveSrUnclampedTimeX(cc, ChartBars.Bars, panelX, entryTime);
+				return Math.Max(panelX + 2f, Math.Min(clipRight - 64f, rawX));
+			}
+
+			int fallbackIdx = Math.Max(0, ChartBars.Bars.Count - 4);
+			float fbX = (float)cc.GetXByBarIndex(ChartBars, fallbackIdx);
+			return Math.Max(panelX + 2f, Math.Min(clipRight - 64f, fbX));
+		}
+
+		private void DrawVectorDragGrip(float cx, float cy, DxBrush brush, StrokeStyle roundCapStyle = null)
+		{
+			// Smooth anti-aliased up/down chevron pair with rounded caps
+			RenderTarget.DrawLine(new Vector2(cx - 2.4f, cy - 1.3f), new Vector2(cx, cy - 3.8f), brush, 1.25f, roundCapStyle);
+			RenderTarget.DrawLine(new Vector2(cx + 2.4f, cy - 1.3f), new Vector2(cx, cy - 3.8f), brush, 1.25f, roundCapStyle);
+			RenderTarget.DrawLine(new Vector2(cx - 2.4f, cy + 1.3f), new Vector2(cx, cy + 3.8f), brush, 1.25f, roundCapStyle);
+			RenderTarget.DrawLine(new Vector2(cx + 2.4f, cy + 1.3f), new Vector2(cx, cy + 3.8f), brush, 1.25f, roundCapStyle);
+		}
+
+		private void DrawVectorCloseX(float cx, float cy, float halfSz, DxBrush brush, StrokeStyle roundCapStyle = null)
+		{
+			RenderTarget.DrawLine(new Vector2(cx - halfSz, cy - halfSz), new Vector2(cx + halfSz, cy + halfSz), brush, 1.35f, roundCapStyle);
+			RenderTarget.DrawLine(new Vector2(cx + halfSz, cy - halfSz), new Vector2(cx - halfSz, cy + halfSz), brush, 1.35f, roundCapStyle);
+		}
+
+		private static float MeasurePillTextWidth(SharpDX.DirectWrite.Factory dw, DxTextFormat fmt, string text)
+		{
+			if (dw == null || fmt == null || string.IsNullOrEmpty(text))
+				return 0f;
+			using (var tl = new SharpDX.DirectWrite.TextLayout(dw, text, fmt, 2400f, 64f))
+			{
+				return tl.Metrics.WidthIncludingTrailingWhitespace;
+			}
+		}
+
+		private static string FormatLiveRiskRewardBadge(double entryPx, double slPx, double tpPx, double tick)
+		{
+			if (entryPx <= 0.0 || slPx <= 0.0 || tpPx <= 0.0)
+				return string.Empty;
+			double slDist = Math.Abs(entryPx - slPx);
+			double tpDist = Math.Abs(tpPx - entryPx);
+			if (slDist < Math.Max(1e-6, tick * 0.25))
+				return "R:R BE";
+			double rr = tpDist / slDist;
+			string rrNum = rr >= 1.0
+				? rr.ToString("0.#", CultureInfo.InvariantCulture)
+				: rr.ToString("0.##", CultureInfo.InvariantCulture);
+			return "R:R 1:" + rrNum;
+		}
+
+		private void RenderLiveOrdersAndDraftPreviewOnCanvas(
+			ChartControl cc,
+			Func<double, float> priceToY,
+			float panelX,
+			float canvasTopY,
+			float clipW,
+			float chartBottomY,
+			bool light,
+			bool drawUnderlayPass = true,
+			bool drawOverlayPillsPass = true)
+		{
+			if (drawOverlayPillsPass)
+				liveChartHitRegions.Clear();
+			if (cc == null || clipW <= 60f || chartBottomY <= canvasTopY + 30f)
+				return;
+
+			Account acc = EnsureActiveTradeAccountSelected();
+			string curSym = GetAccountCurrencyPrefix(acc);
+			double tick = TickSize > 0 ? TickSize : 0.05;
+			double pv = (Instrument != null && Instrument.MasterInstrument != null && Instrument.MasterInstrument.PointValue > 0)
+				? Instrument.MasterInstrument.PointValue
+				: 1.0;
+			ResolveLiveBidAskLast(out _, out _, out double lastPx);
+
+			Position pos = GetCurrentInstrumentPosition(acc, nonBlocking: true);
+			bool hasOpenPos = (pos != null && pos.MarketPosition != MarketPosition.Flat && pos.Quantity > 0);
+			List<Order> workingOrders = GetCurrentInstrumentWorkingOrders(acc, nonBlocking: true);
+
+			float clipRight = panelX + clipW;
+			float pillRightAnchorX = clipRight - 8f;
+			float entryAnchorX = hasOpenPos ? ResolveLivePositionEntryStartX(cc, acc, pos, panelX, clipRight) : (panelX + 2f);
+
+			var dashProps = new StrokeStyleProperties
+			{
+				DashStyle = SharpDX.Direct2D1.DashStyle.Custom,
+				DashCap = CapStyle.Round,
+				StartCap = CapStyle.Round,
+				EndCap = CapStyle.Round,
+				LineJoin = LineJoin.Round
+			};
+			var roundSolidProps = new StrokeStyleProperties
+			{
+				DashStyle = SharpDX.Direct2D1.DashStyle.Solid,
+				StartCap = CapStyle.Round,
+				EndCap = CapStyle.Round,
+				LineJoin = LineJoin.Round
+			};
+
+			AntialiasMode prevAa = RenderTarget.AntialiasMode;
+			SharpDX.Direct2D1.TextAntialiasMode prevTextAa = RenderTarget.TextAntialiasMode;
+			RenderTarget.AntialiasMode = AntialiasMode.PerPrimitive;
+			RenderTarget.TextAntialiasMode = SharpDX.Direct2D1.TextAntialiasMode.Grayscale;
+
+			var dw = Globals.DirectWriteFactory;
+			try
+			{
+				using (var roundCap = new StrokeStyle(Globals.D2DFactory, roundSolidProps))
+				using (var orderDash = new StrokeStyle(Globals.D2DFactory, dashProps, new float[] { 5f, 3.5f }))
+				using (var draftDash = new StrokeStyle(Globals.D2DFactory, dashProps, new float[] { 4f, 4f }))
+				using (var tfPill = new DxTextFormat(dw, "Segoe UI", SharpDX.DirectWrite.FontWeight.SemiBold, SharpDX.DirectWrite.FontStyle.Normal, 9.5f))
+				using (var tfSmall = new DxTextFormat(dw, "Segoe UI", SharpDX.DirectWrite.FontWeight.SemiBold, SharpDX.DirectWrite.FontStyle.Normal, 8.9f))
+				using (var posBgBrush = new DxBrush(RenderTarget, new Color4(0.055f, 0.082f, 0.128f, 0.96f)))
+				using (var greenDarkPill = new DxBrush(RenderTarget, new Color4(0.028f, 0.215f, 0.165f, 0.96f)))
+				using (var greenBright = new DxBrush(RenderTarget, new Color4(0.10f, 0.84f, 0.60f, 0.95f)))
+				using (var redDarkPill = new DxBrush(RenderTarget, new Color4(0.265f, 0.058f, 0.105f, 0.96f)))
+				using (var redCloseBg = new DxBrush(RenderTarget, new Color4(0.56f, 0.10f, 0.18f, 0.96f)))
+				using (var redBright = new DxBrush(RenderTarget, new Color4(0.98f, 0.38f, 0.45f, 0.95f)))
+				using (var blueDarkPill = new DxBrush(RenderTarget, new Color4(0.06f, 0.17f, 0.35f, 0.96f)))
+				using (var blueEntry = new DxBrush(RenderTarget, new Color4(0.24f, 0.58f, 1.0f, 0.95f)))
+				using (var amberDarkPill = new DxBrush(RenderTarget, new Color4(0.30f, 0.17f, 0.04f, 0.96f)))
+				using (var amberEntry = new DxBrush(RenderTarget, new Color4(0.98f, 0.66f, 0.14f, 0.95f)))
+				using (var chipBg = new DxBrush(RenderTarget, new Color4(0.085f, 0.125f, 0.190f, 0.96f)))
+				using (var chipBorder = new DxBrush(RenderTarget, new Color4(0.38f, 0.49f, 0.64f, 0.92f)))
+				using (var pillSheen = new DxBrush(RenderTarget, new Color4(1.0f, 1.0f, 1.0f, 0.06f)))
+				using (var tpShade = new DxBrush(RenderTarget, new Color4(0.059f, 0.650f, 0.460f, light ? 0.08f : 0.10f)))
+				using (var slShade = new DxBrush(RenderTarget, new Color4(0.900f, 0.160f, 0.260f, light ? 0.08f : 0.10f)))
+				using (var txtWhite = new DxBrush(RenderTarget, new Color4(0.975f, 0.985f, 1.0f, 1.0f)))
+				{
+					tfPill.TextAlignment = SharpDX.DirectWrite.TextAlignment.Center;
+					tfPill.ParagraphAlignment = ParagraphAlignment.Center;
+					tfPill.WordWrapping = WordWrapping.NoWrap;
+
+					tfSmall.TextAlignment = SharpDX.DirectWrite.TextAlignment.Center;
+					tfSmall.ParagraphAlignment = ParagraphAlignment.Center;
+					tfSmall.WordWrapping = WordWrapping.NoWrap;
+
+					bool hasWorkingTp = false;
+					bool hasWorkingSl = false;
+					double workingTpPx = 0.0;
+					double workingSlPx = 0.0;
+					double tpWeightedSum = 0.0, tpQtySum = 0.0;
+					double slWeightedSum = 0.0, slQtySum = 0.0;
+					for (int i = 0; i < workingOrders.Count; i++)
+					{
+						Order woItem = workingOrders[i];
+						int r = ClassifyWorkingOrderRole(woItem, pos);
+						double p = (activeLiveOrderDragMode == LiveOrderDragMode.DragWorkingOrder && ReferenceEquals(activeDraggedWorkingOrder, woItem))
+							? liveOrderDragCurrentPrice
+							: GetWorkingOrderEffectivePrice(woItem);
+						if (p <= 0.0)
+							continue;
+						double q = Math.Max(1, woItem.Quantity);
+						if (r == 1)
+						{
+							if (!hasWorkingTp) { hasWorkingTp = true; workingTpPx = p; }
+							tpWeightedSum += p * q;
+							tpQtySum += q;
+						}
+						else if (r == 2)
+						{
+							if (!hasWorkingSl) { hasWorkingSl = true; workingSlPx = p; }
+							slWeightedSum += p * q;
+							slQtySum += q;
+						}
+					}
+
+					double effTpPx = tpQtySum > 0.0 ? (tpWeightedSum / tpQtySum) : workingTpPx;
+					double effSlPx = slQtySum > 0.0 ? (slWeightedSum / slQtySum) : workingSlPx;
+					bool hasEffTp = hasWorkingTp && effTpPx > 0.0;
+					bool hasEffSl = hasWorkingSl && effSlPx > 0.0;
+					if (!hasEffTp && activeLiveOrderDragMode == LiveOrderDragMode.DragNewTpFromPosition && liveOrderDragCurrentPrice > 0.0)
+					{
+						hasEffTp = true;
+						effTpPx = liveOrderDragCurrentPrice;
+					}
+					if (!hasEffSl && activeLiveOrderDragMode == LiveOrderDragMode.DragNewSlFromPosition && liveOrderDragCurrentPrice > 0.0)
+					{
+						hasEffSl = true;
+						effSlPx = liveOrderDragCurrentPrice;
+					}
+
+					void DrawSmoothPillText(string text, DxTextFormat fmt, RectangleF rc, DxBrush brush)
+					{
+						if (string.IsNullOrEmpty(text))
+							return;
+						var textRc = new RectangleF(rc.X, rc.Y - 2f, rc.Width, rc.Height + 4f);
+						RenderTarget.DrawText(text, fmt, textRc, brush, DrawTextOptions.NoSnap);
+					}
+
+					// 1. Live Position Shaded TP & SL Projection Zones — Drawn in Underlay Pass BEHIND Candles with NO Vertical Candle-Occluding Line!
+					if (drawUnderlayPass && hasOpenPos)
+					{
+						float yPos = priceToY(pos.AveragePrice);
+						float shadeLeft = entryAnchorX;
+						float shadeRight = clipRight - 2f;
+						float shadeW = Math.Max(16f, shadeRight - shadeLeft);
+
+						if (hasWorkingTp && workingTpPx > 0)
+						{
+							float yTp = priceToY(workingTpPx);
+							float t0 = Math.Max(canvasTopY, Math.Min(yPos, yTp));
+							float b0 = Math.Min(chartBottomY, Math.Max(yPos, yTp));
+							if (b0 > t0 + 1f)
+								RenderTarget.FillRectangle(new RectangleF(shadeLeft, t0, shadeW, b0 - t0), tpShade);
+						}
+						if (hasWorkingSl && workingSlPx > 0)
+						{
+							float ySl = priceToY(workingSlPx);
+							float t0 = Math.Max(canvasTopY, Math.Min(yPos, ySl));
+							float b0 = Math.Min(chartBottomY, Math.Max(yPos, ySl));
+							if (b0 > t0 + 1f)
+								RenderTarget.FillRectangle(new RectangleF(shadeLeft, t0, shadeW, b0 - t0), slShade);
+						}
+					}
+
+					// 2. Render Working Orders (Lines in Underlay Pass BEHIND Candles; Draggable Pills in Overlay Pass + Pre-Trigger 1:3 Pattern for Pending Limit/Stop!)
+					float pendingEntryAnchorX = (ChartBars != null && ChartBars.Count > 0)
+						? Math.Max(panelX + 2f, Math.Min(clipRight - 140f, (float)cc.GetXByBarIndex(ChartBars, Math.Max(0, ChartBars.Count - 1))))
+						: (panelX + 2f);
+
+					for (int i = 0; i < workingOrders.Count; i++)
+					{
+						Order wo = workingOrders[i];
+						bool isDraggingThis = (activeLiveOrderDragMode == LiveOrderDragMode.DragWorkingOrder && ReferenceEquals(activeDraggedWorkingOrder, wo));
+						double ordPrice = isDraggingThis ? liveOrderDragCurrentPrice : GetWorkingOrderEffectivePrice(wo);
+						if (ordPrice <= 0)
+							continue;
+
+						float yOrd = priceToY(ordPrice);
+						int role = ClassifyWorkingOrderRole(wo, pos);
+						bool isBuyOrd = IsOrderBuySide(wo.OrderAction);
+						PendingBracketSpec pendSpec = (!hasOpenPos && role == 0) ? FindPendingBracketForEntryOrder(wo) : null;
+
+						// Auto-attach a live 1:3 PendingBracketSpec if a working Buy/Sell Limit or Stop entry exists without one yet!
+						if (!hasOpenPos && role == 0 && pendSpec == null && DefaultEnableBracketSlTp)
+						{
+							int baseSlT = Math.Min(Math.Max(1, orderSlTicks > 0 ? orderSlTicks : DefaultSlTicks), ComputeCapitalProtectorMaxSlTicks(wo.Quantity));
+							int baseTpT = Math.Max(1, orderTpTicks > 0 ? orderTpTicks : (int)Math.Round(baseSlT * Math.Max(0.5, InitialOrderRrRatio)));
+							pendSpec = new PendingBracketSpec
+							{
+								EntryOrder = wo,
+								Account = acc,
+								Instrument = wo.Instrument ?? Instrument,
+								IsLong = isBuyOrd,
+								TotalQty = Math.Max(1, wo.Quantity),
+								BracketedQty = 0,
+								Tif = wo.TimeInForce,
+								HasSl = true,
+								SlTicks = baseSlT,
+								HasTp = true,
+								TpTicks = baseTpT,
+								TrailEnabled = orderTrailEnabled,
+								TrailTicks = Math.Max(1, orderTrailTicks),
+								CreatedUtc = DateTime.UtcNow
+							};
+							lock (bracketLock) { pendingEntryBrackets.Add(pendSpec); }
+						}
+
+						double pendTpPx = 0.0;
+						double pendSlPx = 0.0;
+						bool showPendTp = (pendSpec != null && pendSpec.HasTp && pendSpec.TpTicks > 0);
+						bool showPendSl = (pendSpec != null && pendSpec.HasSl && pendSpec.SlTicks > 0);
+						if (showPendTp)
+						{
+							pendTpPx = (activeLiveOrderDragMode == LiveOrderDragMode.DragPendingBracketTp && ReferenceEquals(activeDraggedPendingSpec, pendSpec))
+								? liveOrderDragCurrentPrice
+								: RoundToInstrumentTick(pendSpec.IsLong ? (ordPrice + pendSpec.TpTicks * tick) : (ordPrice - pendSpec.TpTicks * tick));
+						}
+						if (showPendSl)
+						{
+							pendSlPx = (activeLiveOrderDragMode == LiveOrderDragMode.DragPendingBracketSl && ReferenceEquals(activeDraggedPendingSpec, pendSpec))
+								? liveOrderDragCurrentPrice
+								: RoundToInstrumentTick(pendSpec.IsLong ? (ordPrice - pendSpec.SlTicks * tick) : (ordPrice + pendSpec.SlTicks * tick));
+						}
+
+						// Pre-Trigger Shaded 1:3 R:R Projection Zones + Left-Extended Pending SL/TP Lines (BEHIND Candles!)
+						if (drawUnderlayPass && pendSpec != null)
+						{
+							float pShadeW = Math.Max(16f, (clipRight - 2f) - pendingEntryAnchorX);
+							if (showPendTp && pendTpPx > 0)
+							{
+								float yPTp = priceToY(pendTpPx);
+								float t0 = Math.Max(canvasTopY, Math.Min(yOrd, yPTp));
+								float b0 = Math.Min(chartBottomY, Math.Max(yOrd, yPTp));
+								if (b0 > t0 + 1f)
+									RenderTarget.FillRectangle(new RectangleF(pendingEntryAnchorX, t0, pShadeW, b0 - t0), tpShade);
+								if (yPTp >= canvasTopY - 4f && yPTp <= chartBottomY + 4f)
+									DrawHairlineHorizontal(panelX + 2f, clipRight - 2f, yPTp, greenBright, 1.2f, orderDash);
+							}
+							if (showPendSl && pendSlPx > 0)
+							{
+								float yPSl = priceToY(pendSlPx);
+								float t0 = Math.Max(canvasTopY, Math.Min(yOrd, yPSl));
+								float b0 = Math.Min(chartBottomY, Math.Max(yOrd, yPSl));
+								if (b0 > t0 + 1f)
+									RenderTarget.FillRectangle(new RectangleF(pendingEntryAnchorX, t0, pShadeW, b0 - t0), slShade);
+								if (yPSl >= canvasTopY - 4f && yPSl <= chartBottomY + 4f)
+									DrawHairlineHorizontal(panelX + 2f, clipRight - 2f, yPSl, redBright, 1.2f, orderDash);
+							}
+						}
+
+						if (yOrd >= canvasTopY - 6f && yOrd <= chartBottomY + 6f)
+						{
+							float clampedY = Math.Max(canvasTopY + 11f, Math.Min(chartBottomY - 11f, yOrd));
+							DxBrush lineBrush = role == 1
+								? greenBright
+								: (role == 2 ? redBright : (isBuyOrd ? blueEntry : amberEntry));
+							DxBrush badgeFill = role == 1
+								? greenDarkPill
+								: (role == 2 ? redDarkPill : (isBuyOrd ? blueDarkPill : amberDarkPill));
+
+							// Extend ONLY SL (role == 2) and TP (role == 1) lines to the left edge; Entry / Pending Limit starts cleanly from anchor!
+							float lineStartX = (role == 1 || role == 2)
+								? (panelX + 2f)
+								: (hasOpenPos ? entryAnchorX : (pendSpec != null ? pendingEntryAnchorX : (panelX + 2f)));
+							if (drawUnderlayPass)
+								DrawHairlineHorizontal(lineStartX, clipRight - 2f, yOrd, lineBrush, isDraggingThis ? 1.75f : 1.25f, orderDash);
+
+							if (drawOverlayPillsPass)
+							{
+								string labelText;
+								if (hasOpenPos && (role == 1 || role == 2))
+								{
+									bool pLong = (pos.MarketPosition == MarketPosition.Long);
+									double diffPts = pLong ? (ordPrice - pos.AveragePrice) : (pos.AveragePrice - ordPrice);
+									long diffTicks = (long)Math.Round(diffPts / tick);
+									double estDollar = wo.Quantity * diffPts * pv;
+									string dSign = estDollar >= 0 ? "+" : "-";
+									string tSign = diffTicks >= 0 ? "+" : "";
+									string prefix = role == 1 ? "TP " : "SL ";
+									labelText = string.Format(
+										CultureInfo.InvariantCulture,
+										"{0}{1} @ {2}  |  {3}{4}{5:0.##} ({6}{7}T)",
+										prefix, wo.Quantity, FormatOrderflowPrice(ordPrice),
+										dSign, curSym, Math.Abs(estDollar), tSign, diffTicks);
+								}
+								else
+								{
+									string actLbl = isBuyOrd ? "BUY " : "SELL ";
+									string typLbl = IsStopOrderType(wo.OrderType) ? "STOP " : "LIMIT ";
+									string pendRr = (showPendSl && showPendTp)
+										? ("  |  " + FormatLiveRiskRewardBadge(ordPrice, pendSlPx, pendTpPx, tick))
+										: string.Empty;
+									labelText = actLbl + typLbl + wo.Quantity + " @ " + FormatOrderflowPrice(ordPrice) + pendRr;
+								}
+
+								float pillH = 20f;
+								float cancelW = 20f;
+								float gripW = 15f;
+								float textW = MeasurePillTextWidth(dw, tfPill, labelText);
+								float bodyW = Math.Max(128f, (float)Math.Ceiling(textW) + gripW + 14f);
+								float totalW = bodyW + cancelW + 3f;
+								float pillX = Math.Max(panelX + 6f, pillRightAnchorX - totalW);
+								float pillY = clampedY - pillH * 0.5f;
+
+								var bodyRect = new RectangleF(pillX, pillY, bodyW, pillH);
+								var bodyTextRect = new RectangleF(pillX + gripW, pillY, bodyW - gripW - 4f, pillH);
+								var cxlRect = new RectangleF(pillX + bodyW + 3f, pillY, cancelW, pillH);
+
+								var bodyRr = new RoundedRectangle { Rect = bodyRect, RadiusX = 4.0f, RadiusY = 4.0f };
+								RenderTarget.FillRoundedRectangle(bodyRr, badgeFill);
+								RenderTarget.FillRectangle(new RectangleF(bodyRect.X + 2f, bodyRect.Y + 1f, bodyRect.Width - 4f, pillH * 0.42f), pillSheen);
+								RenderTarget.DrawRoundedRectangle(bodyRr, lineBrush, isDraggingThis ? 1.65f : 1.15f);
+								DrawVectorDragGrip(pillX + 8.0f, pillY + pillH * 0.5f, lineBrush, roundCap);
+								DrawSmoothPillText(labelText, tfPill, bodyTextRect, txtWhite);
+
+								var cxlRr = new RoundedRectangle { Rect = cxlRect, RadiusX = 4.0f, RadiusY = 4.0f };
+								RenderTarget.FillRoundedRectangle(cxlRr, posBgBrush);
+								RenderTarget.DrawRoundedRectangle(cxlRr, lineBrush, 1.1f);
+								DrawVectorCloseX(cxlRect.X + cancelW * 0.5f, cxlRect.Y + pillH * 0.5f, 3.0f, txtWhite, roundCap);
+
+								liveChartHitRegions.Add(new LiveChartHitRegion
+								{
+									Rect = bodyRect,
+									LineY = yOrd,
+									LineX0 = lineStartX,
+									LineX1 = clipRight - 4f,
+									AllowLineGrab = true,
+									Kind = LiveOrderHitKind.WorkingOrderDrag,
+									TargetOrder = wo,
+									IsStopOrder = IsStopOrderType(wo.OrderType),
+									InitialPrice = ordPrice
+								});
+								liveChartHitRegions.Add(new LiveChartHitRegion
+								{
+									Rect = cxlRect,
+									Kind = LiveOrderHitKind.CancelWorkingOrderBtn,
+									TargetOrder = wo,
+									InitialPrice = ordPrice
+								});
+							}
+						}
+
+						// Pre-Trigger Draggable Pending TP & Pending SL Pills (Overlay Pass — Before Buy/Sell Limit Triggers!)
+						if (drawOverlayPillsPass && pendSpec != null)
+						{
+							void DrawPendingBracketPill(bool isTp, double bPx, LiveOrderHitKind dragKind, LiveOrderHitKind cxlKind)
+							{
+								float yB = priceToY(bPx);
+								if (yB < canvasTopY - 6f || yB > chartBottomY + 6f)
+									return;
+								float clB = Math.Max(canvasTopY + 11f, Math.Min(chartBottomY - 11f, yB));
+								double diffPts = pendSpec.IsLong ? (bPx - ordPrice) : (ordPrice - bPx);
+								long diffTicks = (long)Math.Round(diffPts / tick);
+								double estDollar = pendSpec.TotalQty * diffPts * pv;
+								string bText = string.Format(
+									CultureInfo.InvariantCulture,
+									"{0}{1} @ {2}  |  {3}{4}{5:0.##} ({6}{7}T)",
+									isTp ? "TP " : "SL ",
+									pendSpec.TotalQty,
+									FormatOrderflowPrice(bPx),
+									estDollar >= 0 ? "+" : "-", curSym, Math.Abs(estDollar),
+									diffTicks >= 0 ? "+" : "", diffTicks);
+
+								DxBrush bBr = isTp ? greenBright : redBright;
+								DxBrush bFill = isTp ? greenDarkPill : redDarkPill;
+								float pH = 20f, cW = 20f, gW = 15f;
+								float tW = MeasurePillTextWidth(dw, tfPill, bText);
+								float bW = Math.Max(128f, (float)Math.Ceiling(tW) + gW + 14f);
+								float pX = Math.Max(panelX + 6f, pillRightAnchorX - (bW + cW + 3f));
+								float pY = clB - pH * 0.5f;
+
+								var bRect = new RectangleF(pX, pY, bW, pH);
+								var cRect = new RectangleF(pX + bW + 3f, pY, cW, pH);
+								var bRr = new RoundedRectangle { Rect = bRect, RadiusX = 4.0f, RadiusY = 4.0f };
+								RenderTarget.FillRoundedRectangle(bRr, bFill);
+								RenderTarget.FillRectangle(new RectangleF(bRect.X + 2f, bRect.Y + 1f, bRect.Width - 4f, pH * 0.42f), pillSheen);
+								RenderTarget.DrawRoundedRectangle(bRr, bBr, 1.15f);
+								DrawVectorDragGrip(pX + 8.0f, pY + pH * 0.5f, bBr, roundCap);
+								DrawSmoothPillText(bText, tfPill, new RectangleF(pX + gW, pY, bW - gW - 4f, pH), txtWhite);
+
+								var cRr = new RoundedRectangle { Rect = cRect, RadiusX = 4.0f, RadiusY = 4.0f };
+								RenderTarget.FillRoundedRectangle(cRr, posBgBrush);
+								RenderTarget.DrawRoundedRectangle(cRr, bBr, 1.1f);
+								DrawVectorCloseX(cRect.X + cW * 0.5f, cRect.Y + pH * 0.5f, 3.0f, txtWhite, roundCap);
+
+								liveChartHitRegions.Add(new LiveChartHitRegion
+								{
+									Rect = bRect,
+									LineY = yB,
+									LineX0 = panelX + 2f,
+									LineX1 = clipRight - 4f,
+									AllowLineGrab = true,
+									Kind = dragKind,
+									TargetPendingSpec = pendSpec,
+									InitialPrice = bPx
+								});
+								liveChartHitRegions.Add(new LiveChartHitRegion
+								{
+									Rect = cRect,
+									Kind = cxlKind,
+									TargetPendingSpec = pendSpec,
+									InitialPrice = bPx
+								});
+							}
+
+							if (showPendTp && pendTpPx > 0)
+								DrawPendingBracketPill(true, pendTpPx, LiveOrderHitKind.PendingBracketTpDrag, LiveOrderHitKind.CancelPendingBracketTpBtn);
+							if (showPendSl && pendSlPx > 0)
+								DrawPendingBracketPill(false, pendSlPx, LiveOrderHitKind.PendingBracketSlDrag, LiveOrderHitKind.CancelPendingBracketSlBtn);
+						}
+					}
+
+					// 3. Render Live Open Position Line (Underlay BEHIND Candles) & Sleek Action Pill (Overlay)
+					if (hasOpenPos)
+					{
+						bool pLong = (pos.MarketPosition == MarketPosition.Long);
+						float yPos = priceToY(pos.AveragePrice);
+						if (yPos >= canvasTopY - 4f && yPos <= chartBottomY + 4f)
+						{
+							double upl = 0.0;
+							try { upl = pos.GetUnrealizedProfitLoss(PerformanceUnit.Currency, lastPx); } catch { }
+
+							DxBrush posBorderBr = upl >= 0 ? greenBright : redBright;
+							DxBrush posFillBr = upl >= 0 ? greenDarkPill : redDarkPill;
+
+							// Entry line drawn BEHIND candles from Entry Candle to Right Edge (no occluding dot or vertical line over the candle!)
+							if (drawUnderlayPass)
+								DrawHairlineHorizontal(entryAnchorX, clipRight - 2f, yPos, posBorderBr, 1.35f);
+
+							if (drawOverlayPillsPass)
+							{
+								float clPosY = Math.Max(canvasTopY + 11f, Math.Min(chartBottomY - 11f, yPos));
+								long pnlTicks = (long)Math.Round(((pLong ? (lastPx - pos.AveragePrice) : (pos.AveragePrice - lastPx)) / tick));
+								string uSign = upl >= 0 ? "+" : "-";
+								string rrBadge = (hasEffSl && hasEffTp)
+									? FormatLiveRiskRewardBadge(pos.AveragePrice, effSlPx, effTpPx, tick)
+									: string.Empty;
+								string posTxt = string.Format(
+									CultureInfo.InvariantCulture,
+									"{0} {1} @ {2}  |  {3}{4}{5:0.##} ({6}{7}T){8}",
+									pLong ? "LONG" : "SHORT",
+									pos.Quantity,
+									FormatOrderflowPrice(pos.AveragePrice),
+									uSign, curSym, Math.Abs(upl),
+									pnlTicks >= 0 ? "+" : "", pnlTicks,
+									!string.IsNullOrEmpty(rrBadge) ? ("  |  " + rrBadge) : string.Empty);
+
+								float pillH = 20.5f;
+								float py = clPosY - pillH * 0.5f;
+								float curRight = pillRightAnchorX;
+
+								RectangleF DrawMiniActionChip(string txt, float minW, DxBrush bg, DxBrush bd, bool isVectorClose = false)
+								{
+									float w = isVectorClose
+										? minW
+										: Math.Max(minW, (float)Math.Ceiling(MeasurePillTextWidth(dw, tfSmall, txt)) + 10f);
+									curRight -= w;
+									var rc = new RectangleF(curRight, py, w, pillH);
+									var rr = new RoundedRectangle { Rect = rc, RadiusX = 4.0f, RadiusY = 4.0f };
+									RenderTarget.FillRoundedRectangle(rr, bg);
+									RenderTarget.DrawRoundedRectangle(rr, bd, 1.1f);
+									if (isVectorClose)
+										DrawVectorCloseX(rc.X + w * 0.5f, rc.Y + pillH * 0.5f, 3.1f, txtWhite, roundCap);
+									else
+										DrawSmoothPillText(txt, tfSmall, rc, txtWhite);
+									curRight -= 2.5f;
+									return rc;
+								}
+
+								// Close [✕]
+								RectangleF rcClose = DrawMiniActionChip(string.Empty, 20.5f, redCloseBg, redBright, isVectorClose: true);
+								liveChartHitRegions.Add(new LiveChartHitRegion { Rect = rcClose, Kind = LiveOrderHitKind.ClosePositionBtn });
+
+								// Reverse [REV]
+								RectangleF rcRev = DrawMiniActionChip("REV", 29f, chipBg, chipBorder);
+								liveChartHitRegions.Add(new LiveChartHitRegion { Rect = rcRev, Kind = LiveOrderHitKind.ReversePositionBtn });
+
+								// Breakeven [BE]
+								RectangleF rcBe = DrawMiniActionChip("BE", 24f, chipBg, chipBorder);
+								liveChartHitRegions.Add(new LiveChartHitRegion { Rect = rcBe, Kind = LiveOrderHitKind.BreakevenPositionBtn });
+
+								// Drag-to-Create [+SL] chip (when no working SL exists yet)
+								if (!hasWorkingSl)
+								{
+									RectangleF rcSl = DrawMiniActionChip("+SL", 30f, redDarkPill, redBright);
+									liveChartHitRegions.Add(new LiveChartHitRegion
+									{
+										Rect = rcSl,
+										Kind = LiveOrderHitKind.AddSlDragChip,
+										InitialPrice = pos.AveragePrice
+									});
+								}
+
+								// Drag-to-Create [+TP] chip (when no working TP exists yet)
+								if (!hasWorkingTp)
+								{
+									RectangleF rcTp = DrawMiniActionChip("+TP", 30f, greenDarkPill, greenBright);
+									liveChartHitRegions.Add(new LiveChartHitRegion
+									{
+										Rect = rcTp,
+										Kind = LiveOrderHitKind.AddTpDragChip,
+										InitialPrice = pos.AveragePrice
+									});
+								}
+
+								// Main Position Info Pill (with Live R:R)
+								float mainTextW = MeasurePillTextWidth(dw, tfPill, posTxt);
+								float mainW = Math.Max(148f, (float)Math.Ceiling(mainTextW) + 18f);
+								float mainX = Math.Max(panelX + 6f, curRight - mainW);
+								var mainRect = new RectangleF(mainX, py, mainW, pillH);
+								var mainRr = new RoundedRectangle { Rect = mainRect, RadiusX = 4.0f, RadiusY = 4.0f };
+								RenderTarget.FillRoundedRectangle(mainRr, posFillBr);
+								RenderTarget.FillRectangle(new RectangleF(mainRect.X + 2f, mainRect.Y + 1f, mainRect.Width - 4f, pillH * 0.42f), pillSheen);
+								RenderTarget.DrawRoundedRectangle(mainRr, posBorderBr, 1.25f);
+								DrawSmoothPillText(posTxt, tfPill, mainRect, txtWhite);
+							}
+						}
+
+						// Live Ghost Line while dragging a brand-new +TP or +SL out of the Position Pill
+						if (activeLiveOrderDragMode == LiveOrderDragMode.DragNewTpFromPosition || activeLiveOrderDragMode == LiveOrderDragMode.DragNewSlFromPosition)
+						{
+							bool isNewTp = (activeLiveOrderDragMode == LiveOrderDragMode.DragNewTpFromPosition);
+							float yGhost = priceToY(liveOrderDragCurrentPrice);
+							if (yGhost >= canvasTopY && yGhost <= chartBottomY)
+							{
+								DxBrush gBr = isNewTp ? greenBright : redBright;
+								DxBrush gFill = isNewTp ? greenDarkPill : redDarkPill;
+								if (drawUnderlayPass)
+									DrawHairlineHorizontal(panelX + 2f, clipRight - 2f, yGhost, gBr, 1.55f, orderDash);
+								if (drawOverlayPillsPass)
+								{
+									double dPts = pLong ? (liveOrderDragCurrentPrice - pos.AveragePrice) : (pos.AveragePrice - liveOrderDragCurrentPrice);
+									double dAmt = pos.Quantity * dPts * pv;
+									string ghostRr = (hasEffSl && hasEffTp)
+										? ("  |  " + FormatLiveRiskRewardBadge(pos.AveragePrice, effSlPx, effTpPx, tick))
+										: string.Empty;
+									string gTxt = (isNewTp ? "Drop TP @ " : "Drop SL @ ") +
+										FormatOrderflowPrice(liveOrderDragCurrentPrice) +
+										string.Format(CultureInfo.InvariantCulture, "  ({0}{1}{2:0.##}){3}", dAmt >= 0 ? "+" : "-", curSym, Math.Abs(dAmt), ghostRr);
+									float gw = Math.Max(155f, (float)Math.Ceiling(MeasurePillTextWidth(dw, tfPill, gTxt)) + 18f);
+									var gRect = new RectangleF(Math.Max(panelX + 8f, pillRightAnchorX - gw), Math.Max(canvasTopY + 4f, Math.Min(chartBottomY - 22f, yGhost - 10f)), gw, 20f);
+									var gRr = new RoundedRectangle { Rect = gRect, RadiusX = 4.0f, RadiusY = 4.0f };
+									RenderTarget.FillRoundedRectangle(gRr, gFill);
+									RenderTarget.DrawRoundedRectangle(gRr, gBr, 1.3f);
+									DrawSmoothPillText(gTxt, tfPill, gRect, txtWhite);
+								}
+							}
+						}
+					}
+					else if (runtimeShowTradePanel && !isTradeTabScalp && workingOrders.Count == 0)
+					{
+						// 4. Pre-Confirmation Interactive Draft Preview (Lines BEHIND Candles in Underlay Pass; Pills in Overlay Pass)
+						double refEntry = GetCurrentOrderReferenceEntryPrice();
+						bool hasDraftRr = (orderSlEnabled && orderSlTicks > 0 && orderTpEnabled && orderTpTicks > 0);
+						string draftRrSuffix = string.Empty;
+						if (hasDraftRr)
+						{
+							double dRr = (double)orderTpTicks / orderSlTicks;
+							string dRrStr = dRr >= 1.0
+								? dRr.ToString("0.#", CultureInfo.InvariantCulture)
+								: dRr.ToString("0.##", CultureInfo.InvariantCulture);
+							draftRrSuffix = "  |  R:R 1:" + dRrStr;
+						}
+
+						bool showDraftEntry = (selectedOrderTypeIdx != 0);
+						float draftEntryStartX = (ChartBars != null && ChartBars.Count > 0)
+							? Math.Max(panelX + 2f, Math.Min(clipRight - 140f, (float)cc.GetXByBarIndex(ChartBars, Math.Max(0, ChartBars.Count - 1))))
+							: (panelX + 2f);
+
+						// Shaded 1:3 R:R Draft Preview Zones BEHIND Candles (when configuring Buy/Sell Limit, Stop, or Market with SL/TP!)
+						if (drawUnderlayPass && refEntry > 0 && showDraftEntry)
+						{
+							float yEntD = priceToY(refEntry);
+							float dShadeW = Math.Max(16f, (clipRight - 2f) - draftEntryStartX);
+							if (orderTpEnabled && orderTpTicks > 0)
+							{
+								double dTpP = isOrderSideBuy ? RoundToInstrumentTick(refEntry + orderTpTicks * tick) : RoundToInstrumentTick(refEntry - orderTpTicks * tick);
+								float yTpD = priceToY(dTpP);
+								float t0 = Math.Max(canvasTopY, Math.Min(yEntD, yTpD));
+								float b0 = Math.Min(chartBottomY, Math.Max(yEntD, yTpD));
+								if (b0 > t0 + 1f)
+									RenderTarget.FillRectangle(new RectangleF(draftEntryStartX, t0, dShadeW, b0 - t0), tpShade);
+							}
+							if (orderSlEnabled && orderSlTicks > 0)
+							{
+								double dSlP = isOrderSideBuy ? RoundToInstrumentTick(refEntry - orderSlTicks * tick) : RoundToInstrumentTick(refEntry + orderSlTicks * tick);
+								float ySlD = priceToY(dSlP);
+								float t0 = Math.Max(canvasTopY, Math.Min(yEntD, ySlD));
+								float b0 = Math.Min(chartBottomY, Math.Max(yEntD, ySlD));
+								if (b0 > t0 + 1f)
+									RenderTarget.FillRectangle(new RectangleF(draftEntryStartX, t0, dShadeW, b0 - t0), slShade);
+							}
+						}
+						if (showDraftEntry && refEntry > 0)
+						{
+							float yDraftEnt = priceToY(refEntry);
+							if (yDraftEnt >= canvasTopY && yDraftEnt <= chartBottomY)
+							{
+								if (drawUnderlayPass)
+									DrawHairlineHorizontal(draftEntryStartX, clipRight - 2f, yDraftEnt, blueEntry, 1.3f, draftDash);
+								if (drawOverlayPillsPass)
+								{
+									string dLbl = "Draft " + (isOrderSideBuy ? "Buy " : "Sell ") + (selectedOrderTypeIdx == 1 ? "Limit @ " : "Stop @ ") + FormatOrderflowPrice(refEntry) + draftRrSuffix;
+									float dw2 = Math.Max(145f, (float)Math.Ceiling(MeasurePillTextWidth(dw, tfSmall, dLbl)) + 24f);
+									var dRect = new RectangleF(Math.Max(panelX + 8f, pillRightAnchorX - dw2), Math.Max(canvasTopY + 2f, Math.Min(chartBottomY - 22f, yDraftEnt - 10f)), dw2, 20f);
+									var dRr = new RoundedRectangle { Rect = dRect, RadiusX = 4.0f, RadiusY = 4.0f };
+									RenderTarget.FillRoundedRectangle(dRr, blueDarkPill);
+									RenderTarget.DrawRoundedRectangle(dRr, blueEntry, 1.15f);
+									DrawVectorDragGrip(dRect.X + 8.0f, dRect.Y + 10f, blueEntry, roundCap);
+									DrawSmoothPillText(dLbl, tfSmall, new RectangleF(dRect.X + 14f, dRect.Y, dRect.Width - 16f, dRect.Height), txtWhite);
+
+									liveChartHitRegions.Add(new LiveChartHitRegion
+									{
+										Rect = dRect,
+										LineY = yDraftEnt,
+										LineX0 = draftEntryStartX,
+										LineX1 = clipRight - 4f,
+										AllowLineGrab = true,
+										Kind = LiveOrderHitKind.DraftEntryDrag,
+										InitialPrice = refEntry
+									});
+								}
+							}
+						}
+
+						if (orderTpEnabled && orderTpTicks > 0 && refEntry > 0)
+						{
+							double dTpPx = isOrderSideBuy ? RoundToInstrumentTick(refEntry + orderTpTicks * tick) : RoundToInstrumentTick(refEntry - orderTpTicks * tick);
+							float yDTp = priceToY(dTpPx);
+							if (yDTp >= canvasTopY && yDTp <= chartBottomY)
+							{
+								if (drawUnderlayPass)
+									DrawHairlineHorizontal(panelX + 2f, clipRight - 2f, yDTp, greenBright, 1.2f, draftDash);
+								if (drawOverlayPillsPass)
+								{
+									double rAmt = orderQtyValue * orderTpTicks * tick * pv;
+									string tpLbl = string.Format(
+										CultureInfo.InvariantCulture,
+										"Draft TP @ {0}  (+{1}{2:0.##} | {3}T){4}",
+										FormatOrderflowPrice(dTpPx), curSym, rAmt, orderTpTicks,
+										!showDraftEntry ? draftRrSuffix : string.Empty);
+									float tw = Math.Max(150f, (float)Math.Ceiling(MeasurePillTextWidth(dw, tfSmall, tpLbl)) + 24f);
+									var tRect = new RectangleF(Math.Max(panelX + 8f, pillRightAnchorX - tw), Math.Max(canvasTopY + 2f, Math.Min(chartBottomY - 22f, yDTp - 10f)), tw, 20f);
+									var tRr = new RoundedRectangle { Rect = tRect, RadiusX = 4.0f, RadiusY = 4.0f };
+									RenderTarget.FillRoundedRectangle(tRr, greenDarkPill);
+									RenderTarget.DrawRoundedRectangle(tRr, greenBright, 1.15f);
+									DrawVectorDragGrip(tRect.X + 8.0f, tRect.Y + 10f, greenBright, roundCap);
+									DrawSmoothPillText(tpLbl, tfSmall, new RectangleF(tRect.X + 14f, tRect.Y, tRect.Width - 16f, tRect.Height), txtWhite);
+
+									liveChartHitRegions.Add(new LiveChartHitRegion
+									{
+										Rect = tRect,
+										LineY = yDTp,
+										LineX0 = panelX + 2f,
+										LineX1 = clipRight - 4f,
+										AllowLineGrab = true,
+										Kind = LiveOrderHitKind.DraftTpDrag,
+										InitialPrice = dTpPx
+									});
+								}
+							}
+						}
+
+						if (orderSlEnabled && orderSlTicks > 0 && refEntry > 0)
+						{
+							double dSlPx = isOrderSideBuy ? RoundToInstrumentTick(refEntry - orderSlTicks * tick) : RoundToInstrumentTick(refEntry + orderSlTicks * tick);
+							float yDSl = priceToY(dSlPx);
+							if (yDSl >= canvasTopY && yDSl <= chartBottomY)
+							{
+								if (drawUnderlayPass)
+									DrawHairlineHorizontal(panelX + 2f, clipRight - 2f, yDSl, redBright, 1.2f, draftDash);
+								if (drawOverlayPillsPass)
+								{
+									double sAmt = orderQtyValue * orderSlTicks * tick * pv;
+									string slLbl = string.Format(CultureInfo.InvariantCulture, "Draft SL @ {0}  (-{1}{2:0.##} | {3}T)", FormatOrderflowPrice(dSlPx), curSym, sAmt, orderSlTicks);
+									float sw = Math.Max(150f, (float)Math.Ceiling(MeasurePillTextWidth(dw, tfSmall, slLbl)) + 24f);
+									var sRect = new RectangleF(Math.Max(panelX + 8f, pillRightAnchorX - sw), Math.Max(canvasTopY + 2f, Math.Min(chartBottomY - 22f, yDSl - 10f)), sw, 20f);
+									var sRr = new RoundedRectangle { Rect = sRect, RadiusX = 4.0f, RadiusY = 4.0f };
+									RenderTarget.FillRoundedRectangle(sRr, redDarkPill);
+									RenderTarget.DrawRoundedRectangle(sRr, redBright, 1.15f);
+									DrawVectorDragGrip(sRect.X + 8.0f, sRect.Y + 10f, redBright, roundCap);
+									DrawSmoothPillText(slLbl, tfSmall, new RectangleF(sRect.X + 14f, sRect.Y, sRect.Width - 16f, sRect.Height), txtWhite);
+
+									liveChartHitRegions.Add(new LiveChartHitRegion
+									{
+										Rect = sRect,
+										LineY = yDSl,
+										LineX0 = panelX + 2f,
+										LineX1 = clipRight - 4f,
+										AllowLineGrab = true,
+										Kind = LiveOrderHitKind.DraftSlDrag,
+										InitialPrice = dSlPx
+									});
+								}
+							}
+						}
+					}
+				}
+			}
+			finally
+			{
+				RenderTarget.AntialiasMode = prevAa;
+				RenderTarget.TextAntialiasMode = prevTextAa;
+			}
 		}
 		#endregion
 	}

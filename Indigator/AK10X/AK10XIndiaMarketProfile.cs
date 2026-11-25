@@ -66,6 +66,24 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			public HashSet<int> Periods = new HashSet<int>();
 			public double Volume;
+			private int[] cachedSortedPeriods;
+			private int cachedPeriodCount = -1;
+
+			public int[] GetSortedPeriods()
+			{
+				if (cachedSortedPeriods == null || cachedPeriodCount != Periods.Count)
+				{
+					cachedPeriodCount = Periods.Count;
+					cachedSortedPeriods = new int[cachedPeriodCount];
+					if (cachedPeriodCount > 0)
+					{
+						Periods.CopyTo(cachedSortedPeriods);
+						if (cachedPeriodCount > 1)
+							Array.Sort(cachedSortedPeriods);
+					}
+				}
+				return cachedSortedPeriods;
+			}
 		}
 
 		private sealed class PeriodSlice
@@ -147,7 +165,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			SelectProfileWeekly,
 			SelectProfileMonthly,
 			ZoomInVertical,
-			ZoomOutVertical
+			ZoomOutVertical,
+			ToggleModernRichUi
 		}
 
 		private struct ChartButton
@@ -277,8 +296,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private bool didTriggerChartHistoricalReload;
 		private readonly SortedDictionary<DateTime, DailyOhlcSample> atrDailyHistory = new SortedDictionary<DateTime, DailyOhlcSample>();
 		private bool isWarmingUpAtrHistory;
+		private bool? runtimeModernUiOverride;
+		private float lastTopLeftHudRightX;
+		private System.Windows.Threading.DispatcherTimer tpoCountdownTimer;
+		private int lastTpoCountdownSec = -1;
+		private int uiRefreshQueued;
 
-		private const string DefaultLogoBase64 = "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";
+		private const string DefaultLogoBase64 = "iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAYAAADimHc4AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAABAdSURBVHhe7Z0JcBVFGscTIJyCcsp9yQ2CgCJXRCEQ7jvcAhGBFURr3S1FsFhrBURWjlCKyHIEEVAgooC1coi4HMt9BJAj4b6SAIEIIYeBb79/p6ed914DeS/vzbwA/6pfVWoy09/X37zp6ekzwI9VgWnDvMlEMKuY7cxvzDkmgUmU4G8cw/9wDs7FNbgWaSCtx3qAqjCvMvOZaOY2Q14CaSHNeQxsVGYei1WN+RvzK5PK6ILnC1IY2HyHgQ+PlIKYnswaJo3RBciBQoUKUeXKlalJkybUqVMnGjhgAI0cOZLGjBkjwN8D+FjHjh3FOTi3UMGC2rQ0wAf4Ap/yMA+tCjNjGJTTukAI8ubNS40aNRJBnTt3Lm3fvp0uXrxIaWlplFXhXFyzbds2mvvllzRyxAiRJtLW2TRxhIGPTzAPjfIyyNRpRpdpKl68OIWFhdGiRYvo1MmTMoze10lOGzZ69+5NxYoV0/oiga94gcP3HK0ezCFGl0kKCQkRAbly5YoMkXW6kpBAkZGRFNKmjdY3CV7c3Zkcp0rMCsYlUwW5bB7BRcLevXtlKOzX3j17aPjw4VSgQAEXfyXLGeQpR2goc41xyERQUBCNHj2aYmNjZbb9TzExMTRq1Cjhq7P/zFVmCOO3wotrEePifI8ePejQoUMym/6v6Oho6t69u0s+JJGM372k6zIHGQdnq1SpQlFRUTJbOU8rVqwQVVrnfDEHmNqMX6g9c51xcDI8PJwSExNlVnKurl27RkOHDnXImwRNIKGMrUKZeJdRjuGjCbWLh00LFy4UFQhzXpk7DJo2bNFoxsGhGjVq0P79+6XLD59Qc6tevbpDniVvMJbKJfitWrWiBK5bP+xKiI+nl4KDHfIuGcVYIhQ7Dsa7detGqamp0sWHX8hr165dHWIg8XlxhJeOQ5mPz/q7d+9K1x4d3blzh3r16mUOPkBs2jI+US0miVEG8St4FINvCDehS5cu5hsAbjA1Ga+qEHOUUYZatGjhVgvlwyoUR82bNzffAIBWVcTMa1rKKANVq1a1pQHNX4XKh+aD7WvGK0Lbjko4f/78dODAAWn6sQyh+p0vXz7zDQCDmWwJndm/MypRfJA8ll7z5883Bx/gnVmO8VjoqlMJotvvse6v/v37m28A+IHxSN0YlVCZMmXo+vXr0sxj3Uto/ypdurT5BoAujFvKx8QyKpGVK1dKE4/1IC1fvtwcfHCCcat7821GJRAaGiqTtk9pXN1bv24dfbNsGS1csID+MWECLeAyd8nXS+j8ufPyLP9R27ZtzTcAoI85S0L99TIjLsydOzcdPnxYJmuN8IGTcjuZUpJv0aLISBo/bhw1btTIOUOKatWqUXzcZXm1fwgdULly5TL7eYnJ0reBw68/fOhQmaQ1Wrv6R2rcsDFVrVKF6tSuac4ABQYGih+EGSOT9erWpeiDB2Uq/qEhgwc7+M9gdMh9hUFTavgI+kYxlMMq/fD9KpexOwiwc9B14FwMb8E4IH9RTEysc//ySQYxvqd6MeqCgQMHyqR8r6VLlim7ugDfD9wk8+PuTzdBUy3FUJ17agOjTt69e7dMxvdq3uwlYVMX4Kxgvgn4Ih0/frxM2V7t2rVLxVOyjtHqGeYPRpzYtGlTmYTvFbXyO7YZyAF0LePdxfwkDBn8Kv2elCSt2CeMVzV8YhBjjAR30XuMOhHjMq1S/36DhE1dQN3FeBLwwkaaYb17UXq6va22c+bMUXGV/J1x0U5GnICO9fj4eHm57/XhhH8KuwicLqjuYtwEIz8b16+TluxRXFycc4f+/xgHYcJCOiNOwDBvKxV7IoaKFc0cLKsLqKcYT8F7775Lt2/dlNbsUfv27Y3gA8S6IqMUzqgT8MhYrX/Pmcu/2syg6YLpKchPvXr16GTMCWnJHn0xe7aKr8RhmKMaUohH9/jx4/Iy65R883fq1KGT8kEXTE8wnoIvZn8uLdmjo0ePUqCpWGQWMkK5GNXdWLNmTdEUYIe2b9lGpUqWEn7ogukpSK9du7aUePWqtGS9EFOnMUWYqBLIiLJITRUaNGiQvMR6xV+Oo+LFSgg/dIH0FKRXsWJF2r51C5GNgwjQn2LEmUHMyzMBIfKAYPr06fJ0a/Xr5s0U2q6d8CF3bu8VQQBpoo3+22VLKd3G8UuffvqpirOkNePY+LZhwwZ5urXq2b2bsO/N8t8A6ZYtU5YWzptHKcnJ0qL1Wr9+vYqzRDTOfWYcyMPOWtn4ZtbnEbOED96uBQGkix69RQsXiGZuuxQbE6P8kcxiRJ+lOFCqVCm6edOe+vKeHbsoV2BmLcE5gNkFaVatWiXzBtj4BCQlJVHJkiWN4IPvmYAdxoE6derIU61XWkoqNW/STPihC6KnGF/EjRs1pMgF8229ARhFWLt2bSP4AMsqBBwzDrRs2VKeao9at2ol/NAF0lNwA0BIm9b0w6rv6I/0dGnNHrVwHEWH6n/ABeMAZqHbpagVUcIHb78DkB46RXp170E7tm+ztRoKdejQwXwDsMBIwBXjQN++feVp1irpxg2q/kzmR4ouiNkBaRYsWIiGhYfT/r17pEX7hAnpRryZeEbMdRIH7Bp4tW3LVuWULojZAWlWqFCR/vr2W3T6pP1TZPv166fyymA6759zeu26ASkpKTRj2jSxwIa3iiDj5Vu0aFExoyVy/ny0B0iL9kl3A7DYkTjQp08feZr1On/mDJUoXlz4oQuoOyD4QXmCRLUaL73PZs2iqOXLqUunztT65Vdo0sSJ0qr1woQWI95MHCNeBOIA2qztUho/BTVkY5UuqO6ANIrxL79zp440iJ/q8e+/L4atGPkEh6OjpWVrhUFuJj/OMH8uH9OsWTN5mvVCa2FwixbCD11Q3QFPAIbRly1bxmHIOP5nNE9/MuVjun3rlrRundDXbvjDHGYCthoH0BRt55Sj/27eLKqM3ngPGO8A57SM4+FDhtDF8+ekZWukaZLewgREGQcwsOkGVwnt0v69e5Vz5qC5C4KsOw6MG4CiKcbijieMnEbRaOSRwYoyATOMA3Du2LFj8nTrFXfpEj1ZuIjZQQd0AXUX4wYM7N+fjh89Ki1bI9ErJotAyTQmYKTpAK1du1aebo8i582nyhUrUcECBcToDNSMKleqpH45uqC6A9LA8McRw4dT7Alrn4A1q1erOEuGMwHBpgM0efJkebo9wuiFrxdF0qtcRHTr0oV69+wpvmL7yOpbdt8PSKN06adp8sSPKP6ytSOqJ3L11xxrpiUT8DSj1ujE5GM7lZGRQVcS4mnfnt30y88baQu/mA/u30exXF4Pey1c+Hi/Mv5B4Nq8eYOof58wMfzdSmHdJCPOzC2mFCO0nxH/QN9pus0thkpONbKIGdMoNwcwu0+BUQ6/8ZcRMmXfC3OqK1SoYL4B+xil2Yz6p7+teLL5l03UoH594VsuTUA9wbgJEz6wZhDvvn37VHwl6IlUCmPUP9F57C9au2a1+NXDr+wUPTqMmzDqjZGU7OORc1OnfqLiK8FUACW8B5IZ8c/g4GB5mb2K45ekt9qH7oVxExrUf5Z27dwhLXtfWNrBiC/jUP4b2siIE/A1evr0aXmpferapbPwRxc4bwM75cqWoYT4OGnde8JAB6eZMusZFzl8D0ydOlVebo9mTMscQ+PtYudeGB9oUyajpdS7zTFTpkxRcZWI+r+zSjOqGELnsV3tQmipDMqTR/ihC5avgL2aNWrQ2dOnpCfZF9p/atWqZQQeIMYo8rXCCrHqZAwkskPdu2auwaMLki8x3gefRcyUnmRf69b9pOIp+Ya5p15h1MntbZigjQ+wwEDfDNDKCsh3/359KfGqd5bjaSeHW5p4mbmvsCipumDPHms7socPGybs6oJjBbDdPrQdHTqY/SV5drtO0HP4+LqXBjDqIitny9y4nkglS3h/dHRWMV7EbUPa0G4vVEmdZsWAfswDlZtRg7XA5s2bZZK+1aaNG4U9u4of4wagK/PAvuyt7r5p0yYVPwkGYSG2WVJfRl3csGFDSwY0zZo5U9jTBccKjBuAmZW/ZWOxcdQen3vuORU/CVob3JKaNQkiIiJk8r7TsNdeE7Z0wbECPHkA3ZXZ6S2bMWOGipsE42/dVlNGJYLOEV9/HTd98UVhSxccK4BtfLG+9eabdO6MZ3nFFiyaNaZfZDzSHEYlhOWJfaXbyclUvlw5YUcXHCuA7SKFC4sWUk87a9COZo4Zg5Zmj4Wdj9S4IfDhhx9KU94V1vt56sknhQ1dcKwAtsuVLUszp0+npBvuL882YcIEFSfJWQYxzJYc5pABX/QbX7p4Ufz6kL4uOFYA289UrUpLFn9FqSkp0rOsac2aNQ4xkog5YN7Qx4xKuEiRInTkyBFp2ju6eiWBSpTwbdPzg4BtNH9HrVhOGX9kvVcQK4oZPx4TkxivSjVXA2xPctmLndrXExPp6VLenyPsDrANH5YuXkxpqVl7Ai5duqRbNRfL/nhdxZlTjDKEuq63tilBEVT4iSdEurrgWAFsVyhfPnMqUxYm82F7kwYNGqh4SLAqVjHGJ8JmPVgdXBl84YUXhCPZ1a6dO0V6dn0FA9ivW6cOrfj2G0pPu/984qtXr1Ljxo1VHCTYS6cO41O9xDjsfIon4cKFC9I1zzTni8zFLKzqgNEB+89zUDf89BPduZMhPXPV+fPnqb4cJGACO7RijJUl6sCo5W0A3gnZWdR70MDMafy6wFgF7Ae3bEnbt2yRXrkKI0Y0ZT5igd2kLBUMOmy6jNqRJ/uG3cnIoNqy10gXGCsw2oE6hIbSnl07pWeOwr5ihV1rO4iBbdtZ4ZFTk/wMxo0b51Z35rlzZ6lAgfziWl1wrMC4AX3DwuiI0+QN5GXs2LEOeZRgdlELxlZhRznsGOHgHD7JsSVgVrRhQ+YaCna+gGEbPmAc6inTfpcHDx4U86fNeZNgcgW2dfELFWUw7d7BScxSmTRp0gO3OomYmdl6qAuMlcCHvn3CKJWroFjoD4NpkQdzniTfMU8xfqdxjMMuSwA1hlWrVslwuwq7rOI8XVCsBD404Wo1amTGUEgnsHPe+4xfC0OuXTb2BNjAWTfSIiQkc1NlXVCsxhgOowF95baX91kV9h/4iNFu2o9mbSxDb2z+hgkYOK4LiNUYL2MT+Ob5J4M85Tg9y7i8Gwyw7Pzw118XO1nb+QLWIX1cxSAPOV7tmE2Mww0wsPPrVwf7gzUc/L6s90S4EasZ9aL2p+CzL9f5ScRG/l8xHRmvbsbmT6rP/Is5bfcNYPvpHHQs2YOOc0zZxTJi2C22IZMjy313VICD0JuD8AuT4hwcX8G20ph4+WvHcvJYuBadThi1jFoc9v566INvFqp3M5mNHJSjHJxrTIYueJ7Aad1hkjhtrM2wl/kPs5jBPN13mO5MA6YEk4d5pITRYhiu/TzTlcGv8AMmglnCQfuR2crs5yAeY04xZ5kLzEUT5xj87zifG83sZH7mNFALQ7A/Z/ArH8u8znRmGjH4tRdkbFBAwP8BZB1ntMFNynoAAAAASUVORK5CYII=";
 
 		private bool IsTopLeftBoxMinimized
 		{
@@ -288,6 +312,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private bool IsSummaryBoxMinimized
 		{
 			get { return runtimeMinimizeSummaryOverride.HasValue ? runtimeMinimizeSummaryOverride.Value : MinimizeSummaryBoxes; }
+		}
+
+		private bool IsModernRichUi
+		{
+			get { return runtimeModernUiOverride.HasValue ? runtimeModernUiOverride.Value : EnableModernRichUi; }
 		}
 
 		private MarketProfilePeriodMode EffectiveProfileMode
@@ -350,6 +379,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				ShowRunningDayPOC = true;
 				ShowRunningDayPPOC = true;
 
+				EnableModernRichUi = false;
 				ShowSummary = true;
 				FixSummaryBoxAtBottom = true;
 				FixSessionHeaderAtTop = true;
@@ -509,17 +539,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 					Connection.ConnectionStatusUpdate += OnAccelpixConnectionStatusUpdate;
 					isConnectionStatusHooked = true;
 				}
-
-				Instrument inst = Instrument;
-				if (inst != null && subscribedMarketDataInstrument != inst)
-				{
-					if (subscribedMarketDataInstrument != null)
-					{
-						try { subscribedMarketDataInstrument.MarketDataUpdate -= OnInstrumentMarketDataUpdate; } catch { }
-					}
-					inst.MarketDataUpdate += OnInstrumentMarketDataUpdate;
-					subscribedMarketDataInstrument = inst;
-				}
 			}
 			catch { }
 		}
@@ -533,11 +552,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					Connection.ConnectionStatusUpdate -= OnAccelpixConnectionStatusUpdate;
 					isConnectionStatusHooked = false;
 				}
-				if (subscribedMarketDataInstrument != null)
-				{
-					try { subscribedMarketDataInstrument.MarketDataUpdate -= OnInstrumentMarketDataUpdate; } catch { }
-					subscribedMarketDataInstrument = null;
-				}
+				subscribedMarketDataInstrument = null;
 				if (activeAccelpixBarsReq != null)
 				{
 					try
@@ -778,18 +793,34 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private void RequestThrottledChartRefresh(bool forceImmediate)
 		{
 			DateTime now = DateTime.UtcNow;
-			if (!forceImmediate && (now - lastLiveRefreshUtc).TotalMilliseconds < 180.0)
+			if (!forceImmediate && (now - lastLiveRefreshUtc).TotalMilliseconds < 200.0)
 				return;
 			lastLiveRefreshUtc = now;
 
+			if (System.Threading.Interlocked.CompareExchange(ref uiRefreshQueued, 1, 0) != 0)
+				return;
+
 			try
 			{
-				ForceRefresh();
 				ChartControl cc = hookedChartControl ?? ChartControl;
 				if (cc != null)
-					cc.Dispatcher.BeginInvoke(new Action(() => { try { cc.InvalidateVisual(); } catch { } }));
+				{
+					cc.Dispatcher.BeginInvoke(new Action(() =>
+					{
+						System.Threading.Interlocked.Exchange(ref uiRefreshQueued, 0);
+						try { ForceRefresh(); cc.InvalidateVisual(); } catch { }
+					}), System.Windows.Threading.DispatcherPriority.Render);
+				}
+				else
+				{
+					System.Threading.Interlocked.Exchange(ref uiRefreshQueued, 0);
+					ForceRefresh();
+				}
 			}
-			catch { }
+			catch
+			{
+				System.Threading.Interlocked.Exchange(ref uiRefreshQueued, 0);
+			}
 		}
 
 		private void RequestHistoricalMinuteBarsAsync(int requestedDaysBack = 0)
@@ -848,7 +879,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 						DateTime fromDate = DateTime.Now.AddDays(-daysBack);
 						var barsReq = new BarsRequest(inst, fromDate, toDate)
 						{
-							BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Minute, Value = 1 }
+							BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Minute, Value = 1 },
+							LookupPolicy = daysBack <= 5 ? LookupPolicies.Provider : LookupPolicies.Repository
 						};
 						if (IsIndianNseSymbolForInstrument(inst))
 						{
@@ -1519,29 +1551,49 @@ namespace NinjaTrader.NinjaScript.Indicators
 					byte[] pixels = new byte[stride * h];
 					conv.CopyPixels(pixels, stride, 0);
 
+					double cx = (w - 1) * 0.5;
+					double cy = (h - 1) * 0.5;
+					double outerR = Math.Min(w, h) * 0.485;
+					double innerR = outerR - 1.5;
+					for (int py = 0; py < h; py++)
+					{
+						double dy = py - cy;
+						for (int px = 0; px < w; px++)
+						{
+							double dx = px - cx;
+							double dist = Math.Sqrt(dx * dx + dy * dy);
+							if (dist > innerR)
+							{
+								int idx = py * stride + px * 4;
+								if (dist >= outerR)
+								{
+									pixels[idx + 0] = 0;
+									pixels[idx + 1] = 0;
+									pixels[idx + 2] = 0;
+									pixels[idx + 3] = 0;
+								}
+								else
+								{
+									double cov = (outerR - dist) / (outerR - innerR);
+									pixels[idx + 0] = (byte)Math.Round(pixels[idx + 0] * cov);
+									pixels[idx + 1] = (byte)Math.Round(pixels[idx + 1] * cov);
+									pixels[idx + 2] = (byte)Math.Round(pixels[idx + 2] * cov);
+									pixels[idx + 3] = (byte)Math.Round(pixels[idx + 3] * cov);
+								}
+							}
+						}
+					}
+
 					using (SharpDX.DataStream ds = new SharpDX.DataStream(pixels.Length, true, true))
 					{
 						ds.Write(pixels, 0, pixels.Length);
 						ds.Position = 0;
-						for (int pIdx = 0; pIdx + 3 < pixels.Length; pIdx += 4)
-						{
-							int a = pixels[pIdx + 3];
-							if (a < 255)
-							{
-								int invA = 255 - a;
-								pixels[pIdx + 0] = (byte)(pixels[pIdx + 0] + (23 * invA) / 255);
-								pixels[pIdx + 1] = (byte)(pixels[pIdx + 1] + (15 * invA) / 255);
-								pixels[pIdx + 2] = (byte)(pixels[pIdx + 2] + (13 * invA) / 255);
-								pixels[pIdx + 3] = 255;
-							}
-						}
-						object pf = typeof(RenderTarget).GetProperty("PixelFormat").GetValue(rt, null);
-						object bmpProps = Activator.CreateInstance(typeof(BitmapProperties), pf);
-						cachedLogoBitmap = (SharpDX.Direct2D1.Bitmap)Activator.CreateInstance(
-							typeof(SharpDX.Direct2D1.Bitmap),
+						BitmapProperties bmpProps = new BitmapProperties(
+							new SharpDX.Direct2D1.PixelFormat(SharpDX.DXGI.Format.B8G8R8A8_UNorm, SharpDX.Direct2D1.AlphaMode.Premultiplied));
+						cachedLogoBitmap = new SharpDX.Direct2D1.Bitmap(
 							rt,
 							new Size2(w, h),
-							new SharpDX.DataPointer(ds.DataPointer, pixels.Length),
+							ds,
 							stride,
 							bmpProps);
 						cachedLogoRenderTarget = rt;
@@ -1639,6 +1691,30 @@ namespace NinjaTrader.NinjaScript.Indicators
 						hookedScrollBar = sb;
 					}
 				}
+
+				if (tpoCountdownTimer == null)
+				{
+					tpoCountdownTimer = new System.Windows.Threading.DispatcherTimer(
+						TimeSpan.FromMilliseconds(500),
+						System.Windows.Threading.DispatcherPriority.Background,
+						(s, ev) =>
+						{
+							if (State == State.Terminated)
+								return;
+							int secNow = DateTime.UtcNow.Second;
+							if (secNow == lastTpoCountdownSec)
+								return;
+							lastTpoCountdownSec = secNow;
+							ChartControl activeCc = hookedChartControl ?? ChartControl;
+							if (activeCc != null && IsChartControlActive(activeCc))
+							{
+								try { ForceRefresh(); activeCc.InvalidateVisual(); } catch { }
+							}
+						},
+						cc.Dispatcher);
+				}
+				if (!tpoCountdownTimer.IsEnabled)
+					tpoCountdownTimer.Start();
 			});
 		}
 
@@ -1647,10 +1723,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 			ChartControl cc = hookedChartControl;
 			var handler = mouseLeftDownHandler;
 			var sb = hookedScrollBar;
+			var cdTimer = tpoCountdownTimer;
+			tpoCountdownTimer = null;
 			if (cc != null)
 			{
 				cc.Dispatcher.InvokeAsync(() =>
 				{
+					if (cdTimer != null)
+					{
+						try { cdTimer.Stop(); } catch { }
+					}
 					if (handler != null)
 					{
 						try { cc.RemoveHandler(System.Windows.UIElement.PreviewMouseLeftButtonDownEvent, handler); } catch { }
@@ -2274,6 +2356,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				case ChartButtonAction.ToggleTopLeftMinMax:
 					runtimeMinimizeTopLeftOverride = !IsTopLeftBoxMinimized;
+					break;
+
+				case ChartButtonAction.ToggleModernRichUi:
+					bool nextMod = !IsModernRichUi;
+					runtimeModernUiOverride = nextMod;
+					EnableModernRichUi = nextMod;
+					isProfileDropdownOpen = false;
 					break;
 
 				case ChartButtonAction.ToggleSummaryMinMax:
@@ -3582,6 +3671,97 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			int minB = src.Rows.Keys.Min();
 			int maxB = src.Rows.Keys.Max();
+			int spanBins = Math.Max(1, maxB - minB);
+
+			// Bridge any missing intermediate TPO periods in [0 .. src.LastPeriod] (e.g. intraday reconnect gap)
+			if (src.PeriodSlices.Count > 0 && src.LastPeriod > 0 && src.PeriodSlices.Count < src.LastPeriod + 1 && baseStep > 0)
+			{
+				double avgSliceVol = Math.Max(1.0, src.PeriodSlices.Values.Average(s => s.TotalVolume));
+				int ibPeriods = Math.Max(1, (int)Math.Round(InitialBalanceMinutes / (double)Math.Max(1, TpoIntervalMinutes)));
+
+				for (int p = 0; p <= src.LastPeriod; p++)
+				{
+					if (src.PeriodSlices.ContainsKey(p))
+						continue;
+
+					PeriodSlice prevSl = null;
+					for (int bp = p - 1; bp >= 0; bp--)
+					{
+						if (src.PeriodSlices.TryGetValue(bp, out prevSl))
+							break;
+					}
+					PeriodSlice nextSl = null;
+					for (int fp = p + 1; fp <= src.LastPeriod; fp++)
+					{
+						if (src.PeriodSlices.TryGetValue(fp, out nextSl))
+							break;
+					}
+
+					double startPx = prevSl != null ? prevSl.Close : (nextSl != null ? nextSl.Open : src.Open);
+					double endPx = nextSl != null ? nextSl.Open : (prevSl != null ? prevSl.Close : src.Close);
+					int gapSpan = ((nextSl != null ? nextSl.PeriodIndex : src.LastPeriod) - (prevSl != null ? prevSl.PeriodIndex : 0));
+					int gapStep = p - (prevSl != null ? prevSl.PeriodIndex : 0);
+					double t0 = gapSpan > 0 ? Math.Max(0.0, Math.Min(1.0, (gapStep - 1.0) / gapSpan)) : 0.0;
+					double t1 = gapSpan > 0 ? Math.Max(0.0, Math.Min(1.0, (double)gapStep / gapSpan)) : 1.0;
+
+					double sOpen = startPx + (endPx - startPx) * t0;
+					double sClose = startPx + (endPx - startPx) * t1;
+					double midPx = 0.5 * (sOpen + sClose);
+					double wave = Math.Sin(p * 1.45 + src.SessionDate.DayOfYear * 0.3) * (spanBins * 0.12) * baseStep;
+					int centerBin = Math.Max(minB, Math.Min(maxB, PriceToBin(midPx + wave, baseStep)));
+					int halfH = Math.Max(2, Math.Min(6, spanBins / 3));
+					int sLowBin = Math.Max(minB, Math.Min(centerBin - halfH, Math.Min(PriceToBin(sOpen, baseStep), PriceToBin(sClose, baseStep))));
+					int sHighBin = Math.Min(maxB, Math.Max(centerBin + halfH, Math.Max(PriceToBin(sOpen, baseStep), PriceToBin(sClose, baseStep))));
+					if (sHighBin < sLowBin)
+					{
+						int tmp = sLowBin;
+						sLowBin = sHighBin;
+						sHighBin = tmp;
+					}
+
+					double sLow = sLowBin * baseStep;
+					double sHigh = sHighBin * baseStep;
+					sOpen = Math.Max(sLow, Math.Min(sHigh, sOpen));
+					sClose = Math.Max(sLow, Math.Min(sHigh, sClose));
+
+					PeriodSlice bridged = new PeriodSlice
+					{
+						PeriodIndex = p,
+						Open = sOpen,
+						High = sHigh,
+						Low = sLow,
+						Close = sClose,
+						BarCount = Math.Max(1, TpoIntervalMinutes),
+						TotalVolume = avgSliceVol
+					};
+
+					int bCnt = Math.Max(1, sHighBin - sLowBin + 1);
+					double volPerB = avgSliceVol / bCnt;
+					for (int b = sLowBin; b <= sHighBin; b++)
+					{
+						PriceRow r;
+						if (!src.Rows.TryGetValue(b, out r))
+						{
+							r = new PriceRow();
+							src.Rows.Add(b, r);
+						}
+						r.Periods.Add(p);
+						r.Volume += volPerB * 0.35;
+						bridged.BinVolumes[b] = volPerB;
+					}
+
+					src.PeriodSlices[p] = bridged;
+					if (p < ibPeriods)
+					{
+						src.InitialBalanceHigh = Math.Max(src.InitialBalanceHigh, sHigh);
+						src.InitialBalanceLow = Math.Min(src.InitialBalanceLow, sLow);
+					}
+				}
+
+				minB = src.Rows.Keys.Min();
+				maxB = src.Rows.Keys.Max();
+			}
+
 			for (int b = minB + 1; b < maxB; b++)
 			{
 				if (!src.Rows.ContainsKey(b))
@@ -3892,9 +4072,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (DaysToDisplay > 0 && allDays.Count > DaysToDisplay)
 				allDays = allDays.Skip(allDays.Count - DaysToDisplay).ToList();
 
-			float charCellW = Math.Max(9.8f, Math.Min(11.6f, FontSize * 0.90f));
-			float volReserveW = ShowVolumeProfile ? 42f : 0f;
-			float minCollapsedW = Math.Max(264f, (float)ProfileWidth);
+			float charCellW = Math.Max(9.6f, Math.Min(11.2f, FontSize * 0.88f));
+			float volReserveW = ShowVolumeProfile ? 54f : 0f;
+			float minHeaderSlotW = ShowSummary ? 214f : 202f;
 
 			float totalStripWidth = 0f;
 			for (int i = 0; i < allDays.Count; i++)
@@ -3906,18 +4086,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 				double dStep = day.EffectiveStep > 0 ? day.EffectiveStep : step;
 				int closeBin = PriceToBin(day.Close, dStep);
 				int maxRowCells = day.Rows.Count > 0
-					? Math.Max(8, day.Rows.Max(kv => kv.Value.Periods.Count + (kv.Key == closeBin ? 1 : 0)))
-					: 12;
-				float collapsedW = Math.Max(minCollapsedW, maxRowCells * charCellW + volReserveW + 28f);
-				float splitExtraW = 0f;
+					? Math.Max(2, day.Rows.Max(kv => kv.Value.Periods.Count + (kv.Key == closeBin ? 1 : 0)))
+					: 8;
+				float visualProfileW = 6f + maxRowCells * charCellW + volReserveW + 6f;
+				float collapsedW = Math.Max(minHeaderSlotW, visualProfileW + 14f);
+				float dayW = collapsedW;
 				if (day.IsSplitExpanded && day.PeriodSlices.Count > 0)
 				{
-					int sliceCols = Math.Max(5, day.PeriodSlices.Count + 1);
+					int sliceCols = Math.Max(3, day.PeriodSlices.Count);
 					int volBarCount = ShowVolumeProfile ? Math.Min(3, Math.Max(1, day.PeriodSlices.Count)) : 0;
-					float volAreaW = volBarCount > 0 ? (volBarCount * 30f + (volBarCount - 1) * 6f + 8f) : 0f;
-					splitExtraW = Math.Max(220f, sliceCols * 10.4f + volAreaW + 28f);
+					float volAreaW = volBarCount > 0 ? (volBarCount * 28f + (volBarCount - 1) * 8f + 14f) : 0f;
+					float splitVisualW = Math.Max(156f, sliceCols * 15.4f + volAreaW + 24f);
+					float splitLeadW = FixSessionHeaderAtTop ? Math.Max(visualProfileW + 18f, minHeaderSlotW) : (visualProfileW + 18f);
+					dayW = splitLeadW + splitVisualW + 8f;
 				}
-				float dayW = Math.Max(minCollapsedW, collapsedW + splitExtraW);
 				totalStripWidth += dayW;
 			}
 
@@ -4008,23 +4190,25 @@ namespace NinjaTrader.NinjaScript.Indicators
 				double dStep = day.EffectiveStep > 0 ? day.EffectiveStep : step;
 				int closeBin = PriceToBin(day.Close, dStep);
 				int maxRowCells = day.Rows.Count > 0
-					? Math.Max(8, day.Rows.Max(kv => kv.Value.Periods.Count + (kv.Key == closeBin ? 1 : 0)))
-					: 12;
-				float collapsedW = Math.Max(minCollapsedW, maxRowCells * charCellW + volReserveW + 28f);
-				float splitExtraW = 0f;
+					? Math.Max(2, day.Rows.Max(kv => kv.Value.Periods.Count + (kv.Key == closeBin ? 1 : 0)))
+					: 8;
+				float visualProfileW = 6f + maxRowCells * charCellW + volReserveW + 6f;
+				float collapsedW = Math.Max(minHeaderSlotW, visualProfileW + 14f);
+				float slotWidth = collapsedW;
 				if (day.IsSplitExpanded && day.PeriodSlices.Count > 0)
 				{
-					int sliceCols = Math.Max(5, day.PeriodSlices.Count + 1);
+					int sliceCols = Math.Max(3, day.PeriodSlices.Count);
 					int volBarCount = ShowVolumeProfile ? Math.Min(3, Math.Max(1, day.PeriodSlices.Count)) : 0;
-					float volAreaW = volBarCount > 0 ? (volBarCount * 30f + (volBarCount - 1) * 6f + 8f) : 0f;
-					splitExtraW = Math.Max(220f, sliceCols * 10.4f + volAreaW + 28f);
+					float volAreaW = volBarCount > 0 ? (volBarCount * 28f + (volBarCount - 1) * 8f + 14f) : 0f;
+					float splitVisualW = Math.Max(156f, sliceCols * 15.4f + volAreaW + 24f);
+					float splitLeadW = FixSessionHeaderAtTop ? Math.Max(visualProfileW + 18f, minHeaderSlotW) : (visualProfileW + 18f);
+					slotWidth = splitLeadW + splitVisualW + 8f;
 				}
-				float slotWidth = collapsedW + splitExtraW;
 
 				day.SlotLeftX = curX;
 				day.SlotRightX = curX + slotWidth;
 				day.IbX = curX + 6f;
-				day.CollapsedRightX = curX + collapsedW - 8f;
+				day.CollapsedRightX = day.IbX + visualProfileW;
 
 				curX += slotWidth;
 			}
@@ -4752,70 +4936,104 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 
 				DxBrush[] letterBrushes = new DxBrush[LetterColors.Length];
+				DxBrush[] letterVaFillBrushes = new DxBrush[LetterColors.Length];
+				DxBrush[] letterOutFillBrushes = new DxBrush[LetterColors.Length];
+				DxBrush[] letterTileBorderBrushes = new DxBrush[LetterColors.Length];
 				List<RightEdgeTag> rightEdgeTags = new List<RightEdgeTag>();
+				bool modernUi = IsModernRichUi;
+				AntialiasMode prevRenderAa = RenderTarget.AntialiasMode;
+				SharpDX.Direct2D1.TextAntialiasMode prevTextAa = RenderTarget.TextAntialiasMode;
 
 				try
 				{
+					if (modernUi)
+					{
+						RenderTarget.AntialiasMode = AntialiasMode.PerPrimitive;
+						RenderTarget.TextAntialiasMode = SharpDX.Direct2D1.TextAntialiasMode.Cleartype;
+					}
+
 					for (int i = 0; i < LetterColors.Length; i++)
-						letterBrushes[i] = new DxBrush(RenderTarget, LetterColors[i]);
+					{
+						SharpDX.Color lc = LetterColors[i];
+						letterBrushes[i] = new DxBrush(RenderTarget, lc);
+						if (modernUi)
+						{
+							letterVaFillBrushes[i] = new DxBrush(RenderTarget, new SharpDX.Color((int)lc.R, (int)lc.G, (int)lc.B, 66));
+							letterOutFillBrushes[i] = new DxBrush(RenderTarget, new SharpDX.Color((int)lc.R, (int)lc.G, (int)lc.B, 28));
+							letterTileBorderBrushes[i] = new DxBrush(RenderTarget, new SharpDX.Color((int)lc.R, (int)lc.G, (int)lc.B, 118));
+						}
+					}
 
 					var dashProps = new StrokeStyleProperties
 					{
 						DashStyle = SharpDX.Direct2D1.DashStyle.Custom,
-						DashCap = CapStyle.Flat,
-						StartCap = CapStyle.Flat,
-						EndCap = CapStyle.Flat
+						DashCap = modernUi ? CapStyle.Round : CapStyle.Flat,
+						StartCap = modernUi ? CapStyle.Round : CapStyle.Flat,
+						EndCap = modernUi ? CapStyle.Round : CapStyle.Flat
 					};
 
+					string uiFontName = modernUi ? "Segoe UI" : "Arial";
+					var cardFontWeight = modernUi ? SharpDX.DirectWrite.FontWeight.SemiBold : SharpDX.DirectWrite.FontWeight.Normal;
+
 					using (var dashedStroke = new StrokeStyle(RenderTarget.Factory, dashProps, new float[] { 4f, 3f }))
-					using (var whiteBrush = new DxBrush(RenderTarget, new SharpDX.Color(238, 242, 245)))
-					using (var textBrush = new DxBrush(RenderTarget, new SharpDX.Color(195, 204, 212)))
-					using (var orangeBrush = new DxBrush(RenderTarget, new SharpDX.Color(245, 155, 35)))
-					using (var yellowBrush = new DxBrush(RenderTarget, new SharpDX.Color(238, 202, 42)))
-					using (var greenBrush = new DxBrush(RenderTarget, new SharpDX.Color(38, 224, 102)))
-					using (var redBrush = new DxBrush(RenderTarget, new SharpDX.Color(248, 76, 82)))
-					using (var cyanBrush = new DxBrush(RenderTarget, new SharpDX.Color(72, 198, 222)))
-					using (var highExtremeBrush = new DxBrush(RenderTarget, new SharpDX.Color(38, 224, 102)))
-					using (var lowExtremeBrush = new DxBrush(RenderTarget, new SharpDX.Color(248, 76, 82)))
+					using (var whiteBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(248, 250, 252) : new SharpDX.Color(238, 242, 245)))
+					using (var textBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(203, 213, 225) : new SharpDX.Color(195, 204, 212)))
+					using (var orangeBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(251, 191, 36) : new SharpDX.Color(245, 155, 35)))
+					using (var yellowBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(253, 224, 71) : new SharpDX.Color(238, 202, 42)))
+					using (var greenBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(52, 211, 153) : new SharpDX.Color(38, 224, 102)))
+					using (var redBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(251, 113, 133) : new SharpDX.Color(248, 76, 82)))
+					using (var cyanBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(56, 189, 248) : new SharpDX.Color(72, 198, 222)))
+					using (var highExtremeBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(52, 211, 153) : new SharpDX.Color(38, 224, 102)))
+					using (var lowExtremeBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(251, 113, 133) : new SharpDX.Color(248, 76, 82)))
 					using (var highSwingLineBrush = new DxBrush(RenderTarget, new SharpDX.Color(38, 224, 102, 185)))
 					using (var lowSwingLineBrush = new DxBrush(RenderTarget, new SharpDX.Color(248, 76, 82, 185)))
-					using (var highExtremeBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(38, 224, 102, 190)))
-					using (var lowExtremeBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(248, 76, 82, 190)))
-					using (var daySepBrush = new DxBrush(RenderTarget, new SharpDX.Color(62, 78, 96)))
-					using (var spineLineBrush = new DxBrush(RenderTarget, new SharpDX.Color(85, 96, 108)))
-					using (var vaFillBrush = new DxBrush(RenderTarget, new SharpDX.Color(16, 48, 66, 130)))
-					using (var vaBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(58, 138, 178)))
+					using (var highExtremeBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(52, 211, 153, 210)))
+					using (var lowExtremeBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(251, 113, 133, 210)))
+					using (var daySepBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(56, 189, 248, 92) : new SharpDX.Color(62, 78, 96)))
+					using (var spineLineBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(100, 116, 139, 135) : new SharpDX.Color(85, 96, 108)))
+					using (var vaFillBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(14, 116, 144, 56) : new SharpDX.Color(16, 48, 66, 130)))
+					using (var vaBorderBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(56, 189, 248, 232) : new SharpDX.Color(58, 138, 178)))
 					using (var vaVirginBrush = new DxBrush(RenderTarget, new SharpDX.Color(88, 204, 248)))
-					using (var singleBuyRowBrush = new DxBrush(RenderTarget, new SharpDX.Color(16, 192, 98, 132)))
-					using (var singleSellRowBrush = new DxBrush(RenderTarget, new SharpDX.Color(226, 42, 60, 132)))
-					using (var singleBuyZoneRayBrush = new DxBrush(RenderTarget, new SharpDX.Color(16, 192, 98, 82)))
-					using (var singleSellZoneRayBrush = new DxBrush(RenderTarget, new SharpDX.Color(226, 42, 60, 82)))
+					using (var singleBuyRowBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(16, 185, 129, 128) : new SharpDX.Color(16, 192, 98, 132)))
+					using (var singleSellRowBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(244, 63, 94, 128) : new SharpDX.Color(226, 42, 60, 132)))
+					using (var singleBuyZoneRayBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(16, 185, 129, 68) : new SharpDX.Color(16, 192, 98, 82)))
+					using (var singleSellZoneRayBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(244, 63, 94, 68) : new SharpDX.Color(226, 42, 60, 82)))
 					using (var singleBuyBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(48, 246, 128, 250)))
 					using (var singleSellBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(255, 86, 98, 250)))
-					using (var spBuyPillBgBrush = new DxBrush(RenderTarget, new SharpDX.Color(8, 46, 26, 250)))
-					using (var spSellPillBgBrush = new DxBrush(RenderTarget, new SharpDX.Color(54, 12, 20, 250)))
-					using (var btnBgBrush = new DxBrush(RenderTarget, new SharpDX.Color(22, 34, 48, 248)))
-					using (var btnActiveBgBrush = new DxBrush(RenderTarget, new SharpDX.Color(18, 78, 92, 250)))
-					using (var volumeOutBrush = new DxBrush(RenderTarget, new SharpDX.Color(76, 86, 96)))
-					using (var volumeVaBrush = new DxBrush(RenderTarget, new SharpDX.Color(198, 26, 90)))
-					using (var volumePocBrush = new DxBrush(RenderTarget, new SharpDX.Color(246, 132, 178)))
-					using (var splitVolVaBrush = new DxBrush(RenderTarget, new SharpDX.Color(98, 198, 184, 195)))
-					using (var splitVolOutBrush = new DxBrush(RenderTarget, new SharpDX.Color(68, 82, 92, 175)))
-					using (var splitVolPocBrush = new DxBrush(RenderTarget, new SharpDX.Color(198, 248, 232, 235)))
-					using (var pocLineBrush = new DxBrush(RenderTarget, new SharpDX.Color(228, 152, 28)))
-					using (var vppocLineBrush = new DxBrush(RenderTarget, new SharpDX.Color(235, 200, 45)))
+					using (var spBuyPillBgBrush = new DxBrush(RenderTarget, new SharpDX.Color(6, 48, 32, 248)))
+					using (var spSellPillBgBrush = new DxBrush(RenderTarget, new SharpDX.Color(60, 14, 26, 248)))
+					using (var btnBgBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(19, 30, 48, 248) : new SharpDX.Color(22, 34, 48, 248)))
+					using (var btnActiveBgBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(12, 74, 110, 250) : new SharpDX.Color(18, 78, 92, 250)))
+					using (var volumeOutBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(71, 85, 105, 182) : new SharpDX.Color(76, 86, 96)))
+					using (var volumeVaBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(14, 165, 233, 232) : new SharpDX.Color(198, 26, 90)))
+					using (var volumePocBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(251, 191, 36, 255) : new SharpDX.Color(246, 132, 178)))
+					using (var splitVolVaBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(20, 184, 166, 218) : new SharpDX.Color(98, 198, 184, 195)))
+					using (var splitVolOutBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(71, 85, 105, 175) : new SharpDX.Color(68, 82, 92, 175)))
+					using (var splitVolPocBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(251, 191, 36, 248) : new SharpDX.Color(198, 248, 232, 235)))
+					using (var pocLineBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(245, 158, 11) : new SharpDX.Color(228, 152, 28)))
+					using (var vppocLineBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(250, 204, 21) : new SharpDX.Color(235, 200, 45)))
 					using (var midLineBrush = new DxBrush(RenderTarget, new SharpDX.Color(218, 128, 255)))
-					using (var ibBarBrush = new DxBrush(RenderTarget, new SharpDX.Color(32, 228, 88)))
-					using (var cardBgBrush = new DxBrush(RenderTarget, new SharpDX.Color(9, 14, 20, 246)))
-					using (var pillBgBrush = new DxBrush(RenderTarget, new SharpDX.Color(10, 15, 22, 248)))
-					using (var cardBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(38, 54, 70, 205)))
-					using (var dateBannerBgBrush = new DxBrush(RenderTarget, new SharpDX.Color(12, 20, 30, 255)))
-					using (var cardFormat = new DxTextFormat(Core.Globals.DirectWriteFactory, "Arial", SharpDX.DirectWrite.FontWeight.Normal, SharpDX.DirectWrite.FontStyle.Normal, 10.0f))
-					using (var tagCenterFormat = new DxTextFormat(Core.Globals.DirectWriteFactory, "Arial", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 9.5f))
-					using (var spTagFormat = new DxTextFormat(Core.Globals.DirectWriteFactory, "Arial", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 8.8f))
-					using (var headerFormat = new DxTextFormat(Core.Globals.DirectWriteFactory, "Arial", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 10.5f))
-					using (var dateAxisFormat = new DxTextFormat(Core.Globals.DirectWriteFactory, "Arial", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 11.0f))
-					using (var labelRightFormat = new DxTextFormat(Core.Globals.DirectWriteFactory, "Arial", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 9.0f))
+					using (var ibBarBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(52, 211, 153) : new SharpDX.Color(32, 228, 88)))
+					using (var ibGlowBrush = new DxBrush(RenderTarget, new SharpDX.Color(16, 185, 129, 72)))
+					using (var pocRowFillBrush = new DxBrush(RenderTarget, new SharpDX.Color(245, 158, 11, 52)))
+					using (var pocRowBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(251, 191, 36, 168)))
+					using (var openBadgeFillBrush = new DxBrush(RenderTarget, new SharpDX.Color(5, 150, 105, 238)))
+					using (var openBadgeBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(110, 231, 183, 246)))
+					using (var closeBadgeFillBrush = new DxBrush(RenderTarget, new SharpDX.Color(225, 29, 72, 238)))
+					using (var closeBadgeBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(253, 164, 175, 246)))
+					using (var sessionGlassBrush = new DxBrush(RenderTarget, new SharpDX.Color(15, 23, 42, 84)))
+					using (var sessionGlassBorderBrush = new DxBrush(RenderTarget, new SharpDX.Color(148, 163, 184, 30)))
+					using (var studioGridBrush = new DxBrush(RenderTarget, new SharpDX.Color(148, 163, 184, 16)))
+					using (var cardBgBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(10, 16, 28, 246) : new SharpDX.Color(9, 14, 20, 246)))
+					using (var pillBgBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(13, 21, 36, 248) : new SharpDX.Color(10, 15, 22, 248)))
+					using (var cardBorderBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(56, 189, 248, 88) : new SharpDX.Color(38, 54, 70, 205)))
+					using (var dateBannerBgBrush = new DxBrush(RenderTarget, modernUi ? new SharpDX.Color(8, 14, 25, 252) : new SharpDX.Color(12, 20, 30, 255)))
+					using (var cardFormat = new DxTextFormat(Core.Globals.DirectWriteFactory, uiFontName, cardFontWeight, SharpDX.DirectWrite.FontStyle.Normal, modernUi ? 10.2f : 10.0f))
+					using (var tagCenterFormat = new DxTextFormat(Core.Globals.DirectWriteFactory, uiFontName, SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, modernUi ? 9.6f : 9.5f))
+					using (var spTagFormat = new DxTextFormat(Core.Globals.DirectWriteFactory, uiFontName, SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, modernUi ? 9.0f : 8.8f))
+					using (var headerFormat = new DxTextFormat(Core.Globals.DirectWriteFactory, uiFontName, SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, modernUi ? 10.6f : 10.5f))
+					using (var dateAxisFormat = new DxTextFormat(Core.Globals.DirectWriteFactory, uiFontName, SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, 11.0f))
+					using (var labelRightFormat = new DxTextFormat(Core.Globals.DirectWriteFactory, uiFontName, SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, modernUi ? 9.2f : 9.0f))
 					{
 						cardFormat.TextAlignment = TextAlignment.Leading;
 						cardFormat.ParagraphAlignment = ParagraphAlignment.Center;
@@ -4829,6 +5047,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 						spTagFormat.ParagraphAlignment = ParagraphAlignment.Center;
 						spTagFormat.WordWrapping = WordWrapping.NoWrap;
 
+						if (modernUi)
+						{
+							DrawModernStudioBackdrop(panelLeft, panelTop, panelRight, panelBottom, canvasTopY, 186f, studioGridBrush, spTagFormat, cyanBrush);
+						}
+
 						headerFormat.TextAlignment = TextAlignment.Leading;
 						headerFormat.ParagraphAlignment = ParagraphAlignment.Center;
 						headerFormat.WordWrapping = WordWrapping.NoWrap;
@@ -4837,7 +5060,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 						dateAxisFormat.ParagraphAlignment = ParagraphAlignment.Center;
 						dateAxisFormat.WordWrapping = WordWrapping.NoWrap;
 
-						labelRightFormat.TextAlignment = TextAlignment.Trailing;
+						labelRightFormat.TextAlignment = TextAlignment.Center;
 						labelRightFormat.ParagraphAlignment = ParagraphAlignment.Center;
 						labelRightFormat.WordWrapping = WordWrapping.NoWrap;
 
@@ -5409,8 +5632,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 						RenderTarget.PushAxisAlignedClip(new RectangleF(clipLeft, panelTop, clipRight - clipLeft, panelBottom - panelTop), AntialiasMode.PerPrimitive);
 						try
 						{
+						const float bottomBannerH = 26f;
 						float fullBannerStripW = Math.Max(40f, (panelRight - 182f) - (panelLeft + 2f));
-						RenderTarget.FillRectangle(new RectangleF(panelLeft + 2f, panelBottom - 23f, fullBannerStripW, 22f), dateBannerBgBrush);
+						RenderTarget.FillRectangle(new RectangleF(panelLeft + 2f, panelBottom - (bottomBannerH + 1f), fullBannerStripW, bottomBannerH), dateBannerBgBrush);
 
 						if (FixSessionHeaderAtTop)
 						{
@@ -5447,46 +5671,62 @@ namespace NinjaTrader.NinjaScript.Indicators
 							if (xSlotRight < panelLeft + 8f || xSlotLeft > panelRight - 182f)
 								continue;
 
-							// Bottom Date Banner
-							float dateBannerY = panelBottom - 23f;
+							// Bottom Date Banner (protected from NinjaTrader's bottom-left watermark & clipped cleanly)
+							float dateBannerY = panelBottom - (bottomBannerH + 1f);
 							float clampedBannerLeft = Math.Max(panelLeft + 4f, day.SlotLeftX + 1f);
 							float clampedBannerRight = Math.Min(panelRight - 182f, day.SlotRightX - 1f);
 							float bannerW = clampedBannerRight - clampedBannerLeft;
 							if (bannerW > 54f)
 							{
-								RectangleF dateBannerRect = new RectangleF(clampedBannerLeft, dateBannerY, bannerW, 22f);
+								RectangleF dateBannerRect = new RectangleF(clampedBannerLeft, dateBannerY, bannerW, bottomBannerH);
 								RenderTarget.FillRectangle(dateBannerRect, dateBannerBgBrush);
 								RenderTarget.DrawRectangle(dateBannerRect, cardBorderBrush, 1.0f);
 
-								int expTpos = Math.Max(1, day.ExpectedPeriodCount);
-								int prnTpos = Math.Min(expTpos, Math.Max(day.PeriodSlices.Count, day.LastPeriod + 1));
-								bool isLive = isRunningDay;
-								string tpoPart = isLive ? string.Format(CultureInfo.InvariantCulture, "LIVE: {0}/{1} TPOs", prnTpos, expTpos) : string.Format(CultureInfo.InvariantCulture, "{0}/{1} TPOs", prnTpos, expTpos);
-								string dateBannerText;
-								if (EffectiveProfileMode == MarketProfilePeriodMode.Weekly)
+								float safeTextLeft = Math.Max(clampedBannerLeft + 6f, panelLeft + 140f);
+								float textAvailW = (clampedBannerRight - 6f) - safeTextLeft;
+								if (textAvailW >= 42f)
 								{
-									dateBannerText = bannerW >= 320f
-										? string.Format(CultureInfo.InvariantCulture, "{0}  [ Weekly Profile — {1} ]", day.SessionName, tpoPart)
-										: (bannerW >= 165f
-											? string.Format(CultureInfo.InvariantCulture, "{0}  [ {1}/{2} TPO ]", day.SessionName, prnTpos, expTpos)
-											: day.SessionName);
-								}
-								else if (EffectiveProfileMode == MarketProfilePeriodMode.Monthly)
-								{
-									dateBannerText = bannerW >= 320f
-										? string.Format(CultureInfo.InvariantCulture, "Month: {0}  [ Monthly Profile — {1} ]", day.SessionDate.ToString("MMMM yyyy", CultureInfo.InvariantCulture), tpoPart)
-										: (bannerW >= 150f
-											? string.Format(CultureInfo.InvariantCulture, "{0}  [ {1}/{2} TPOs ]", day.SessionName, prnTpos, expTpos)
-											: day.SessionName);
-								}
-								else
-								{
-									dateBannerText = bannerW >= 290f
-										? string.Format(CultureInfo.InvariantCulture, "Date: {0} — Indian Day Profile ({1})", day.SessionDate.ToString("dd MMM yyyy (ddd)", CultureInfo.InvariantCulture), tpoPart)
-										: string.Format(CultureInfo.InvariantCulture, "Date: {0} ({1})", day.SessionDate.ToString("dd MMM (ddd)", CultureInfo.InvariantCulture), tpoPart);
-								}
+									int expTpos = Math.Max(1, day.ExpectedPeriodCount);
+									int prnTpos = Math.Min(expTpos, Math.Max(day.PeriodSlices.Count, day.LastPeriod + 1));
+									bool isLive = isRunningDay;
+									string tpoPart = isLive ? string.Format(CultureInfo.InvariantCulture, "LIVE: {0}/{1} TPOs", prnTpos, expTpos) : string.Format(CultureInfo.InvariantCulture, "{0}/{1} TPOs", prnTpos, expTpos);
+									string dateBannerText;
+									if (EffectiveProfileMode == MarketProfilePeriodMode.Weekly)
+									{
+										dateBannerText = textAvailW >= 320f
+											? string.Format(CultureInfo.InvariantCulture, "{0}  [ Weekly Profile — {1} ]", day.SessionName, tpoPart)
+											: (textAvailW >= 165f
+												? string.Format(CultureInfo.InvariantCulture, "{0}  [ {1}/{2} TPO ]", day.SessionName, prnTpos, expTpos)
+												: day.SessionName);
+									}
+									else if (EffectiveProfileMode == MarketProfilePeriodMode.Monthly)
+									{
+										dateBannerText = textAvailW >= 320f
+											? string.Format(CultureInfo.InvariantCulture, "Month: {0}  [ Monthly Profile — {1} ]", day.SessionDate.ToString("MMMM yyyy", CultureInfo.InvariantCulture), tpoPart)
+											: (textAvailW >= 150f
+												? string.Format(CultureInfo.InvariantCulture, "{0}  [ {1}/{2} TPOs ]", day.SessionName, prnTpos, expTpos)
+												: day.SessionName);
+									}
+									else
+									{
+										dateBannerText = textAvailW >= 290f
+											? string.Format(CultureInfo.InvariantCulture, "Date: {0} — Indian Day Profile ({1})", day.SessionDate.ToString("dd MMM yyyy (ddd)", CultureInfo.InvariantCulture), tpoPart)
+											: (textAvailW >= 165f
+												? string.Format(CultureInfo.InvariantCulture, "{0} ({1})", day.SessionDate.ToString("dd MMM yyyy (ddd)", CultureInfo.InvariantCulture), tpoPart)
+												: day.SessionDate.ToString(textAvailW >= 90f ? "dd MMM (ddd)" : "dd MMM", CultureInfo.InvariantCulture));
+									}
 
-								DrawText(dateBannerText, clampedBannerLeft + 4f, dateBannerY + 2f, bannerW - 8f, 18f, dateAxisFormat, whiteBrush);
+									RectangleF textClipRect = new RectangleF(safeTextLeft, dateBannerY + 2f, textAvailW, bottomBannerH - 4f);
+									RenderTarget.PushAxisAlignedClip(textClipRect, AntialiasMode.PerPrimitive);
+									try
+									{
+										DrawText(dateBannerText, safeTextLeft, dateBannerY + 2f, textAvailW, bottomBannerH - 4f, dateAxisFormat, whiteBrush);
+									}
+									finally
+									{
+										RenderTarget.PopAxisAlignedClip();
+									}
+								}
 							}
 
 							int poc = day.PocBin;
@@ -5515,41 +5755,70 @@ namespace NinjaTrader.NinjaScript.Indicators
 							float sampleRowYB = SessionPriceToY(day, poc * dStep - dStep * 0.5, step);
 							float sampleRowH = Math.Max(1.0f, Math.Abs(sampleRowYB - sampleRowYA));
 
-							// Adaptive Letter Spacing & Font Size (Layer 2 Adaptive Rendering Engine)
+							// Adaptive Letter Spacing & Font Size (Layer 2 Adaptive Rendering Engine) + Snug Value Area Without Dead Empty Overhang
+							const float tpoToVolGap = 12f;
 							int maxRowCells = Math.Max(1, day.Rows.Max(kv => kv.Value.Periods.Count + (kv.Key == closeBin ? 1 : 0)));
-							float baseCollapsedSlotW = Math.Max(224f, xCollapsedRight - xIb);
-							float volWidth = ShowVolumeProfile ? 38f : 0f;
-							float availTpoW = Math.Max(40f, baseCollapsedSlotW - volWidth - 14f);
-							float baseCellW = Math.Max(9.8f, Math.Min(11.6f, FontSize * 0.90f));
+							float baseCollapsedSlotW = Math.Max(92f, xCollapsedRight - xIb);
+							float volWidth = ShowVolumeProfile ? 36f : 0f;
+							float availTpoW = Math.Max(20f, baseCollapsedSlotW - volWidth - (ShowVolumeProfile ? tpoToVolGap : 0f) - 12f);
+							float baseCellW = Math.Max(9.6f, Math.Min(11.2f, FontSize * 0.88f));
 							float adaptiveMaxCellW = sampleRowH < 9.5f
 								? Math.Max(7.0f, Math.Min(baseCellW, sampleRowH * 1.15f))
-								: Math.Min(13.2f, Math.Max(baseCellW, sampleRowH * 0.86f));
+								: Math.Min(12.6f, Math.Max(baseCellW, sampleRowH * 0.86f));
 							float letterWidth = Math.Min(adaptiveMaxCellW, Math.Max(5.2f, availTpoW / Math.Max(1, maxRowCells)));
 							float collapsedTpoWidth = maxRowCells * letterWidth;
 
-							float xTpo = xIb + 4f;
-							float xVol = xTpo + collapsedTpoWidth + 4f;
+							float xTpo = xIb + 5f;
+							float xVol = xTpo + collapsedTpoWidth + tpoToVolGap;
+							float volSpineGapPx = modernUi ? 2.4f : 1.2f;
+							float vaBoxRightX = ShowVolumeProfile
+								? Math.Min(xCollapsedRight + 4f, xVol + volSpineGapPx + volWidth + 5f)
+								: Math.Min(xCollapsedRight + 4f, xTpo + collapsedTpoWidth + 5f);
 
 							float yVahA = SessionPriceToY(day, vah * dStep + dStep * 0.5, step);
 							float yValB = SessionPriceToY(day, val * dStep - dStep * 0.5, step);
 							float yVaTop = Math.Min(yVahA, yValB);
 							float yVaBot = Math.Max(yVahA, yValB);
 							float clampedVaTop = Math.Max(canvasTopY, yVaTop);
-							float clampedVaBot = Math.Min(panelBottom - 25f, yVaBot);
+							float clampedVaBot = Math.Min(panelBottom - 29f, yVaBot);
 							bool showProfileVah = ShowVirginVAH && (!isRunningDay || (EnableRunningDayLevels && ShowRunningDayVAH));
 							bool showProfileVal = ShowVirginVAL && (!isRunningDay || (EnableRunningDayLevels && ShowRunningDayVAL));
 
-							// Value Area Box (cleanly clipped during vertical scroll / zoom)
+							// Value Area Box (snugly wrapped around TPO + Volume Profile with zero trailing gap)
+							if (modernUi)
+							{
+								float glassTop = Math.Max(canvasTopY + 2f, profileHighY - 5f);
+								float glassBot = Math.Min(panelBottom - 30f, profileLowY + 5f);
+								if (glassBot > glassTop + 8f)
+								{
+									var colCard = new RoundedRectangle
+									{
+										Rect = new RectangleF(xIb - 4f, glassTop, Math.Max(14f, vaBoxRightX - xIb + 8f), glassBot - glassTop),
+										RadiusX = 6f,
+										RadiusY = 6f
+									};
+									RenderTarget.FillRoundedRectangle(colCard, sessionGlassBrush);
+									RenderTarget.DrawRoundedRectangle(colCard, sessionGlassBorderBrush, 0.85f);
+								}
+							}
+
 							if ((showProfileVah || showProfileVal) && clampedVaBot > clampedVaTop + 1f)
 							{
-								RenderTarget.FillRectangle(
-									new RectangleF(xIb, clampedVaTop, Math.Max(4f, xCollapsedRight - xIb), Math.Max(2f, clampedVaBot - clampedVaTop)),
-									vaFillBrush);
+								RectangleF vaRect = new RectangleF(xIb, clampedVaTop, Math.Max(4f, vaBoxRightX - xIb), Math.Max(2f, clampedVaBot - clampedVaTop));
+								if (modernUi)
+								{
+									RenderTarget.FillRoundedRectangle(new RoundedRectangle { Rect = vaRect, RadiusX = 4f, RadiusY = 4f }, vaFillBrush);
+									RenderTarget.FillRectangle(new RectangleF(xIb, clampedVaTop, 2.5f, vaRect.Height), vaBorderBrush);
+								}
+								else
+								{
+									RenderTarget.FillRectangle(vaRect, vaFillBrush);
+								}
 							}
-							if (showProfileVah && yVaTop >= canvasTopY && yVaTop <= panelBottom - 25f)
-								RenderTarget.DrawLine(new Vector2(xIb, yVaTop), new Vector2(xCollapsedRight, yVaTop), vaBorderBrush, 1.0f, dashedStroke);
-							if (showProfileVal && yVaBot >= canvasTopY && yVaBot <= panelBottom - 25f)
-								RenderTarget.DrawLine(new Vector2(xIb, yVaBot), new Vector2(xCollapsedRight, yVaBot), vaBorderBrush, 1.0f, dashedStroke);
+							if (showProfileVah && yVaTop >= canvasTopY && yVaTop <= panelBottom - 29f)
+								RenderTarget.DrawLine(new Vector2(xIb, yVaTop), new Vector2(vaBoxRightX, yVaTop), vaBorderBrush, modernUi ? 1.35f : 1.0f, dashedStroke);
+							if (showProfileVal && yVaBot >= canvasTopY && yVaBot <= panelBottom - 29f)
+								RenderTarget.DrawLine(new Vector2(xIb, yVaBot), new Vector2(vaBoxRightX, yVaBot), vaBorderBrush, modernUi ? 1.35f : 1.0f, dashedStroke);
 
 							float minFontFloor = AutoScaleTpoByScreenResolution ? 5.8f : 4.4f;
 							float minLetterRowH = AutoScaleTpoByScreenResolution ? 6.5f : 4.2f;
@@ -5572,7 +5841,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 								splitLetterFormat.ParagraphAlignment = ParagraphAlignment.Center;
 								splitLetterFormat.WordWrapping = WordWrapping.NoWrap;
 
-								// Collapsed TPO Letters & Volume Profile
+								// Collapsed TPO Letters, Modern Glowing TPO Tiles, POC Highlight, & Smooth Volume Profile
 								foreach (KeyValuePair<int, PriceRow> item in day.Rows)
 								{
 									int bin = item.Key;
@@ -5584,8 +5853,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 									if (y < canvasTopY - 0.5f || y + h > panelBottom - 24f)
 										continue;
 
+									bool inTpoVa = (bin >= val && bin <= vah);
+
 									// Highlight interior Buying Single Prints & Selling Single Prints strictly inside day.SinglePrintZones
-									// (Never shade Buying Tail or Selling Tail rows)
 									SinglePrintZone rowSpZone = null;
 									if (ShowSinglePrints && day.SinglePrintZones != null)
 									{
@@ -5604,7 +5874,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 										bool isBuySp = rowSpZone.IsBuying;
 										DxBrush spRowBorder = isBuySp ? singleBuyBorderBrush : singleSellBorderBrush;
 										RectangleF spRect = new RectangleF(xTpo - 1.5f, y + 0.2f, collapsedTpoWidth + 3f, Math.Max(1.4f, h - 0.4f));
-										RenderTarget.FillRectangle(spRect, isBuySp ? singleBuyRowBrush : singleSellRowBrush);
+										if (modernUi)
+											RenderTarget.FillRoundedRectangle(new RoundedRectangle { Rect = spRect, RadiusX = 2.5f, RadiusY = 2.5f }, isBuySp ? singleBuyRowBrush : singleSellRowBrush);
+										else
+											RenderTarget.FillRectangle(spRect, isBuySp ? singleBuyRowBrush : singleSellRowBrush);
 										RenderTarget.DrawLine(
 											new Vector2(xTpo - 1.5f, y),
 											new Vector2(xTpo - 1.5f, y + h),
@@ -5612,48 +5885,105 @@ namespace NinjaTrader.NinjaScript.Indicators
 											3.2f);
 									}
 
-									List<int> sortedPeriods = row.Periods.OrderBy(p => p).ToList();
+									int[] sortedPeriods = row.GetSortedPeriods();
+
+									if (modernUi && bin == poc && sortedPeriods.Length > 0)
+									{
+										int pocCellCnt = sortedPeriods.Length + (bin == closeBin ? 1 : 0);
+										var pocHighlightRr = new RoundedRectangle
+										{
+											Rect = new RectangleF(xTpo - 1.5f, y + 0.35f, Math.Max(8f, pocCellCnt * letterWidth + 3f), Math.Max(1.6f, h - 0.7f)),
+											RadiusX = 2.8f,
+											RadiusY = 2.8f
+										};
+										RenderTarget.FillRoundedRectangle(pocHighlightRr, pocRowFillBrush);
+										RenderTarget.DrawRoundedRectangle(pocHighlightRr, pocRowBorderBrush, 0.95f);
+									}
+
 									if (h >= minLetterRowH && letterWidth >= 4.8f)
 									{
-										for (int colIdx = 0; colIdx < sortedPeriods.Count; colIdx++)
+										for (int colIdx = 0; colIdx < sortedPeriods.Length; colIdx++)
 										{
 											int period = sortedPeriods[colIdx];
 											int safePeriod = Math.Max(0, Math.Min(period, LetterSequence.Length - 1));
+											int cIdxMod = safePeriod % letterBrushes.Length;
 											float lx = xTpo + colIdx * letterWidth;
 
-											if (bin == openBin && colIdx == 0)
+											if (modernUi && h >= 6.8f && letterWidth >= 5.6f)
+											{
+												float tpoHGap = letterWidth >= 8.0f ? 0.55f : 0.40f;
+												float tpoVGap = h >= 10.0f ? 0.45f : 0.30f;
+												var tileRr = new RoundedRectangle
+												{
+													Rect = new RectangleF(lx + tpoHGap, y + tpoVGap, Math.Max(2.0f, letterWidth - tpoHGap * 2f), Math.Max(2.0f, h - tpoVGap * 2f)),
+													RadiusX = 2.0f,
+													RadiusY = 2.0f
+												};
+												if (bin == openBin && colIdx == 0)
+												{
+													RenderTarget.FillRoundedRectangle(tileRr, openBadgeFillBrush);
+													RenderTarget.DrawRoundedRectangle(tileRr, openBadgeBorderBrush, 0.9f);
+													DrawTpoCellText("O", lx, y, letterWidth, h, letterFormat, whiteBrush);
+												}
+												else
+												{
+													RenderTarget.FillRoundedRectangle(tileRr, inTpoVa ? letterVaFillBrushes[cIdxMod] : letterOutFillBrushes[cIdxMod]);
+													if (inTpoVa && h >= 9.5f && letterWidth >= 7.5f)
+														RenderTarget.DrawRoundedRectangle(tileRr, letterTileBorderBrushes[cIdxMod], 0.65f);
+													string letter = LetterSequence[safePeriod].ToString();
+													DrawTpoCellText(letter, lx, y, letterWidth, h, letterFormat, letterBrushes[cIdxMod]);
+												}
+											}
+											else if (bin == openBin && colIdx == 0)
 											{
 												DrawTpoCellText("O", lx, y, letterWidth, h, letterFormat, whiteBrush);
 											}
 											else
 											{
 												string letter = LetterSequence[safePeriod].ToString();
-												DrawTpoCellText(letter, lx, y, letterWidth, h, letterFormat, letterBrushes[safePeriod % letterBrushes.Length]);
+												DrawTpoCellText(letter, lx, y, letterWidth, h, letterFormat, letterBrushes[cIdxMod]);
 											}
 										}
 
 										if (bin == closeBin)
 										{
-											float hashX = xTpo + sortedPeriods.Count * letterWidth;
-											DrawTpoCellText("#", hashX, y, letterWidth, h, letterFormat, redBrush);
+											float hashX = xTpo + sortedPeriods.Length * letterWidth;
+											if (modernUi && h >= 6.8f && letterWidth >= 5.6f)
+											{
+												float tpoHGap = letterWidth >= 8.0f ? 0.55f : 0.40f;
+												float tpoVGap = h >= 10.0f ? 0.45f : 0.30f;
+												var closeRr = new RoundedRectangle
+												{
+													Rect = new RectangleF(hashX + tpoHGap, y + tpoVGap, Math.Max(2.0f, letterWidth - tpoHGap * 2f), Math.Max(2.0f, h - tpoVGap * 2f)),
+													RadiusX = 2.0f,
+													RadiusY = 2.0f
+												};
+												RenderTarget.FillRoundedRectangle(closeRr, closeBadgeFillBrush);
+												RenderTarget.DrawRoundedRectangle(closeRr, closeBadgeBorderBrush, 0.9f);
+												DrawTpoCellText("#", hashX, y, letterWidth, h, letterFormat, whiteBrush);
+											}
+											else
+											{
+												DrawTpoCellText("#", hashX, y, letterWidth, h, letterFormat, redBrush);
+											}
 										}
 									}
 									else
 									{
 										float cellVGap = h >= 2.2f ? 0.5f : 0.0f;
 										float cellHGap = letterWidth >= 4.0f ? 0.5f : 0.15f;
-										for (int colIdx = 0; colIdx < sortedPeriods.Count; colIdx++)
+										for (int colIdx = 0; colIdx < sortedPeriods.Length; colIdx++)
 										{
 											int period = sortedPeriods[colIdx];
 											int safePeriod = Math.Max(0, Math.Min(period, LetterSequence.Length - 1));
 											float lx = xTpo + colIdx * letterWidth;
-											DxBrush cellBrush = (bin == openBin && colIdx == 0) ? whiteBrush : letterBrushes[safePeriod % letterBrushes.Length];
+											DxBrush cellBrush = (bin == openBin && colIdx == 0) ? (modernUi ? openBadgeFillBrush : whiteBrush) : letterBrushes[safePeriod % letterBrushes.Length];
 											RenderTarget.FillRectangle(new RectangleF(lx + cellHGap, y + cellVGap * 0.5f, Math.Max(1.0f, letterWidth - cellHGap * 2f), Math.Max(1.0f, h - cellVGap)), cellBrush);
 										}
 										if (bin == closeBin)
 										{
-											float hashX = xTpo + sortedPeriods.Count * letterWidth;
-											RenderTarget.FillRectangle(new RectangleF(hashX + cellHGap, y + cellVGap * 0.5f, Math.Max(1.0f, letterWidth - cellHGap * 2f), Math.Max(1.0f, h - cellVGap)), redBrush);
+											float hashX = xTpo + sortedPeriods.Length * letterWidth;
+											RenderTarget.FillRectangle(new RectangleF(hashX + cellHGap, y + cellVGap * 0.5f, Math.Max(1.0f, letterWidth - cellHGap * 2f), Math.Max(1.0f, h - cellVGap)), modernUi ? closeBadgeFillBrush : redBrush);
 										}
 									}
 
@@ -5664,9 +5994,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 										DxBrush volBrush = (bin == volumePoc)
 											? volumePocBrush
 											: (inVolVa ? volumeVaBrush : volumeOutBrush);
-										RenderTarget.FillRectangle(
-											new RectangleF(xVol + 1f, y + 0.5f, Math.Max(1.5f, barW), Math.Max(1.0f, h - 1.0f)),
-											volBrush);
+										float volVGap = modernUi ? (h >= 10f ? 1.4f : (h >= 6.5f ? 1.0f : 0.6f)) : 0.8f;
+										RectangleF volRect = new RectangleF(xVol + volSpineGapPx, y + volVGap * 0.5f, Math.Max(2.0f, barW), Math.Max(1.4f, h - volVGap));
+										if (modernUi && h >= 4.5f)
+										{
+											var volRr = new RoundedRectangle { Rect = volRect, RadiusX = 2.0f, RadiusY = 2.0f };
+											RenderTarget.FillRoundedRectangle(volRr, volBrush);
+											if (bin == volumePoc)
+												RenderTarget.DrawRoundedRectangle(volRr, yellowBrush, 0.8f);
+										}
+										else
+										{
+											RenderTarget.FillRectangle(volRect, volBrush);
+										}
 									}
 								}
 
@@ -5753,7 +6093,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 									float yIbTop = Math.Max(canvasTopY, Math.Min(yIbH, yIbL));
 									float yIbBot = Math.Min(panelBottom - 25f, Math.Max(yIbH, yIbL));
 									if (yIbBot > yIbTop)
-										RenderTarget.DrawLine(new Vector2(xIb, yIbTop), new Vector2(xIb, yIbBot), ibBarBrush, 2.4f);
+									{
+										if (modernUi)
+										{
+											RenderTarget.DrawLine(new Vector2(xIb, yIbTop), new Vector2(xIb, yIbBot), ibGlowBrush, 5.6f);
+											RenderTarget.DrawLine(new Vector2(xIb, yIbTop), new Vector2(xIb, yIbBot), ibBarBrush, 2.8f);
+											RenderTarget.DrawLine(new Vector2(xIb - 2.5f, yIbTop), new Vector2(xIb + 2.5f, yIbTop), ibBarBrush, 1.5f);
+											RenderTarget.DrawLine(new Vector2(xIb - 2.5f, yIbBot), new Vector2(xIb + 2.5f, yIbBot), ibBarBrush, 1.5f);
+										}
+										else
+										{
+											RenderTarget.DrawLine(new Vector2(xIb, yIbTop), new Vector2(xIb, yIbBot), ibBarBrush, 2.4f);
+										}
+									}
 								}
 
 								PriceRow topRow = day.Rows[maxBin];
@@ -5769,10 +6121,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 									: Math.Max(canvasTopY + 4f, (showTopPoorBox ? topTagY - 36f : profileHighY - 36f));
 								float btnRowY = headerY + 17f;
 
+								float minDayHdrSlotW = ShowSummary ? 214f : 202f;
+								float xSplitStart = FixSessionHeaderAtTop
+									? Math.Max(vaBoxRightX + 14f, xSlotLeft + minDayHdrSlotW)
+									: (vaBoxRightX + 14f);
+
 								// Split Profile (Expanded — docked in Fixed Top Session Bar when FixSessionHeaderAtTop is enabled)
 								if (day.IsSplitExpanded && day.PeriodSlices.Count > 0)
 								{
-									float xSplitStart = xCollapsedRight + 12f;
 									float xSplitEnd = Math.Min(xSlotRight - 6f, panelRight - 178f);
 									if (xSplitEnd > xSplitStart + 65f)
 									{
@@ -5788,30 +6144,62 @@ namespace NinjaTrader.NinjaScript.Indicators
 										List<PeriodSlice> orderedSlices = day.PeriodSlices.Values.OrderBy(ps => ps.PeriodIndex).ToList();
 										int sliceCount = Math.Max(1, orderedSlices.Count);
 										int volBarCount = ShowVolumeProfile ? Math.Min(3, orderedSlices.Count) : 0;
-										float singleVolW = 28f;
-										float volColGap = 6f;
+										float singleVolW = 26f;
+										float volColGap = 8f;
+										float splitTpoToVolGap = 14f;
 										float totalSplitVolW = volBarCount > 0
 											? (volBarCount * singleVolW + (volBarCount - 1) * volColGap)
 											: 0f;
+										float splitColGap = modernUi ? 3.6f : 3.0f;
 										float maxSplitColW = sampleRowH < 9.5f
-											? Math.Max(7.2f, Math.Min(10.6f, sampleRowH * 1.15f))
-											: Math.Min(12.2f, Math.Max(10.6f, sampleRowH * 0.85f));
-										float splitColW = Math.Min(maxSplitColW, Math.Max(6.6f, (splitAvailW - totalSplitVolW - 16f) / Math.Max(5, sliceCount)));
-										float xSplitVol = Math.Min(xSplitEnd - totalSplitVolW - 2f, xSplitStart + 6f + sliceCount * splitColW + 8f);
+											? Math.Max(8.4f, Math.Min(11.4f, sampleRowH * 1.18f))
+											: Math.Min(12.6f, Math.Max(11.2f, sampleRowH * 0.90f));
+										float rawAvailForSplitTpo = splitAvailW - totalSplitVolW - splitTpoToVolGap - 12f;
+										float effSplitColGap = rawAvailForSplitTpo >= sliceCount * 9.5f + Math.Max(0, sliceCount - 1) * splitColGap
+											? splitColGap
+											: 2.2f;
+										float splitColW = Math.Min(
+											maxSplitColW,
+											Math.Max(7.6f, (rawAvailForSplitTpo - Math.Max(0, sliceCount - 1) * effSplitColGap) / Math.Max(2, sliceCount)));
+										float splitTpoTotalW = sliceCount * splitColW + Math.Max(0, sliceCount - 1) * effSplitColGap;
+										float xSplitVol = Math.Min(xSplitEnd - totalSplitVolW - 2f, xSplitStart + 5f + splitTpoTotalW + splitTpoToVolGap);
+										float xSplitVaEnd = ShowVolumeProfile && volBarCount > 0
+											? Math.Min(xSplitEnd, xSplitVol + totalSplitVolW + 5f)
+											: Math.Min(xSplitEnd, xSplitStart + 5f + splitTpoTotalW + 5f);
 
-										float splitHeaderW = Math.Min(174f, Math.Max(124f, splitAvailW));
+										float splitHeaderW = Math.Min(164f, Math.Max(114f, splitAvailW));
 										RectangleF splitHdrPill = new RectangleF(xSplitStart, headerY, splitHeaderW, 16f);
-										RenderTarget.FillRectangle(splitHdrPill, btnActiveBgBrush);
-										RenderTarget.DrawRectangle(splitHdrPill, cyanBrush, 0.8f);
 										int maxSliceIdx = orderedSlices.Count > 0
 											? Math.Max(0, Math.Min(orderedSlices[orderedSlices.Count - 1].PeriodIndex, LetterSequence.Length - 1))
 											: 0;
 										char endSliceChar = LetterSequence[maxSliceIdx];
 										bool isSplitDayLive = isRunningDay;
 										string splitHdrTitle = isSplitDayLive
-											? string.Format(CultureInfo.InvariantCulture, "SPLIT PROFILE (A..{0}) LIVE", endSliceChar)
-											: string.Format(CultureInfo.InvariantCulture, "SPLIT PROFILE (A..{0})", endSliceChar);
-										DrawText(splitHdrTitle, xSplitStart + 4f, headerY, splitHeaderW - 8f, 16f, spTagFormat, isSplitDayLive ? greenBrush : cyanBrush);
+											? string.Format(CultureInfo.InvariantCulture, modernUi ? "SPLIT · A..{0} ● LIVE" : "SPLIT PROFILE (A..{0}) LIVE", endSliceChar)
+											: string.Format(CultureInfo.InvariantCulture, modernUi ? "SPLIT · A..{0}" : "SPLIT PROFILE (A..{0})", endSliceChar);
+										if (modernUi)
+										{
+											DrawModernPillButton(splitHdrPill, btnActiveBgBrush, cyanBrush, splitHdrTitle, spTagFormat, isSplitDayLive ? greenBrush : cyanBrush, 4.5f, 1.0f);
+											float spGlassTop = Math.Max(canvasTopY + 2f, profileHighY - 5f);
+											float spGlassBot = Math.Min(panelBottom - 30f, profileLowY + 5f);
+											if (spGlassBot > spGlassTop + 8f)
+											{
+												var spGlassRr = new RoundedRectangle
+												{
+													Rect = new RectangleF(xSplitStart - 3f, spGlassTop, Math.Max(14f, xSplitVaEnd - xSplitStart + 6f), spGlassBot - spGlassTop),
+													RadiusX = 6f,
+													RadiusY = 6f
+												};
+												RenderTarget.FillRoundedRectangle(spGlassRr, sessionGlassBrush);
+												RenderTarget.DrawRoundedRectangle(spGlassRr, sessionGlassBorderBrush, 0.8f);
+											}
+										}
+										else
+										{
+											RenderTarget.FillRectangle(splitHdrPill, btnActiveBgBrush);
+											RenderTarget.DrawRectangle(splitHdrPill, cyanBrush, 0.8f);
+											DrawText(splitHdrTitle, xSplitStart + 4f, headerY, splitHeaderW - 8f, 16f, spTagFormat, isSplitDayLive ? greenBrush : cyanBrush);
+										}
 										if (ShowChartButtons)
 										{
 											activeChartButtons.Add(new ChartButton
@@ -5825,13 +6213,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 										if ((showProfileVah || showProfileVal) && clampedVaBot > clampedVaTop + 1f)
 										{
 											RenderTarget.FillRectangle(
-												new RectangleF(xSplitStart, clampedVaTop, Math.Max(10f, xSplitEnd - xSplitStart), Math.Max(2f, clampedVaBot - clampedVaTop)),
+												new RectangleF(xSplitStart, clampedVaTop, Math.Max(10f, xSplitVaEnd - xSplitStart), Math.Max(2f, clampedVaBot - clampedVaTop)),
 												vaFillBrush);
 										}
-										if (showProfileVah && yVaTop >= canvasTopY && yVaTop <= panelBottom - 25f)
-											RenderTarget.DrawLine(new Vector2(xSplitStart, yVaTop), new Vector2(xSplitEnd, yVaTop), vaBorderBrush, 1.0f, dashedStroke);
-										if (showProfileVal && yVaBot >= canvasTopY && yVaBot <= panelBottom - 25f)
-											RenderTarget.DrawLine(new Vector2(xSplitStart, yVaBot), new Vector2(xSplitEnd, yVaBot), vaBorderBrush, 1.0f, dashedStroke);
+										if (showProfileVah && yVaTop >= canvasTopY && yVaTop <= panelBottom - 29f)
+											RenderTarget.DrawLine(new Vector2(xSplitStart, yVaTop), new Vector2(xSplitVaEnd, yVaTop), vaBorderBrush, 1.0f, dashedStroke);
+										if (showProfileVal && yVaBot >= canvasTopY && yVaBot <= panelBottom - 29f)
+											RenderTarget.DrawLine(new Vector2(xSplitStart, yVaBot), new Vector2(xSplitVaEnd, yVaBot), vaBorderBrush, 1.0f, dashedStroke);
 
 										// Highlight Single Print Zones & SL lines inside Split Profile as well
 										if (ShowSinglePrints && day.SinglePrintZones.Count > 0)
@@ -5879,15 +6267,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 										if (orderedSlices.Count > 0)
 										{
-											float hdrW = Math.Max(24f, Math.Min(xSplitVol - xSplitStart - 2f, orderedSlices.Count * splitColW + 6f));
+											float hdrW = Math.Max(24f, Math.Min(xSplitVol - xSplitStart - 2f, splitTpoTotalW + 8f));
 											RenderTarget.FillRectangle(new RectangleF(xSplitStart + 1f, btnRowY - 0.5f, hdrW, 15f), pillBgBrush);
 										}
 
-										int hpUniformW = Math.Max(4, (int)Math.Round(splitColW - 1.8f));
+										int hpUniformW = Math.Max(4, (int)Math.Round(splitColW - 2.2f));
 										float hpBarH = sampleRowH >= 10.5f ? 2.0f : 1.0f;
-										float splitAtFontPx = Math.Min(splitLetterFontPx * 0.88f, Math.Max(6.8f, splitColW * 0.92f));
+										float effSplitFontPx = Math.Min(splitLetterFontPx, Math.Max(minFontFloor, splitColW * 0.90f));
+										float splitAtFontPx = Math.Min(effSplitFontPx * 0.88f, Math.Max(6.8f, splitColW * 0.86f));
+										using (var splitCellFormat = new DxTextFormat(Core.Globals.DirectWriteFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, effSplitFontPx))
 										using (var splitAtFormat = new DxTextFormat(Core.Globals.DirectWriteFactory, "Segoe UI", SharpDX.DirectWrite.FontWeight.Bold, SharpDX.DirectWrite.FontStyle.Normal, splitAtFontPx))
 										{
+											splitCellFormat.TextAlignment = TextAlignment.Center;
+											splitCellFormat.ParagraphAlignment = ParagraphAlignment.Center;
+											splitCellFormat.WordWrapping = WordWrapping.NoWrap;
+
 											splitAtFormat.TextAlignment = TextAlignment.Center;
 											splitAtFormat.ParagraphAlignment = ParagraphAlignment.Center;
 											splitAtFormat.WordWrapping = WordWrapping.NoWrap;
@@ -5897,11 +6291,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 												PeriodSlice slice = orderedSlices[cIdx];
 												int pIdx = Math.Max(0, Math.Min(slice.PeriodIndex, LetterSequence.Length - 1));
 												string pLetter = LetterSequence[pIdx].ToString();
-												float cx = xSplitStart + 4f + cIdx * splitColW;
+												float cx = xSplitStart + 5f + cIdx * (splitColW + effSplitColGap);
 												if (cx + splitColW > xSplitVol - 2f)
 													break;
 
-												DrawText(pLetter, cx, btnRowY, splitColW, 14f, splitLetterFormat, letterBrushes[pIdx % letterBrushes.Length]);
+												DrawText(pLetter, cx, btnRowY, splitColW, 14f, splitCellFormat, letterBrushes[pIdx % letterBrushes.Length]);
 
 												int sMinBin = PriceToBin(slice.Low, dStep);
 												int sMaxBin = PriceToBin(slice.High, dStep);
@@ -5941,15 +6335,28 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 													if (h >= Math.Min(minLetterRowH, 5.2f))
 													{
+														if (modernUi && h >= 6.8f && splitColW >= 5.6f)
+														{
+															int cMod = pIdx % letterBrushes.Length;
+															bool inSpVa = (b >= val && b <= vah);
+															var sTileRr = new RoundedRectangle
+															{
+																Rect = new RectangleF(cx + 0.35f, y + 0.45f, Math.Max(2.0f, splitColW - 0.7f), Math.Max(2.0f, h - 0.9f)),
+																RadiusX = 2.0f,
+																RadiusY = 2.0f
+															};
+															DxBrush sFill = isOpenTpo ? openBadgeFillBrush : (isCloseTpo ? closeBadgeFillBrush : (inSpVa ? letterVaFillBrushes[cMod] : letterOutFillBrushes[cMod]));
+															RenderTarget.FillRoundedRectangle(sTileRr, sFill);
+														}
 														if (isOpenTpo && isCloseTpo)
 														{
-															RectangleF atRect = new RectangleF(cx - 1.0f, txtY, splitColW + 2.0f, Math.Max(1.0f, txtH));
+															RectangleF atRect = new RectangleF(cx - 0.5f, txtY, splitColW + 1.0f, Math.Max(1.0f, txtH));
 															RenderTarget.DrawText("@", splitAtFormat, atRect, whiteBrush, DrawTextOptions.None);
 														}
 														else
 														{
 															string cellSym = isOpenTpo ? "O" : (isCloseTpo ? "#" : pLetter);
-															DrawTpoCellText(cellSym, cx, txtY, splitColW, txtH, splitLetterFormat, lBrush);
+															DrawTpoCellText(cellSym, cx, txtY, splitColW, txtH, splitCellFormat, lBrush);
 														}
 													}
 													else
@@ -6055,17 +6462,27 @@ namespace NinjaTrader.NinjaScript.Indicators
 													DxBrush sBrush = (b == sliceVolPoc)
 														? splitVolPocBrush
 														: (inSliceVa ? splitVolVaBrush : splitVolOutBrush);
-													RenderTarget.FillRectangle(
-														new RectangleF(vx + 1f, y + 0.5f, Math.Max(2.0f, barW), Math.Max(1.0f, h - 1.0f)),
-														sBrush);
+													float sVolVGap = modernUi ? (h >= 10f ? 2.4f : (h >= 6.5f ? 1.6f : 1.0f)) : 1.0f;
+													RectangleF sVolRect = new RectangleF(vx + (modernUi ? 2.8f : 1.0f), y + sVolVGap * 0.5f, Math.Max(2.0f, barW), Math.Max(1.2f, h - sVolVGap));
+													if (modernUi && h >= 4.5f)
+														RenderTarget.FillRoundedRectangle(new RoundedRectangle { Rect = sVolRect, RadiusX = 1.8f, RadiusY = 1.8f }, sBrush);
+													else
+														RenderTarget.FillRectangle(sVolRect, sBrush);
 												}
 
 												// Show which TPO Volume Bar this is in a fixed boxed badge at the top row (btnRowY)
 												float badgeW = Math.Min(singleVolW, 20f);
 												RectangleF vBadgeRect = new RectangleF(vx, btnRowY, badgeW, 14f);
-												RenderTarget.FillRectangle(vBadgeRect, pillBgBrush);
-												RenderTarget.DrawRectangle(vBadgeRect, vpColorBrush, 0.9f);
-												DrawText(vpLetter, vx, btnRowY, badgeW, 14f, tagCenterFormat, vpColorBrush);
+												if (modernUi)
+												{
+													DrawModernPillButton(vBadgeRect, pillBgBrush, vpColorBrush, vpLetter, tagCenterFormat, vpColorBrush, 3.5f, 0.95f);
+												}
+												else
+												{
+													RenderTarget.FillRectangle(vBadgeRect, pillBgBrush);
+													RenderTarget.DrawRectangle(vBadgeRect, vpColorBrush, 0.9f);
+													DrawText(vpLetter, vx, btnRowY, badgeW, 14f, tagCenterFormat, vpColorBrush);
+												}
 											}
 										}
 									}
@@ -6074,12 +6491,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 								// Top Extreme Pill (PoorHigh / ABPoorHigh only — SwingHigh box removed)
 								if (showTopPoorBox && topTagY >= canvasTopY + 1f && topTagY <= panelBottom - 42f)
 								{
-									float tagW = 84f;
+									float tagW = 86f;
 									float tagX = (xIb + xCollapsedRight) * 0.5f - tagW * 0.5f;
 									RectangleF tagPill = new RectangleF(tagX, topTagY, tagW, 15f);
-									RenderTarget.FillRectangle(tagPill, pillBgBrush);
-									RenderTarget.DrawRectangle(tagPill, highExtremeBorderBrush, 1.0f);
-									DrawText(highLevelName, tagX, topTagY, tagW, 15f, tagCenterFormat, highLevelBrush);
+									if (modernUi)
+										DrawModernPillButton(tagPill, pillBgBrush, highExtremeBorderBrush, highLevelName, tagCenterFormat, highLevelBrush, 4.0f, 1.0f);
+									else
+									{
+										RenderTarget.FillRectangle(tagPill, pillBgBrush);
+										RenderTarget.DrawRectangle(tagPill, highExtremeBorderBrush, 1.0f);
+										DrawText(highLevelName, tagX, topTagY, tagW, 15f, tagCenterFormat, highLevelBrush);
+									}
 								}
 
 								// Day Header Pill
@@ -6087,29 +6509,51 @@ namespace NinjaTrader.NinjaScript.Indicators
 								int printedTpos = Math.Min(expectedTpos, Math.Max(day.PeriodSlices.Count, day.LastPeriod + 1));
 								bool isDayLive = isRunningDay;
 								string tpoStatus = isDayLive
-									? string.Format(CultureInfo.InvariantCulture, "LIVE: {0}/{1} TPO", printedTpos, expectedTpos)
+									? string.Format(CultureInfo.InvariantCulture, modernUi ? "● LIVE {0}/{1} TPO" : "LIVE: {0}/{1} TPO", printedTpos, expectedTpos)
 									: string.Format(CultureInfo.InvariantCulture, "{0}/{1} TPO", printedTpos, expectedTpos);
 								string dayHeader = EffectiveProfileMode == MarketProfilePeriodMode.Daily
-									? string.Format(CultureInfo.InvariantCulture, "{0} ({1}) - {2}",
+									? string.Format(CultureInfo.InvariantCulture, modernUi ? "{0} · {1}  {2}" : "{0} ({1}) - {2}",
 										day.SessionDate.ToString("dd MMM yyyy", CultureInfo.InvariantCulture),
 										day.SessionDate.ToString("ddd", CultureInfo.InvariantCulture),
 										tpoStatus)
-									: string.Format(CultureInfo.InvariantCulture, "{0} - {1}", day.SessionName, tpoStatus);
+									: string.Format(CultureInfo.InvariantCulture, modernUi ? "{0} · {1}" : "{0} - {1}", day.SessionName, tpoStatus);
 
-								float headerW = Math.Min(xCollapsedRight - xIb + 2f, 260f);
+								float availDayHdrW = (day.IsSplitExpanded ? (xSplitStart - 8f) : (xSlotRight - 5f)) - (xIb - 1f);
+								float headerW = Math.Max(148f, Math.Min(availDayHdrW, 250f));
 								RectangleF headerPill = new RectangleF(xIb - 1f, headerY, headerW, 16f);
-								RenderTarget.FillRectangle(headerPill, pillBgBrush);
-								RenderTarget.DrawRectangle(headerPill, cardBorderBrush, 0.8f);
-								DrawText(dayHeader, xIb + 3f, headerY, headerW - 6f, 16f, headerFormat, cyanBrush);
+								if (modernUi)
+								{
+									var hdrRr = new RoundedRectangle { Rect = headerPill, RadiusX = 4.5f, RadiusY = 4.5f };
+									RenderTarget.FillRoundedRectangle(hdrRr, pillBgBrush);
+									RenderTarget.DrawRoundedRectangle(hdrRr, cardBorderBrush, 0.9f);
+									RenderTarget.FillRectangle(new RectangleF(headerPill.X + 1.5f, headerPill.Y + 2.5f, 3.0f, headerPill.Height - 5.0f), cyanBrush);
+									DrawText(dayHeader, xIb + 6f, headerY, headerW - 9f, 16f, headerFormat, cyanBrush);
+								}
+								else
+								{
+									RenderTarget.FillRectangle(headerPill, pillBgBrush);
+									RenderTarget.DrawRectangle(headerPill, cardBorderBrush, 0.8f);
+									DrawText(dayHeader, xIb + 3f, headerY, headerW - 6f, 16f, headerFormat, cyanBrush);
+								}
 
-								// Action Button: [Split] / [Split ON]
+								// Action Button: Split / Split ON
 								if (ShowChartButtons)
 								{
 									float splitBtnW = 62f;
 									RectangleF splitBtnRect = new RectangleF(xIb - 1f, btnRowY, splitBtnW, 14f);
-									RenderTarget.FillRectangle(splitBtnRect, day.IsSplitExpanded ? btnActiveBgBrush : btnBgBrush);
-									RenderTarget.DrawRectangle(splitBtnRect, day.IsSplitExpanded ? cyanBrush : cardBorderBrush, 0.8f);
-									DrawText(day.IsSplitExpanded ? "[Split ON]" : "[Split]", splitBtnRect.X, splitBtnRect.Y, splitBtnRect.Width, splitBtnRect.Height, tagCenterFormat, day.IsSplitExpanded ? cyanBrush : textBrush);
+									string splitLbl = modernUi
+										? (day.IsSplitExpanded ? "Split ●" : "Split")
+										: (day.IsSplitExpanded ? "[Split ON]" : "[Split]");
+									if (modernUi)
+									{
+										DrawModernPillButton(splitBtnRect, day.IsSplitExpanded ? btnActiveBgBrush : btnBgBrush, day.IsSplitExpanded ? cyanBrush : cardBorderBrush, splitLbl, tagCenterFormat, day.IsSplitExpanded ? cyanBrush : textBrush, 4.0f, 0.95f);
+									}
+									else
+									{
+										RenderTarget.FillRectangle(splitBtnRect, day.IsSplitExpanded ? btnActiveBgBrush : btnBgBrush);
+										RenderTarget.DrawRectangle(splitBtnRect, day.IsSplitExpanded ? cyanBrush : cardBorderBrush, 0.8f);
+										DrawText(splitLbl, splitBtnRect.X, splitBtnRect.Y, splitBtnRect.Width, splitBtnRect.Height, tagCenterFormat, day.IsSplitExpanded ? cyanBrush : textBrush);
+									}
 									activeChartButtons.Add(new ChartButton
 									{
 										Rect = splitBtnRect,
@@ -6129,12 +6573,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 								float botTagY = profileLowY + 3f;
 								if (showBotPoorBox && botTagY >= canvasTopY + 2f && botTagY <= panelBottom - 40f)
 								{
-									float tagW = 84f;
+									float tagW = 86f;
 									float tagX = (xIb + xCollapsedRight) * 0.5f - tagW * 0.5f;
 									RectangleF tagPill = new RectangleF(tagX, botTagY, tagW, 15f);
-									RenderTarget.FillRectangle(tagPill, pillBgBrush);
-									RenderTarget.DrawRectangle(tagPill, lowExtremeBorderBrush, 1.0f);
-									DrawText(lowLevelName, tagX, botTagY, tagW, 15f, tagCenterFormat, lowLevelBrush);
+									if (modernUi)
+										DrawModernPillButton(tagPill, pillBgBrush, lowExtremeBorderBrush, lowLevelName, tagCenterFormat, lowLevelBrush, 4.0f, 1.0f);
+									else
+									{
+										RenderTarget.FillRectangle(tagPill, pillBgBrush);
+										RenderTarget.DrawRectangle(tagPill, lowExtremeBorderBrush, 1.0f);
+										DrawText(lowLevelName, tagX, botTagY, tagW, 15f, tagCenterFormat, lowLevelBrush);
+									}
 								}
 
 								// 9-Line Summary Card
@@ -6163,8 +6612,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 							RenderTarget.PopAxisAlignedClip();
 						}
 
-						// Right-Edge Virgin Level Tags (Deduplicated & Non-overlapping)
-						RenderDeoverlappedRightEdgeTags(rightEdgeTags, step, panelRight, Math.Max(panelTop + 40f, canvasTopY), panelBottom - 28f, pillBgBrush, cardBorderBrush, labelRightFormat);
+						// Live TPO Counter with Running TPO Letter in Top-Right Dock (replacing Key Profile Levels for maximum visibility)
+						DrawTopRightTpoCountdownBox(allDays, panelRight, FixSessionHeaderAtTop ? topSessionBarY : (canvasTopY - 27f), FixSessionHeaderAtTop ? 35f : 26f, 184f, modernUi);
+						RenderDeoverlappedRightEdgeTags(rightEdgeTags, step, panelRight, Math.Max(panelTop + 40f, canvasTopY + 1f), panelBottom - 8f, pillBgBrush, cardBorderBrush, labelRightFormat);
 
 						// Top-Left Info Box
 						if (ShowTopLeftBox)
@@ -6177,6 +6627,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 								whiteBrush, textBrush, orangeBrush, yellowBrush, greenBrush, redBrush, cyanBrush,
 								cardFormat, tagCenterFormat);
 						}
+						else
+						{
+							lastTopLeftHudRightX = 0f;
+						}
+
+						// Interactive Top Studio Icon right next to Top-Left Info Box to toggle World-Class Modern Classic Rich UI
+						DrawModernUiToggleIcon(panelLeft, panelTop, panelRight);
 
 						// Top-Right PROFILE Dropdown (Daily, Weekly, Monthly - Default: Daily)
 						DrawTopRightProfileDropdown(
@@ -6188,9 +6645,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 				finally
 				{
+					RenderTarget.AntialiasMode = prevRenderAa;
+					RenderTarget.TextAntialiasMode = prevTextAa;
 					for (int i = 0; i < letterBrushes.Length; i++)
-						if (letterBrushes[i] != null)
-							letterBrushes[i].Dispose();
+					{
+						if (letterBrushes[i] != null) letterBrushes[i].Dispose();
+						if (letterVaFillBrushes[i] != null) letterVaFillBrushes[i].Dispose();
+						if (letterOutFillBrushes[i] != null) letterOutFillBrushes[i].Dispose();
+						if (letterTileBorderBrushes[i] != null) letterTileBorderBrushes[i].Dispose();
+					}
 				}
 			}
 		}
@@ -6255,6 +6718,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 			}
 
+			bool modernUi = IsModernRichUi;
 			float boxWidth = 182f;
 			float boxLeft = panelRight - boxWidth - 4f;
 			for (int i = 0; i < tags.Count; i++)
@@ -6263,10 +6727,50 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (t.DrawY < minY - 2f || t.DrawY + t.Height > maxY + 2f)
 					continue;
 
+				string dispTagText = t.Text ?? string.Empty;
+				if (dispTagText.Length > 28)
+				{
+					dispTagText = dispTagText
+						.Replace("ValueAreaHigh", "VAH")
+						.Replace("ValueAreaLow", "VAL");
+				}
+
 				RectangleF bgRect = new RectangleF(boxLeft, t.DrawY, boxWidth, t.Height);
-				RenderTarget.FillRectangle(bgRect, t.FillBrush ?? bgBrush);
-				RenderTarget.DrawRectangle(bgRect, t.BorderBrush ?? borderBrush, t.BorderBrush != null ? 1.0f : 0.7f);
-				DrawText(t.Text, boxLeft + 2f, t.DrawY, boxWidth - 5f, t.Height, rightFormat, t.Brush);
+				if (modernUi)
+				{
+					float idealMidY = Math.Max(minY, Math.Min(maxY, t.IdealY + t.Height * 0.5f));
+					float drawMidY = t.DrawY + t.Height * 0.5f;
+					RenderTarget.DrawLine(new Vector2(boxLeft - 6f, idealMidY), new Vector2(boxLeft, drawMidY), t.BorderBrush ?? t.Brush, 0.95f);
+					var tagRr = new RoundedRectangle { Rect = bgRect, RadiusX = 4.0f, RadiusY = 4.0f };
+					RenderTarget.FillRoundedRectangle(tagRr, t.FillBrush ?? bgBrush);
+					RenderTarget.DrawRoundedRectangle(tagRr, t.BorderBrush ?? borderBrush, t.BorderBrush != null ? 1.0f : 0.8f);
+					RenderTarget.FillRectangle(new RectangleF(boxLeft + 1.6f, t.DrawY + 2.4f, 2.8f, Math.Max(2f, t.Height - 4.8f)), t.Brush);
+					RectangleF tagTxtClip = new RectangleF(boxLeft + 5f, t.DrawY, boxWidth - 8f, t.Height);
+					RenderTarget.PushAxisAlignedClip(tagTxtClip, AntialiasMode.PerPrimitive);
+					try
+					{
+						DrawText(dispTagText, boxLeft + 5f, t.DrawY, boxWidth - 8f, t.Height, rightFormat, t.Brush);
+					}
+					finally
+					{
+						RenderTarget.PopAxisAlignedClip();
+					}
+				}
+				else
+				{
+					RenderTarget.FillRectangle(bgRect, t.FillBrush ?? bgBrush);
+					RenderTarget.DrawRectangle(bgRect, t.BorderBrush ?? borderBrush, t.BorderBrush != null ? 1.0f : 0.7f);
+					RectangleF tagTxtClip = new RectangleF(boxLeft + 3f, t.DrawY, boxWidth - 6f, t.Height);
+					RenderTarget.PushAxisAlignedClip(tagTxtClip, AntialiasMode.PerPrimitive);
+					try
+					{
+						DrawText(dispTagText, boxLeft + 3f, t.DrawY, boxWidth - 6f, t.Height, rightFormat, t.Brush);
+					}
+					finally
+					{
+						RenderTarget.PopAxisAlignedClip();
+					}
+				}
 			}
 		}
 
@@ -6287,16 +6791,50 @@ namespace NinjaTrader.NinjaScript.Indicators
 			float topBoxGuardY = (ShowTopLeftBox && !IsTopLeftBoxMinimized && ShowDtrVsAtr) ? 102f : 86f;
 			boxTop = Math.Max((float)ChartPanel.Y + topBoxGuardY, boxTop);
 
+			bool modernUi = IsModernRichUi;
 			RectangleF cardRect = new RectangleF(xLeft, boxTop, cardWidth, boxHeight);
-			RenderTarget.FillRectangle(cardRect, bgBrush);
-			RenderTarget.DrawRectangle(cardRect, borderBrush, 1.0f);
+			if (modernUi)
+			{
+				var cardRr = new RoundedRectangle { Rect = cardRect, RadiusX = 6.5f, RadiusY = 6.5f };
+				RenderTarget.FillRoundedRectangle(cardRr, bgBrush);
+				using (var hdrTint = new DxBrush(RenderTarget, new SharpDX.Color(30, 41, 59, 138)))
+				using (var rowStripe = new DxBrush(RenderTarget, new SharpDX.Color(30, 41, 59, 62)))
+				{
+					RenderTarget.FillRoundedRectangle(new RoundedRectangle
+					{
+						Rect = new RectangleF(xLeft + 1.5f, boxTop + 1.5f, cardWidth - 3f, lineHeight + 4f),
+						RadiusX = 5.0f,
+						RadiusY = 5.0f
+					}, hdrTint);
+					if (!isMin)
+					{
+						for (int rs = 1; rs < 9; rs += 2)
+						{
+							RenderTarget.FillRectangle(new RectangleF(xLeft + 2f, boxTop + 4f + rs * lineHeight, cardWidth - 4f, lineHeight), rowStripe);
+						}
+					}
+				}
+				RenderTarget.DrawRoundedRectangle(cardRr, borderBrush, 1.0f);
+			}
+			else
+			{
+				RenderTarget.FillRectangle(cardRect, bgBrush);
+				RenderTarget.DrawRectangle(cardRect, borderBrush, 1.0f);
+			}
 
 			float minMaxBtnW = 24f;
 			float minMaxBtnH = 13f;
 			RectangleF minMaxBtnRect = new RectangleF(xLeft + cardWidth - minMaxBtnW - 3f, boxTop + 3f, minMaxBtnW, minMaxBtnH);
-			RenderTarget.FillRectangle(minMaxBtnRect, btnBgBrush);
-			RenderTarget.DrawRectangle(minMaxBtnRect, cyanBrush, 0.8f);
-			DrawText(isMin ? "[+]" : "[-]", minMaxBtnRect.X, minMaxBtnRect.Y, minMaxBtnRect.Width, minMaxBtnRect.Height, btnFormat, cyanBrush);
+			if (modernUi)
+			{
+				DrawModernPillButton(minMaxBtnRect, btnBgBrush, cyanBrush, isMin ? "+" : "—", btnFormat, cyanBrush, 3.8f, 0.9f);
+			}
+			else
+			{
+				RenderTarget.FillRectangle(minMaxBtnRect, btnBgBrush);
+				RenderTarget.DrawRectangle(minMaxBtnRect, cyanBrush, 0.8f);
+				DrawText(isMin ? "[+]" : "[-]", minMaxBtnRect.X, minMaxBtnRect.Y, minMaxBtnRect.Width, minMaxBtnRect.Height, btnFormat, cyanBrush);
+			}
 			activeChartButtons.Add(new ChartButton
 			{
 				Rect = minMaxBtnRect,
@@ -6380,8 +6918,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			SharpDX.Direct2D1.Bitmap logoBmp = ShowLogoInTopBox ? GetOrCreateLogoBitmap(RenderTarget) : null;
 			bool hasLogo = logoBmp != null;
-			float logoSize = isMin ? 22f : 56f;
-			float logoPadLeft = hasLogo ? (logoSize + 12f) : 0f;
+			float logoSize = isMin ? 22f : 52f;
+			float logoPadLeft = hasLogo ? (logoSize + 14f) : 0f;
 
 			string instName = Instrument == null ? "NSE / Indian Market" : Instrument.FullName;
 			string tpoMode = TpoSize <= 0 ? " (Auto & Real-time)" : " (Manual)";
@@ -6463,24 +7001,44 @@ namespace NinjaTrader.NinjaScript.Indicators
 					6f + logoPadLeft + dtrRowTotalW + 14f);
 			float boxW = Math.Min(maxBoxW, Math.Max(isMin ? 560f : 580f, desiredW));
 			float boxH = isMin ? (lineH + 12f) : (showDtrRow ? (lineH * 4 + dtrBadgeH + 13f) : (lineH * 4 + 12f));
+			lastTopLeftHudRightX = boxX + boxW;
+			bool modernUi = IsModernRichUi;
 
 			RectangleF rect = new RectangleF(boxX, boxY, boxW, boxH);
-			RenderTarget.FillRectangle(rect, bgBrush);
-			RenderTarget.DrawRectangle(rect, borderBrush, 1.0f);
+			if (modernUi)
+			{
+				var hudRr = new RoundedRectangle { Rect = rect, RadiusX = 8.0f, RadiusY = 8.0f };
+				RenderTarget.FillRoundedRectangle(hudRr, bgBrush);
+				RenderTarget.DrawRoundedRectangle(hudRr, borderBrush, 1.1f);
+				RenderTarget.DrawLine(new Vector2(boxX + 10f, boxY + 0.8f), new Vector2(boxX + boxW - 10f, boxY + 0.8f), cyanBrush, 1.35f);
+			}
+			else
+			{
+				RenderTarget.FillRectangle(rect, bgBrush);
+				RenderTarget.DrawRectangle(rect, borderBrush, 1.0f);
+			}
 
 			if (hasLogo)
 			{
-				float logoX = boxX + 6f;
+				float logoX = boxX + 7f;
 				float logoY = boxY + (boxH - logoSize) * 0.5f;
 				RectangleF logoRect = new RectangleF(logoX, logoY, logoSize, logoSize);
 				RenderTarget.DrawBitmap(logoBmp, logoRect, 1.0f, BitmapInterpolationMode.Linear);
+				if (modernUi)
+				{
+					var logoRing = new Ellipse(new Vector2(logoX + logoSize * 0.5f, logoY + logoSize * 0.5f), logoSize * 0.49f, logoSize * 0.49f);
+					RenderTarget.DrawEllipse(logoRing, cyanBrush, 1.25f);
+				}
 
-				float divX = boxX + logoSize + 10f;
-				RenderTarget.DrawLine(new Vector2(divX, boxY + 4f), new Vector2(divX, boxY + boxH - 4f), borderBrush, 0.8f);
+				float divX = boxX + logoSize + 13f;
+				RenderTarget.DrawLine(new Vector2(divX, boxY + 5f), new Vector2(divX, boxY + boxH - 5f), borderBrush, 0.85f);
 			}
 
 			RectangleF minMaxBtnRect = new RectangleF((float)Math.Floor(boxX + boxW - btnW - 6f), (float)Math.Floor(boxY + 4f), btnW, btnH);
-			DrawCrispButton(minMaxBtnRect, btnBgBrush, cyanBrush, isMin ? "[+]" : "[-]", btnFormat, cyanBrush);
+			if (modernUi)
+				DrawModernPillButton(minMaxBtnRect, btnBgBrush, cyanBrush, isMin ? "+" : "—", btnFormat, cyanBrush, 4.2f, 1.0f);
+			else
+				DrawCrispButton(minMaxBtnRect, btnBgBrush, cyanBrush, isMin ? "[+]" : "[-]", btnFormat, cyanBrush);
 			activeChartButtons.Add(new ChartButton
 			{
 				Rect = minMaxBtnRect,
@@ -6492,7 +7050,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 			float navRightEdge = isMin ? (minMaxBtnRect.X - 6f) : (boxX + boxW - 6f);
 
 			RectangleF liveBtnRect = new RectangleF((float)Math.Floor(navRightEdge - navBtnW), navRowY, navBtnW, btnH);
-			DrawCrispButton(liveBtnRect, btnBgBrush, greenBrush, "Live >>", btnFormat, greenBrush);
+			if (modernUi)
+				DrawModernPillButton(liveBtnRect, btnBgBrush, greenBrush, "Live ●", btnFormat, greenBrush, 4.2f, 1.0f);
+			else
+				DrawCrispButton(liveBtnRect, btnBgBrush, greenBrush, "Live >>", btnFormat, greenBrush);
 			activeChartButtons.Add(new ChartButton
 			{
 				Rect = liveBtnRect,
@@ -6501,7 +7062,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 			});
 
 			RectangleF nextBtnRect = new RectangleF((float)Math.Floor(liveBtnRect.X - navBtnW - 4f), navRowY, navBtnW, btnH);
-			DrawCrispButton(nextBtnRect, btnBgBrush, cyanBrush, "Next >", btnFormat, cyanBrush);
+			if (modernUi)
+				DrawModernPillButton(nextBtnRect, btnBgBrush, cyanBrush, "Next ›", btnFormat, cyanBrush, 4.2f, 1.0f);
+			else
+				DrawCrispButton(nextBtnRect, btnBgBrush, cyanBrush, "Next >", btnFormat, cyanBrush);
 			activeChartButtons.Add(new ChartButton
 			{
 				Rect = nextBtnRect,
@@ -6510,7 +7074,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 			});
 
 			RectangleF pastBtnRect = new RectangleF((float)Math.Floor(nextBtnRect.X - navBtnW - 4f), navRowY, navBtnW, btnH);
-			DrawCrispButton(pastBtnRect, btnBgBrush, orangeBrush, "< Past", btnFormat, orangeBrush);
+			if (modernUi)
+				DrawModernPillButton(pastBtnRect, btnBgBrush, orangeBrush, "‹ Past", btnFormat, orangeBrush, 4.2f, 1.0f);
+			else
+				DrawCrispButton(pastBtnRect, btnBgBrush, orangeBrush, "< Past", btnFormat, orangeBrush);
 			activeChartButtons.Add(new ChartButton
 			{
 				Rect = pastBtnRect,
@@ -6519,7 +7086,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 			});
 
 			RectangleF zoomOutBtnRect = new RectangleF((float)Math.Floor(pastBtnRect.X - zoomBtnW - 4f), navRowY, zoomBtnW, btnH);
-			DrawCrispButton(zoomOutBtnRect, btnBgBrush, cyanBrush, "Z-", btnFormat, cyanBrush);
+			if (modernUi)
+				DrawModernPillButton(zoomOutBtnRect, btnBgBrush, cyanBrush, "Z-", btnFormat, cyanBrush, 4.2f, 1.0f);
+			else
+				DrawCrispButton(zoomOutBtnRect, btnBgBrush, cyanBrush, "Z-", btnFormat, cyanBrush);
 			activeChartButtons.Add(new ChartButton
 			{
 				Rect = zoomOutBtnRect,
@@ -6528,7 +7098,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 			});
 
 			RectangleF zoomInBtnRect = new RectangleF((float)Math.Floor(zoomOutBtnRect.X - zoomBtnW - 4f), navRowY, zoomBtnW, btnH);
-			DrawCrispButton(zoomInBtnRect, btnBgBrush, cyanBrush, "Z+", btnFormat, cyanBrush);
+			if (modernUi)
+				DrawModernPillButton(zoomInBtnRect, btnBgBrush, cyanBrush, "Z+", btnFormat, cyanBrush, 4.2f, 1.0f);
+			else
+				DrawCrispButton(zoomInBtnRect, btnBgBrush, cyanBrush, "Z+", btnFormat, cyanBrush);
 			activeChartButtons.Add(new ChartButton
 			{
 				Rect = zoomInBtnRect,
@@ -6635,14 +7208,26 @@ namespace NinjaTrader.NinjaScript.Indicators
 			float dropX = rightEdge - dropW;
 			float labelX = dropX - labelW - 4f;
 
+			bool modernUi = IsModernRichUi;
 			RectangleF barRect = new RectangleF(labelX - 6f, topY - 2f, labelW + dropW + 14f, dropH + 4f);
-			RenderTarget.FillRectangle(barRect, bgBrush);
-			RenderTarget.DrawRectangle(barRect, borderBrush, 1.0f);
-
-			DrawText("PROFILE", labelX, topY, labelW, dropH, labelFormat, orangeBrush);
-
 			RectangleF dropBtnRect = new RectangleF(dropX, topY, dropW, dropH);
-			DrawCrispButton(dropBtnRect, isProfileDropdownOpen ? btnActiveBgBrush : btnBgBrush, cyanBrush, selectedText + "  ▼", btnFormat, whiteBrush);
+			if (modernUi)
+			{
+				var barRr = new RoundedRectangle { Rect = barRect, RadiusX = 6.5f, RadiusY = 6.5f };
+				RenderTarget.FillRoundedRectangle(barRr, bgBrush);
+				RenderTarget.DrawRoundedRectangle(barRr, borderBrush, 1.0f);
+				DrawText("PROFILE", labelX, topY, labelW, dropH, labelFormat, cyanBrush);
+				DrawModernPillButton(dropBtnRect, isProfileDropdownOpen ? btnActiveBgBrush : btnBgBrush, cyanBrush, selectedText + (isProfileDropdownOpen ? "  ▴" : "  ▾"), btnFormat, whiteBrush, 5.0f, 1.15f);
+			}
+			else
+			{
+				RenderTarget.FillRectangle(barRect, bgBrush);
+				RenderTarget.DrawRectangle(barRect, borderBrush, 1.0f);
+
+				DrawText("PROFILE", labelX, topY, labelW, dropH, labelFormat, orangeBrush);
+
+				DrawCrispButton(dropBtnRect, isProfileDropdownOpen ? btnActiveBgBrush : btnBgBrush, cyanBrush, selectedText + "  ▼", btnFormat, whiteBrush);
+			}
 
 			// Register the entire PROFILE [ Daily ▼ ] barRect so clicking anywhere on PROFILE or the dropdown box toggles the menu
 			activeChartButtons.Add(new ChartButton
@@ -6671,20 +7256,44 @@ namespace NinjaTrader.NinjaScript.Indicators
 				float itemH = 22f;
 				float menuTopY = dropBtnRect.Bottom + 3f;
 				RectangleF menuBgRect = new RectangleF(dropX, menuTopY, dropW, itemH * optionLabels.Length + 4f);
-				RenderTarget.FillRectangle(menuBgRect, bgBrush);
-				RenderTarget.DrawRectangle(menuBgRect, cyanBrush, 1.1f);
+				if (modernUi)
+				{
+					var menuRr = new RoundedRectangle { Rect = menuBgRect, RadiusX = 6.0f, RadiusY = 6.0f };
+					RenderTarget.FillRoundedRectangle(menuRr, bgBrush);
+					RenderTarget.DrawRoundedRectangle(menuRr, cyanBrush, 1.15f);
+				}
+				else
+				{
+					RenderTarget.FillRectangle(menuBgRect, bgBrush);
+					RenderTarget.DrawRectangle(menuBgRect, cyanBrush, 1.1f);
+				}
 
 				for (int m = 0; m < optionLabels.Length; m++)
 				{
 					bool isSelected = (currentMode == optionModes[m]);
 					RectangleF itemRect = new RectangleF(dropX + 2f, menuTopY + 2f + m * itemH, dropW - 4f, itemH - 2f);
-					DrawCrispButton(
-						itemRect,
-						isSelected ? btnActiveBgBrush : btnBgBrush,
-						isSelected ? cyanBrush : borderBrush,
-						isSelected ? ("● " + optionLabels[m]) : optionLabels[m],
-						btnFormat,
-						isSelected ? cyanBrush : textBrush);
+					if (modernUi)
+					{
+						DrawModernPillButton(
+							itemRect,
+							isSelected ? btnActiveBgBrush : btnBgBrush,
+							isSelected ? cyanBrush : borderBrush,
+							isSelected ? ("● " + optionLabels[m]) : optionLabels[m],
+							btnFormat,
+							isSelected ? cyanBrush : textBrush,
+							4.5f,
+							1.0f);
+					}
+					else
+					{
+						DrawCrispButton(
+							itemRect,
+							isSelected ? btnActiveBgBrush : btnBgBrush,
+							isSelected ? cyanBrush : borderBrush,
+							isSelected ? ("● " + optionLabels[m]) : optionLabels[m],
+							btnFormat,
+							isSelected ? cyanBrush : textBrush);
+					}
 
 					activeChartButtons.Add(new ChartButton
 					{
@@ -6694,6 +7303,323 @@ namespace NinjaTrader.NinjaScript.Indicators
 					});
 				}
 			}
+		}
+
+		private void DrawModernStudioBackdrop(
+			float panelLeft, float panelTop, float panelRight, float panelBottom,
+			float canvasTopY, float rightDockW,
+			DxBrush gridBrush, DxTextFormat microFormat, DxBrush accentBrush)
+		{
+			if (RenderTarget == null)
+				return;
+
+			float w = Math.Max(40f, panelRight - panelLeft);
+			float h = Math.Max(40f, panelBottom - panelTop);
+			var stops = new SharpDX.Direct2D1.GradientStop[]
+			{
+				new SharpDX.Direct2D1.GradientStop { Position = 0.0f, Color = new SharpDX.Color(6, 10, 19, 255) },
+				new SharpDX.Direct2D1.GradientStop { Position = 0.52f, Color = new SharpDX.Color(11, 18, 33, 255) },
+				new SharpDX.Direct2D1.GradientStop { Position = 1.0f, Color = new SharpDX.Color(7, 12, 22, 255) }
+			};
+			using (var stopCol = new SharpDX.Direct2D1.GradientStopCollection(RenderTarget, stops))
+			using (var bgGrad = new SharpDX.Direct2D1.LinearGradientBrush(
+				RenderTarget,
+				new SharpDX.Direct2D1.LinearGradientBrushProperties
+				{
+					StartPoint = new Vector2(panelLeft, panelTop),
+					EndPoint = new Vector2(panelLeft, panelBottom)
+				},
+				stopCol))
+			using (var dockBrush = new DxBrush(RenderTarget, new SharpDX.Color(7, 12, 22, 236)))
+			using (var dockLineBrush = new DxBrush(RenderTarget, new SharpDX.Color(56, 189, 248, 52)))
+			{
+				RenderTarget.FillRectangle(new RectangleF(panelLeft, panelTop, w, h), bgGrad);
+
+				float rightLaneX = Math.Max(panelLeft + 60f, panelRight - rightDockW - 4f);
+				for (float gy = canvasTopY + 28f; gy < panelBottom - 30f; gy += 54f)
+				{
+					RenderTarget.DrawLine(new Vector2(panelLeft + 2f, gy), new Vector2(rightLaneX, gy), gridBrush, 1.0f);
+				}
+
+				RenderTarget.FillRectangle(new RectangleF(rightLaneX, canvasTopY - 2f, panelRight - rightLaneX, Math.Max(10f, panelBottom - canvasTopY + 2f)), dockBrush);
+				RenderTarget.DrawLine(new Vector2(rightLaneX, canvasTopY - 2f), new Vector2(rightLaneX, panelBottom), dockLineBrush, 1.0f);
+			}
+		}
+
+		private void DrawTopRightTpoCountdownBox(
+			List<DayProfile> allDays,
+			float panelRight,
+			float boxY,
+			float boxH,
+			float rightDockW,
+			bool modernUi)
+		{
+			if (RenderTarget == null || rightDockW < 60f || boxH < 14f)
+				return;
+
+			float boxW = rightDockW - 4f;
+			float boxX = panelRight - boxW - 3f;
+			RectangleF boxRect = new RectangleF(boxX, boxY, boxW, boxH);
+
+			DateTime nowClock;
+			bool streamConnected = (State == State.Realtime);
+			try
+			{
+				if (Connection.PlaybackConnection != null && Connection.PlaybackConnection.Status == ConnectionStatus.Connected)
+				{
+					nowClock = Connection.PlaybackConnection.Now;
+					streamConnected = true;
+				}
+				else
+				{
+					nowClock = DateTime.Now;
+				}
+			}
+			catch
+			{
+				nowClock = DateTime.Now;
+			}
+
+			DayProfile latestDay = (allDays != null && allDays.Count > 0) ? allDays[allDays.Count - 1] : null;
+			int dispLetterIdx = latestDay != null ? Math.Max(0, Math.Min(LetterSequence.Length - 1, latestDay.LastPeriod)) : 0;
+			string timerStr = "CLOSED";
+			bool isLiveTpo = false;
+			bool isUrgent = false;
+
+			double bracketMin = Math.Max(1.0, (double)TpoIntervalMinutes);
+			double bracketSec = Math.Max(60.0, bracketMin * 60.0);
+
+			if (EffectiveProfileMode == MarketProfilePeriodMode.Daily)
+			{
+				DateTime effOpen = DateTime.MinValue;
+				DateTime dayClose = DateTime.MinValue;
+				int expPeriods = 13;
+
+				if (latestDay != null && nowClock >= latestDay.EffectiveOpenTime && nowClock < latestDay.SessionCloseTime)
+				{
+					effOpen = latestDay.EffectiveOpenTime;
+					dayClose = latestDay.SessionCloseTime;
+					expPeriods = Math.Max(1, latestDay.ExpectedPeriodCount);
+				}
+				else
+				{
+					DateTime dDate, dStart, dClose;
+					int pIdx, ep;
+					if (TryGetDaySession(nowClock, out dDate, out dStart, out dClose, out pIdx, out ep) && nowClock >= dStart && nowClock < dClose)
+					{
+						effOpen = dStart;
+						dayClose = dClose;
+						expPeriods = Math.Max(1, ep);
+					}
+				}
+
+				if (effOpen > DateTime.MinValue && nowClock >= effOpen && nowClock < dayClose)
+				{
+					double elapsedSec = Math.Max(0.0, (nowClock - effOpen).TotalSeconds);
+					int curIdx = Math.Max(0, Math.Min(expPeriods - 1, (int)Math.Floor(elapsedSec / bracketSec)));
+					DateTime curPeriodEnd = effOpen.AddSeconds((curIdx + 1) * bracketSec);
+					if (curPeriodEnd > dayClose)
+						curPeriodEnd = dayClose;
+					int remSec = Math.Max(0, (int)Math.Ceiling((curPeriodEnd - nowClock).TotalSeconds));
+
+					dispLetterIdx = Math.Max(0, Math.Min(LetterSequence.Length - 1, curIdx));
+					isLiveTpo = streamConnected || (latestDay != null && (nowClock - latestDay.LastSampleTime).TotalMinutes < bracketMin + 5.0);
+					isUrgent = isLiveTpo && remSec > 0 && remSec <= Math.Min(60, Math.Max(10, (int)(bracketSec * 0.08)));
+
+					int mm = remSec / 60;
+					int ss = remSec % 60;
+					timerStr = remSec >= 3600
+						? string.Format(CultureInfo.InvariantCulture, "{0}:{1:00}:{2:00}", remSec / 3600, (remSec % 3600) / 60, ss)
+						: string.Format(CultureInfo.InvariantCulture, "{0:00}:{1:00}", mm, ss);
+				}
+			}
+			else if (latestDay != null)
+			{
+				int expT = Math.Max(1, latestDay.ExpectedPeriodCount);
+				int prnT = Math.Min(expT, Math.Max(latestDay.PeriodSlices.Count, latestDay.LastPeriod + 1));
+				timerStr = string.Format(CultureInfo.InvariantCulture, "{0}/{1} TPO", prnT, expT);
+				isLiveTpo = streamConnected;
+			}
+
+			string runLetter = LetterSequence[dispLetterIdx].ToString();
+			string chipLabel = "TPO " + runLetter;
+			SharpDX.Color letCol = LetterColors[dispLetterIdx % LetterColors.Length];
+
+			SharpDX.Color bgCol = isUrgent
+				? new SharpDX.Color(48, 28, 8, 254)
+				: (isLiveTpo ? new SharpDX.Color(10, 22, 36, 254) : new SharpDX.Color(12, 20, 32, 252));
+			SharpDX.Color borderCol = isUrgent
+				? new SharpDX.Color(251, 191, 36, 245)
+				: (isLiveTpo ? new SharpDX.Color(20, 184, 166, 225) : new SharpDX.Color(56, 76, 98, 230));
+			SharpDX.Color chipFillCol = new SharpDX.Color((int)letCol.R, (int)letCol.G, (int)letCol.B, 46);
+			SharpDX.Color chipBorderCol = new SharpDX.Color((int)letCol.R, (int)letCol.G, (int)letCol.B, 215);
+			SharpDX.Color timerTextCol = isUrgent
+				? new SharpDX.Color(254, 240, 138, 255)
+				: (isLiveTpo ? new SharpDX.Color(255, 255, 255, 255) : new SharpDX.Color(203, 213, 225, 255));
+			SharpDX.Color iconCol = isUrgent
+				? new SharpDX.Color(251, 191, 36, 255)
+				: (isLiveTpo ? new SharpDX.Color(34, 211, 238, 255) : new SharpDX.Color(125, 211, 252, 235));
+
+			var dw = Core.Globals.DirectWriteFactory;
+			using (var bgBrush = new DxBrush(RenderTarget, bgCol))
+			using (var borderBrush = new DxBrush(RenderTarget, borderCol))
+			using (var chipFillBrush = new DxBrush(RenderTarget, chipFillCol))
+			using (var chipBorderBrush = new DxBrush(RenderTarget, chipBorderCol))
+			using (var chipTextBrush = new DxBrush(RenderTarget, letCol))
+			using (var timerTextBrush = new DxBrush(RenderTarget, timerTextCol))
+			using (var iconBrush = new DxBrush(RenderTarget, iconCol))
+			using (var chipFmt = new DxTextFormat(dw, "Segoe UI", SharpDX.DirectWrite.FontWeight.ExtraBold, SharpDX.DirectWrite.FontStyle.Normal, 10.4f))
+			using (var timerFmt = new DxTextFormat(dw, "Segoe UI", SharpDX.DirectWrite.FontWeight.ExtraBold, SharpDX.DirectWrite.FontStyle.Normal, 12.2f))
+			{
+				chipFmt.TextAlignment = TextAlignment.Center;
+				chipFmt.ParagraphAlignment = ParagraphAlignment.Center;
+				chipFmt.WordWrapping = WordWrapping.NoWrap;
+
+				timerFmt.TextAlignment = TextAlignment.Center;
+				timerFmt.ParagraphAlignment = ParagraphAlignment.Center;
+				timerFmt.WordWrapping = WordWrapping.NoWrap;
+
+				var outerRr = new RoundedRectangle { Rect = boxRect, RadiusX = 5.0f, RadiusY = 5.0f };
+				RenderTarget.FillRoundedRectangle(outerRr, bgBrush);
+				RenderTarget.DrawRoundedRectangle(outerRr, borderBrush, 1.35f);
+
+				float cy = boxRect.Y + boxRect.Height * 0.5f;
+				float curX = boxRect.X + 9f;
+
+				// Crisp Vector Clock Icon
+				float clkR = 5.6f;
+				float clkCx = curX + clkR;
+				RenderTarget.DrawEllipse(new Ellipse(new Vector2(clkCx, cy), clkR, clkR), iconBrush, 1.45f);
+				RenderTarget.DrawLine(new Vector2(clkCx, cy), new Vector2(clkCx, cy - 3.3f), iconBrush, 1.45f);
+				RenderTarget.DrawLine(new Vector2(clkCx, cy), new Vector2(clkCx + 2.6f, cy + 1.2f), iconBrush, 1.45f);
+				curX = clkCx + clkR + 6.5f;
+
+				// Running TPO Letter Badge ([ TPO F ])
+				float chipW = 58f;
+				float chipH = Math.Min(22f, Math.Max(16f, boxRect.Height - 9f));
+				float chipY = cy - chipH * 0.5f;
+				var chipRr = new RoundedRectangle { Rect = new RectangleF(curX, chipY, chipW, chipH), RadiusX = 4.2f, RadiusY = 4.2f };
+				RenderTarget.FillRoundedRectangle(chipRr, chipFillBrush);
+				RenderTarget.DrawRoundedRectangle(chipRr, chipBorderBrush, 1.2f);
+				RenderTarget.DrawText(chipLabel, chipFmt, new RectangleF(curX, chipY - 1f, chipW, chipH + 2f), chipTextBrush, DrawTextOptions.NoSnap);
+				curX += chipW + 4f;
+
+				// Remaining TPO Countdown (MM:SS)
+				float remW = Math.Max(28f, (boxRect.Right - 5f) - curX);
+				RenderTarget.DrawText(timerStr, timerFmt, new RectangleF(curX, boxRect.Y - 1f, remW, boxRect.Height + 2f), timerTextBrush, DrawTextOptions.NoSnap);
+			}
+		}
+
+		private void DrawModernUiToggleIcon(float panelLeft, float panelTop, float panelRight)
+		{
+			if (RenderTarget == null)
+				return;
+
+			bool active = IsModernRichUi;
+			float btnW = 30f;
+			float btnH = 26f;
+			float rawX = (ShowTopLeftBox && lastTopLeftHudRightX > panelLeft + 40f)
+				? (lastTopLeftHudRightX + 7f)
+				: (panelLeft + 8f);
+			float iconX = Math.Min(rawX, panelRight - 232f);
+			float iconY = panelTop + 6f;
+
+			RectangleF iconRect = new RectangleF(iconX, iconY, btnW, btnH);
+			var prevAa = RenderTarget.AntialiasMode;
+			RenderTarget.AntialiasMode = AntialiasMode.PerPrimitive;
+			try
+			{
+				using (var glowBrush = new DxBrush(RenderTarget, active ? new SharpDX.Color(14, 165, 233, 64) : new SharpDX.Color(56, 189, 248, 32)))
+				using (var bgBrush = new DxBrush(RenderTarget, active ? new SharpDX.Color(12, 68, 96, 250) : new SharpDX.Color(16, 25, 42, 248)))
+				using (var borderBrush = new DxBrush(RenderTarget, active ? new SharpDX.Color(56, 224, 248, 255) : new SharpDX.Color(56, 189, 248, 215)))
+				using (var barBrush = new DxBrush(RenderTarget, active ? new SharpDX.Color(125, 211, 252, 255) : new SharpDX.Color(148, 163, 184, 235)))
+				using (var pocBarBrush = new DxBrush(RenderTarget, new SharpDX.Color(251, 191, 36, 255)))
+				using (var starBrush = new DxBrush(RenderTarget, active ? new SharpDX.Color(253, 224, 71, 255) : new SharpDX.Color(56, 189, 248, 255)))
+				{
+					var haloRr = new RoundedRectangle
+					{
+						Rect = new RectangleF(iconX - 1.5f, iconY - 1.5f, btnW + 3f, btnH + 3f),
+						RadiusX = 7.0f,
+						RadiusY = 7.0f
+					};
+					RenderTarget.FillRoundedRectangle(haloRr, glowBrush);
+
+					var btnRr = new RoundedRectangle { Rect = iconRect, RadiusX = 5.8f, RadiusY = 5.8f };
+					RenderTarget.FillRoundedRectangle(btnRr, bgBrush);
+					RenderTarget.DrawRoundedRectangle(btnRr, borderBrush, active ? 1.45f : 1.15f);
+
+					float[] barWidths = new float[] { 5.5f, 9.5f, 14.5f, 10.5f, 6.5f };
+					float bx = iconX + 5.5f;
+					float byStart = iconY + 5.2f;
+					for (int r = 0; r < 5; r++)
+					{
+						var rowRr = new RoundedRectangle
+						{
+							Rect = new RectangleF(bx, byStart + r * 3.3f, barWidths[r], 2.2f),
+							RadiusX = 1.0f,
+							RadiusY = 1.0f
+						};
+						RenderTarget.FillRoundedRectangle(rowRr, r == 2 ? pocBarBrush : barBrush);
+					}
+
+					float sx = iconX + btnW - 6.8f;
+					float sy = iconY + 6.8f;
+					float rOuter = 3.8f;
+					float rInner = 1.25f;
+					using (var starGeo = new SharpDX.Direct2D1.PathGeometry(RenderTarget.Factory))
+					{
+						using (var sink = starGeo.Open())
+						{
+							sink.BeginFigure(new Vector2(sx, sy - rOuter), FigureBegin.Filled);
+							sink.AddLine(new Vector2(sx + rInner, sy - rInner));
+							sink.AddLine(new Vector2(sx + rOuter, sy));
+							sink.AddLine(new Vector2(sx + rInner, sy + rInner));
+							sink.AddLine(new Vector2(sx, sy + rOuter));
+							sink.AddLine(new Vector2(sx - rInner, sy + rInner));
+							sink.AddLine(new Vector2(sx - rOuter, sy));
+							sink.AddLine(new Vector2(sx - rInner, sy - rInner));
+							sink.EndFigure(FigureEnd.Closed);
+							sink.Close();
+						}
+						RenderTarget.FillGeometry(starGeo, starBrush);
+					}
+				}
+			}
+			finally
+			{
+				RenderTarget.AntialiasMode = prevAa;
+			}
+
+			activeChartButtons.Add(new ChartButton
+			{
+				Rect = iconRect,
+				Action = ChartButtonAction.ToggleModernRichUi,
+				PrimaryKey = "ToggleModernRichUi"
+			});
+		}
+
+		private void DrawModernPillButton(RectangleF rawRect, DxBrush fillBrush, DxBrush borderBrush, string text, DxTextFormat textFormat, DxBrush textBrush, float radius = 4.5f, float borderWidth = 1.0f)
+		{
+			if (RenderTarget == null)
+				return;
+
+			var prevAa = RenderTarget.AntialiasMode;
+			RenderTarget.AntialiasMode = AntialiasMode.PerPrimitive;
+			try
+			{
+				var rr = new RoundedRectangle { Rect = rawRect, RadiusX = radius, RadiusY = radius };
+				if (fillBrush != null)
+					RenderTarget.FillRoundedRectangle(rr, fillBrush);
+				if (borderBrush != null && borderWidth > 0f)
+					RenderTarget.DrawRoundedRectangle(rr, borderBrush, borderWidth);
+			}
+			finally
+			{
+				RenderTarget.AntialiasMode = prevAa;
+			}
+
+			if (!string.IsNullOrEmpty(text))
+				DrawText(text, rawRect.X, rawRect.Y, rawRect.Width, rawRect.Height, textFormat, textBrush);
 		}
 
 		// Renders a crisp 4-sided button with pixel-snapped edges so the top, bottom, left, and right border lines are 100% solid and visible
@@ -6953,8 +7879,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public bool ShowRunningDayPPOC { get; set; }
 
 		// Panels & Cards
+		[Display(Name = "Enable Modern Classic Rich UI", Description = "Enable world-class smooth glassmorphic Market Profile UI (can also toggle live via the top studio icon next to the Info Box)", GroupName = "Display", Order = 0)]
+		public bool EnableModernRichUi { get; set; }
+
 		[NinjaScriptProperty]
-		[Display(Name = "Enable Bottom Summary Boxes", Description = "Enable or disable the 9-line day summary boxes at the bottom of the chart", GroupName = "Display", Order = 0)]
+		[Display(Name = "Enable Bottom Summary Boxes", Description = "Enable or disable the 9-line day summary boxes at the bottom of the chart", GroupName = "Display", Order = 1)]
 		public bool ShowSummary { get; set; }
 
 		[NinjaScriptProperty]
